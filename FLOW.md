@@ -4,10 +4,11 @@ A map of how the code actually executes: entry points, the order calls happen
 in, and which module hands off to which. Updated in the same commit as any
 change to an entry point or call chain.
 
-> **Status**: the storage layer is the only implemented layer. The ingestion and
-> query entry points below are documented as designed in `docs/` and are marked
-> _(not yet implemented)_ until their modules exist. They are kept here so the
-> intended shape stays visible while it is being built.
+> **Status**: the configuration layer (`config/settings.py`) is implemented; the
+> storage layer is next. The ingestion and query entry points below are
+> documented as designed in `docs/` and are marked _(not yet implemented)_ until
+> their modules exist. They are kept here so the intended shape stays visible
+> while it is being built.
 
 ---
 

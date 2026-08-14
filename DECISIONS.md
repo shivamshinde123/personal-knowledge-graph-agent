@@ -8,6 +8,46 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-14 — Blank `.env` values mean "unset", and relative paths anchor to the repo root
+
+**Context**: Two problems surfaced in review of the scaffolding PR, both of
+which every fresh setup would have hit, because `config/.env.example` ships each
+variable blank and points `SQLITE_DB_PATH` at a relative `./data/...`:
+
+1. A blank entry was read as a configured value, not an absent one. Copying
+   `.env.example` gave `NOTION_API_KEY == ""` and, worse,
+   `GMAIL_CREDENTIALS_PATH == Path(".")` — since `Path("")` normalizes to the
+   current directory. Any caller checking `is None` would treat an unconfigured
+   source as configured and fail later, further from the cause.
+2. Relative paths resolved against the process working directory. The daily
+   batch is launched by cron or Task Scheduler, whose working directory is not
+   the repository root, so it would have read and written a *different* SQLite
+   file than a manual run from the repo root.
+
+**Decision**:
+
+- A `model_validator(mode="before")` on `EnvSettings` drops blank and
+  whitespace-only values from the input, so normal field defaults apply. Blank
+  therefore behaves exactly like omitted, for optional secrets (which stay
+  `None`) and for defaulted values like `OLLAMA_HOST` alike.
+- An `anchor_path()` helper resolves every path-typed setting against
+  `PROJECT_ROOT` when relative, leaving absolute paths as given. It is applied
+  to all five path fields and to the `watch_dirs` property.
+
+**Alternatives considered**:
+- *Require absolute paths and validate loudly* — rejected as hostile to setup;
+  `./data/pkg_agent.db` is the natural thing to write, and it is unambiguous as
+  long as the anchor is defined.
+- *Anchor to the CWD and document it* — rejected because it makes correctness
+  depend on how the process was launched, which is precisely what breaks under a
+  scheduler.
+- *Handle blanks at each call site* — rejected; it pushes the same defensive
+  check into every consumer of every optional variable.
+
+**Affects**: config/settings.py, config/.env.example
+
+---
+
 ## 2026-08-14 — Configuration loader lives in `config/settings.py`
 
 **Context**: The documented repository layout (`File_Folder_Structure.docx`)

@@ -6,9 +6,11 @@ import pytest
 
 from config.settings import (
     DEFAULT_CONFIG_PATH,
+    PROJECT_ROOT,
     AppConfig,
     ConfigError,
     EnvSettings,
+    anchor_path,
     get_settings,
     load_config,
     reload_settings,
@@ -114,6 +116,82 @@ class TestEnvSettings:
         monkeypatch.setenv("SOMETHING_UNRELATED", "value")
 
         EnvSettings()  # must not raise
+
+
+class TestBlankValuesAreTreatedAsUnset:
+    """A freshly copied .env.example leaves every variable blank."""
+
+    def test_blank_optional_secret_stays_none(self, monkeypatch):
+        monkeypatch.setenv("NOTION_API_KEY", "")
+
+        assert EnvSettings().notion_api_key is None
+
+    def test_blank_optional_path_stays_none_rather_than_dot(self, monkeypatch):
+        monkeypatch.setenv("GMAIL_CREDENTIALS_PATH", "")
+
+        assert EnvSettings().gmail_credentials_path is None
+
+    def test_whitespace_only_value_stays_unset(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_TOKEN", "   ")
+
+        assert EnvSettings().github_token is None
+
+    def test_blank_value_falls_back_to_documented_default(self, monkeypatch):
+        monkeypatch.setenv("OLLAMA_HOST", "")
+        monkeypatch.setenv("LOG_LEVEL", "")
+
+        env = EnvSettings()
+
+        assert env.ollama_host == "http://localhost:11434"
+        assert env.log_level == "INFO"
+
+    def test_a_real_value_is_still_read(self, monkeypatch):
+        monkeypatch.setenv("NOTION_API_KEY", "secret_abc123")
+
+        assert EnvSettings().notion_api_key == "secret_abc123"
+
+
+class TestPathsAreAnchoredToProjectRoot:
+    """Scheduled runs have a different CWD than manual ones."""
+
+    def test_relative_path_resolves_against_the_repository_root(self, monkeypatch):
+        monkeypatch.setenv("SQLITE_DB_PATH", "./data/pkg_agent.db")
+
+        db_path = EnvSettings().sqlite_db_path
+
+        assert db_path.is_absolute()
+        assert db_path == (PROJECT_ROOT / "data" / "pkg_agent.db").resolve()
+
+    def test_absolute_path_is_left_alone(self, monkeypatch):
+        absolute = Path("C:/elsewhere/pkg.db").resolve()
+        monkeypatch.setenv("SQLITE_DB_PATH", str(absolute))
+
+        assert EnvSettings().sqlite_db_path == absolute
+
+    def test_defaults_are_already_absolute(self):
+        env = EnvSettings()
+
+        assert env.sqlite_db_path.is_absolute()
+        assert env.chroma_persist_dir.is_absolute()
+
+    def test_optional_paths_are_anchored_too(self, monkeypatch):
+        monkeypatch.setenv("BROWSER_HISTORY_PATH", "data/History")
+
+        assert (
+            EnvSettings().browser_history_path
+            == (PROJECT_ROOT / "data" / "History").resolve()
+        )
+
+    def test_watch_dirs_are_anchored(self):
+        env = EnvSettings(local_files_watch_dirs="notes, C:/papers")
+
+        assert env.watch_dirs[0] == (PROJECT_ROOT / "notes").resolve()
+        assert env.watch_dirs[1].is_absolute()
+
+    def test_anchor_path_helper_is_idempotent(self):
+        once = anchor_path(Path("data/pkg.db"))
+
+        assert anchor_path(once) == once
 
 
 class TestGetSettings:

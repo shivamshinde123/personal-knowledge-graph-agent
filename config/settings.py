@@ -18,10 +18,10 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -34,6 +34,24 @@ ProviderMode = Literal["fully_local", "fully_cloud", "mixed"]
 
 class ConfigError(Exception):
     """Raised when configuration is missing, unreadable, or invalid."""
+
+
+def anchor_path(value: Path) -> Path:
+    """Resolve a configured path against the repository root.
+
+    Relative paths in ``.env`` are anchored to ``PROJECT_ROOT`` rather than the
+    process working directory, so the daily batch resolves the same paths when
+    launched by cron or Task Scheduler as it does when run by hand from the
+    repository root. Absolute paths are returned unchanged apart from
+    normalization.
+
+    Args:
+        value: A path from configuration, absolute or relative.
+
+    Returns:
+        An absolute path.
+    """
+    return value.resolve() if value.is_absolute() else (PROJECT_ROOT / value).resolve()
 
 
 # ---------------------------------------------------------------------------
@@ -155,15 +173,45 @@ class EnvSettings(BaseSettings):
     langsmith_api_key: str | None = None
     langsmith_project: str = "personal-knowledge-graph-agent"
 
+    @model_validator(mode="before")
+    @classmethod
+    def _blank_is_unset(cls, data: Any) -> Any:
+        """Drop blank values so field defaults apply instead of empty strings.
+
+        ``config/.env.example`` ships every variable with an empty value, so a
+        freshly copied ``.env`` would otherwise yield ``""`` for unset secrets
+        and ``Path(".")`` for unset paths — both of which read as configured to
+        any caller checking for ``None``.
+        """
+        if isinstance(data, dict):
+            return {
+                key: value
+                for key, value in data.items()
+                if not (isinstance(value, str) and not value.strip())
+            }
+        return data
+
+    @field_validator(
+        "gmail_credentials_path",
+        "google_calendar_credentials_path",
+        "browser_history_path",
+        "sqlite_db_path",
+        "chroma_persist_dir",
+    )
+    @classmethod
+    def _anchor_to_project_root(cls, value: Path | None) -> Path | None:
+        """Make every configured path absolute and independent of the CWD."""
+        return None if value is None else anchor_path(value)
+
     @property
     def watch_dirs(self) -> list[Path]:
-        """Parse ``LOCAL_FILES_WATCH_DIRS`` into a list of paths.
+        """Parse ``LOCAL_FILES_WATCH_DIRS`` into a list of absolute paths.
 
         Returns:
             The configured watch directories, empty if the variable is unset.
         """
         return [
-            Path(part.strip())
+            anchor_path(Path(part.strip()))
             for part in self.local_files_watch_dirs.split(",")
             if part.strip()
         ]
