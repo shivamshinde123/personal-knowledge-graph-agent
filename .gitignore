@@ -1,0 +1,44 @@
+# --- Secrets -------------------------------------------------------------
+# config/.env holds every API key and DB credential; never commit it.
+config/.env
+.env
+*.pem
+*credentials*.json
+*token*.json
+
+# --- Local data stores ---------------------------------------------------
+# All three stores hold personal data and are rebuilt by the daily batch.
+data/
+*.db
+*.sqlite
+*.sqlite3
+chroma/
+.chroma/
+
+# --- Python --------------------------------------------------------------
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# --- Node / frontend -----------------------------------------------------
+node_modules/
+frontend/build/
+frontend/dist/
+npm-debug.log*
+
+# --- Editors / OS --------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Model caches --------------------------------------------------------
+.cache/
+models/
