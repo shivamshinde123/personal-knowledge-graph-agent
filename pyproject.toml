@@ -1,0 +1,52 @@
+[project]
+name = "pkg-agent"
+version = "0.1.0"
+description = "Personal Knowledge Graph Agent — a fully local, privacy-first system that ingests personal data from six sources and answers natural language questions about it."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "chromadb>=1.5.9",
+    "neo4j>=6.2.0",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.15.0",
+    "python-dotenv>=1.2.2",
+    "pyyaml>=6.0.3",
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+# E/W: pycodestyle, F: pyflakes, I: isort, N: pep8-naming,
+# D: pydocstyle (Google style), UP: pyupgrade, B: bugbear.
+select = ["E", "W", "F", "I", "N", "D", "UP", "B"]
+ignore = [
+    "D203", # conflicts with D211 (no blank line before class docstring)
+    "D213", # conflicts with D212 (summary on first line)
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# Tests are self-documenting via their names; don't require docstrings there.
+"tests/**" = ["D100", "D101", "D102", "D103", "D104"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Top-level packages (storage/, pipeline/, ...) are imported from the repo root.
+pythonpath = ["."]
+addopts = "-q"
+
+[dependency-groups]
+dev = [
+    "black>=26.5.1",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.3",
+]
