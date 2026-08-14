@@ -1,0 +1,37 @@
+# Non-secret configuration for the Personal Knowledge Graph Agent.
+# Secrets live in config/.env (gitignored) — see config/.env.example.
+# Reference: docs/Environment_Config_Reference.docx section 4.
+
+llm:
+  provider_mode: mixed # fully_local | fully_cloud | mixed
+  local_model: llama3:8b # used when provider_mode is fully_local or mixed (ingestion tasks)
+  cloud_model: anthropic/claude-sonnet-4 # used for cloud-routed tasks
+
+ingestion:
+  schedule: "0 23 * * *" # cron expression; default 11 PM daily
+  batch_metadata_group_size: 10 # items grouped per metadata-extraction LLM call
+
+filters:
+  browser_history:
+    min_visit_count: 2
+    domain_blocklist:
+      - google.com/search
+      - facebook.com
+      - instagram.com
+      - x.com
+  gmail:
+    excluded_labels:
+      - CATEGORY_PROMOTIONS
+      - CATEGORY_SOCIAL
+
+chunking:
+  target_chunk_size_tokens: 400
+  chunk_overlap_tokens: 40
+
+retrieval:
+  top_k_vector: 8
+  top_k_keyword: 8
+  relationship_candidate_count: 10
+
+embedding:
+  model: sentence-transformers/all-MiniLM-L6-v2
