@@ -1,0 +1,222 @@
+"""Typed access to ``config/config.yaml`` and the ``config/.env`` file.
+
+This module is the single place the rest of the system reads configuration from.
+It belongs to the configuration layer and imports nothing from any other layer,
+so every layer may depend on it without violating the one-way dependency rule
+defined in ``docs/Component_Map.docx``.
+
+Typical use::
+
+    from config.settings import get_settings
+
+    settings = get_settings()
+    db_path = settings.env.sqlite_db_path
+    top_k = settings.config.retrieval.top_k_vector
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+from typing import Literal
+
+import yaml
+from pydantic import BaseModel, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+CONFIG_DIR = PROJECT_ROOT / "config"
+DEFAULT_CONFIG_PATH = CONFIG_DIR / "config.yaml"
+DEFAULT_ENV_PATH = CONFIG_DIR / ".env"
+
+ProviderMode = Literal["fully_local", "fully_cloud", "mixed"]
+
+
+class ConfigError(Exception):
+    """Raised when configuration is missing, unreadable, or invalid."""
+
+
+# ---------------------------------------------------------------------------
+# config.yaml — non-secret settings
+# ---------------------------------------------------------------------------
+
+
+class LLMConfig(BaseModel):
+    """LLM provider selection and the models used on each side."""
+
+    provider_mode: ProviderMode = "mixed"
+    local_model: str = "llama3:8b"
+    cloud_model: str = "anthropic/claude-sonnet-4"
+
+
+class IngestionConfig(BaseModel):
+    """Daily batch scheduling and batching behaviour."""
+
+    schedule: str = "0 23 * * *"
+    batch_metadata_group_size: int = 10
+
+
+class BrowserHistoryFilters(BaseModel):
+    """Noise filtering rules specific to the browser history source."""
+
+    min_visit_count: int = 2
+    domain_blocklist: list[str] = Field(default_factory=list)
+
+
+class GmailFilters(BaseModel):
+    """Noise filtering rules specific to the Gmail source."""
+
+    excluded_labels: list[str] = Field(default_factory=list)
+
+
+class FiltersConfig(BaseModel):
+    """Per-source noise filtering rules."""
+
+    browser_history: BrowserHistoryFilters = Field(
+        default_factory=BrowserHistoryFilters
+    )
+    gmail: GmailFilters = Field(default_factory=GmailFilters)
+
+
+class ChunkingConfig(BaseModel):
+    """Chunk sizing used when splitting item text."""
+
+    target_chunk_size_tokens: int = 400
+    chunk_overlap_tokens: int = 40
+
+
+class RetrievalConfig(BaseModel):
+    """Result counts used by the retrieval nodes and relationship detection."""
+
+    top_k_vector: int = 8
+    top_k_keyword: int = 8
+    relationship_candidate_count: int = 10
+
+
+class EmbeddingConfig(BaseModel):
+    """Local embedding model selection."""
+
+    model: str = "sentence-transformers/all-MiniLM-L6-v2"
+
+
+class AppConfig(BaseModel):
+    """Full contents of ``config/config.yaml``."""
+
+    llm: LLMConfig = Field(default_factory=LLMConfig)
+    ingestion: IngestionConfig = Field(default_factory=IngestionConfig)
+    filters: FiltersConfig = Field(default_factory=FiltersConfig)
+    chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
+    retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
+
+
+# ---------------------------------------------------------------------------
+# .env — secrets and machine-specific paths
+# ---------------------------------------------------------------------------
+
+
+class EnvSettings(BaseSettings):
+    """Environment variables read from ``config/.env`` and the process environment.
+
+    Every field is optional so that partially configured machines (for example,
+    one running in ``fully_local`` provider mode with no OpenRouter key) still
+    load. Components validate the specific variables they need at point of use.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=DEFAULT_ENV_PATH,
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    # Source API credentials
+    notion_api_key: str | None = None
+    gmail_credentials_path: Path | None = None
+    github_token: str | None = None
+    google_calendar_credentials_path: Path | None = None
+    browser_history_path: Path | None = None
+    local_files_watch_dirs: str = ""
+
+    # LLM provider credentials
+    openrouter_api_key: str | None = None
+    ollama_host: str = "http://localhost:11434"
+
+    # Storage connection settings
+    sqlite_db_path: Path = PROJECT_ROOT / "data" / "pkg_agent.db"
+    chroma_persist_dir: Path = PROJECT_ROOT / "data" / "chroma"
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str | None = None
+
+    # Application settings
+    log_level: str = "INFO"
+    fastapi_port: int = 8080
+    langsmith_api_key: str | None = None
+    langsmith_project: str = "personal-knowledge-graph-agent"
+
+    @property
+    def watch_dirs(self) -> list[Path]:
+        """Parse ``LOCAL_FILES_WATCH_DIRS`` into a list of paths.
+
+        Returns:
+            The configured watch directories, empty if the variable is unset.
+        """
+        return [
+            Path(part.strip())
+            for part in self.local_files_watch_dirs.split(",")
+            if part.strip()
+        ]
+
+
+class Settings(BaseModel):
+    """Both configuration sources, resolved together."""
+
+    env: EnvSettings
+    config: AppConfig
+
+
+def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
+    """Load and validate ``config.yaml``.
+
+    Args:
+        path: Path to the YAML configuration file.
+
+    Returns:
+        The parsed configuration.
+
+    Raises:
+        ConfigError: If the file is missing or is not valid YAML mapping.
+    """
+    if not path.exists():
+        raise ConfigError(f"Configuration file not found: {path}")
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"Could not parse {path}: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise ConfigError(f"Expected a mapping at the top level of {path}")
+    return AppConfig.model_validate(raw)
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """Return the process-wide settings, loading them on first call.
+
+    The result is cached; call :func:`reload_settings` after changing
+    configuration at runtime (for example via ``PUT /api/settings``).
+
+    Returns:
+        The resolved environment and file configuration.
+    """
+    return Settings(env=EnvSettings(), config=load_config())
+
+
+def reload_settings() -> Settings:
+    """Clear the settings cache and reload from disk.
+
+    Returns:
+        The freshly loaded settings.
+    """
+    get_settings.cache_clear()
+    return get_settings()
