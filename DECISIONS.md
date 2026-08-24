@@ -8,6 +8,85 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-24 — `pipeline/filters.py` only does cross-source filtering; per-source noise rules stay in their extractors
+
+**Context**: `config.yaml`'s `filters` section already nests
+`browser_history` (`min_visit_count`, `domain_blocklist`) and `gmail`
+(`excluded_labels`) — but `ExtractedItem`, the common contract every
+extractor normalizes into (`docs/Data_Extraction_Specification.docx`
+section 2), has no `visit_count` or `labels` field. A generic
+`pipeline/filters.py` operating only on `ExtractedItem` therefore
+structurally cannot apply those two source-specific rules — it never sees
+the raw data they need.
+
+**Decision**: `pipeline/filters.py::apply_noise_filter()` implements only a
+new, source-agnostic rule — dropping items whose extracted text is shorter
+than a configurable minimum (`filters.min_content_length`, added to
+`config.yaml`/`config/settings.py`'s `FiltersConfig` since no such
+cross-source threshold existed yet). Browser history's domain
+blocklist/visit-count threshold and Gmail's excluded-labels rule will be
+applied inside `extractors/browser_history.py` and `extractors/gmail.py`
+themselves, before those items are ever normalized into `ExtractedItem` —
+each extractor is the only place that still has access to the source-native
+fields (a URL's domain, a message's labels) those rules need.
+
+**Alternatives considered**:
+- *Add `visit_count`/`labels` fields to `ExtractedItem` so
+  `pipeline/filters.py` could apply every rule* — rejected; it would grow
+  the shared contract with fields five of six sources never populate, for
+  filtering logic that's inherently source-specific anyway.
+- *Skip adding `min_content_length` and leave `pipeline/filters.py` as a
+  no-op until a real cross-source rule was needed* — rejected; every source
+  can produce near-empty extracted text (a mostly-image PDF, a one-line
+  email), so a minimum-length floor is a genuine cross-source rule worth
+  having now rather than a hypothetical one.
+
+**Affects**: `pipeline/filters.py`, `config/settings.py`, `config/config.yaml`
+
+---
+
+## 2026-08-24 — Chunking splits at paragraph boundaries with a word-count token approximation
+
+**Context**: `config.yaml`'s `chunking.target_chunk_size_tokens` /
+`chunk_overlap_tokens` are specified in tokens, and
+`Data_Extraction_Specification.docx` section 4.3 says long content should
+split "at natural boundaries... rather than arbitrary character counts."
+Neither document says which tokenizer to count against, and the two real
+candidates — `tiktoken` (already a transitive dependency via
+`langchain-openai`) and the actual embedding model's own tokenizer
+(`sentence-transformers/all-MiniLM-L6-v2`) — disagree with each other
+anyway, so neither is uniquely "correct" here.
+
+**Decision**: `chunk_text()` greedily packs paragraphs (split on blank
+lines) into a chunk until the next one would exceed
+`target_chunk_size_tokens`; a single paragraph already over the target on
+its own (no natural boundary inside it) falls back to a fixed sliding
+window using `chunk_overlap_tokens` of overlap between windows. Token count
+is approximated as whitespace word count (`len(text.split())`) rather than
+a real tokenizer. This keeps chunking fully local with zero network
+dependency — `tiktoken.get_encoding()` downloads its vocabulary file on
+first use, which would silently break chunking on a machine running
+`provider_mode: fully_local` with no internet access, undermining the
+"fully local, privacy-first" design goal for a sizing knob that was never
+going to exactly match the embedding model's own tokenizer regardless.
+
+**Alternatives considered**:
+- *Use `tiktoken`* — rejected for the offline-dependency reason above; it's
+  also arguably no more "correct" than a word count, since it isn't
+  `all-MiniLM-L6-v2`'s own tokenizer either.
+- *Load `all-MiniLM-L6-v2`'s actual tokenizer for exact counts* — rejected
+  as premature; it would import `pipeline/embeddings.py`'s model-loading
+  machinery into chunking for a soft sizing target, not a hard limit
+  anything downstream enforces.
+- *No overlap at natural paragraph boundaries, only in the sliding-window
+  fallback* — adopted as part of this decision: overlap exists to avoid
+  losing context across an *arbitrary* cut point, which paragraph breaks
+  aren't, so paragraph-packed chunks don't duplicate content between them.
+
+**Affects**: `pipeline/chunking.py`
+
+---
+
 ## 2026-08-24 — Extractor error handling: skip-and-log per item, never raise mid-scan
 
 **Context**: `Coding_Conventions.docx` section 2.4 says extractors "catch

@@ -34,6 +34,7 @@ class TestLoadConfig:
         assert config.filters.browser_history.min_visit_count == 2
         assert "facebook.com" in config.filters.browser_history.domain_blocklist
         assert "CATEGORY_PROMOTIONS" in config.filters.gmail.excluded_labels
+        assert config.filters.min_content_length == 20
 
     def test_missing_file_raises_config_error(self, tmp_path: Path):
         with pytest.raises(ConfigError, match="not found"):
