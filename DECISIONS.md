@@ -8,6 +8,44 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-24 — Neo4j tests run against a real local container, skipped if none is reachable
+
+**Context**: SQLite has `:memory:` and Chroma has an embedded persistent
+mode, so both could be tested for real with no external process. Neo4j
+Community Edition has no embedded/in-process mode — the driver only ever
+speaks Bolt to a running server, and none was reachable in this environment
+by default (Docker Desktop's daemon was running but its pipe wasn't ready
+yet). `Coding_Conventions.docx` doesn't cover how to test a module whose
+only backing store requires a live external process.
+
+**Decision**: `tests/test_storage/test_neo4j_store.py` is a real integration
+suite (no mocking) run against `NEO4J_TEST_URI`/`_USER`/`_PASSWORD` (default
+`bolt://localhost:7687` / `neo4j` / `testpassword123`, matching a
+disposable `docker run neo4j:5-community` instance), gated by a
+module-level `pytest.mark.skipif` that probes connectivity once at
+collection time. The suite runs for real wherever a server is reachable
+(this session's temporary container, a developer's local Neo4j install, or
+a CI job that starts one as a service) and skips cleanly everywhere else,
+rather than either failing hard with no server or silently mocking away the
+one thing most worth testing — the actual Cypher.
+
+**Alternatives considered**:
+- *Mock the driver* — rejected; the value in these tests is verifying the
+  Cypher itself (the upsert-both-endpoints `MERGE`, the same-label edge
+  dedup, the two-direction `get_related_items` union), which a mock can't
+  catch a mistake in.
+- *Require Neo4j and fail without it* — rejected; it would make `pytest`
+  fail on any machine that hasn't set up Neo4j yet, including this one
+  before Docker Desktop's daemon had finished starting.
+- *Use a fake/in-memory Cypher engine* — rejected; no actively maintained
+  one exists for the neo4j Python driver, and Community Edition being
+  genuinely local-only (Tech_Stack.docx) means the real server is always
+  the honest target to test against anyway.
+
+**Affects**: `tests/test_storage/test_neo4j_store.py`
+
+---
+
 ## 2026-08-14 — Blank `.env` values mean "unset", and relative paths anchor to the repo root
 
 **Context**: Two problems surfaced in review of the scaffolding PR, both of

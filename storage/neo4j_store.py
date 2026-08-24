@@ -1,0 +1,295 @@
+"""Neo4j storage: the relationship graph between items.
+
+This module owns the graph store defined in ``docs/Database_Schema.docx``.
+It belongs to the storage layer: it imports only ``config.settings`` and
+holds the only live Neo4j driver in the system, per
+``docs/Component_Map.docx`` and ``docs/Coding_Conventions.docx``.
+
+Per ``docs/Database_Schema.docx`` section 5, an item is only written to
+Neo4j once it has at least one confirmed relationship — items with no
+detected relationships live in SQLite and Chroma only. Accordingly, this
+module has no standalone "create an item node" function; ``write_relationship``
+creates (or updates) both endpoint nodes as part of writing the edge between
+them.
+
+Typical use::
+
+    from storage.neo4j_store import get_driver, ensure_constraints, write_relationship
+
+    driver = get_driver()
+    ensure_constraints(driver)
+    write_relationship(driver, source_item, target_item, relationship)
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Literal
+
+import neo4j
+
+from config.settings import get_settings
+
+
+class GraphStoreError(Exception):
+    """Raised when a Neo4j storage operation fails."""
+
+
+# Neo4jError covers server-side failures (auth, constraint violations, bad
+# Cypher); DriverError covers client-side connectivity failures (e.g. the
+# server being unreachable). Both can surface from any driver call below.
+_NEO4J_ERRORS = (neo4j.exceptions.Neo4jError, neo4j.exceptions.DriverError)
+
+
+@dataclass(slots=True)
+class ItemNode:
+    """A node in the relationship graph, mirroring ``items`` in SQLite.
+
+    ``id`` matches ``items.id`` in SQLite, per the cross-store consistency
+    rules in ``docs/Database_Schema.docx`` section 5.
+    """
+
+    id: str
+    source_type: str
+    title: str | None = None
+    project_name: str | None = None
+    topic: str | None = None
+    created_at: datetime | None = None
+    url: str | None = None
+
+
+@dataclass(slots=True)
+class Relationship:
+    """A ``RELATES_TO`` edge between two items."""
+
+    label: str
+    confidence: float | None = None
+    created_at: datetime | None = None
+
+
+@dataclass(slots=True)
+class RelatedItem:
+    """A neighboring item reached by one ``RELATES_TO`` hop."""
+
+    item: ItemNode
+    relationship: Relationship
+    direction: Literal["outgoing", "incoming"]
+
+
+def _item_properties(item: ItemNode) -> dict[str, object]:
+    return {
+        "id": item.id,
+        "source_type": item.source_type,
+        "title": item.title,
+        "project_name": item.project_name,
+        "topic": item.topic,
+        "created_at": item.created_at,
+        "url": item.url,
+    }
+
+
+def _item_from_node(node: neo4j.graph.Node) -> ItemNode:
+    return ItemNode(
+        id=node["id"],
+        source_type=node["source_type"],
+        title=node.get("title"),
+        project_name=node.get("project_name"),
+        topic=node.get("topic"),
+        created_at=node.get("created_at"),
+        url=node.get("url"),
+    )
+
+
+def get_driver(
+    uri: str | None = None,
+    user: str | None = None,
+    password: str | None = None,
+) -> neo4j.Driver:
+    """Open a Neo4j driver using the configured (or given) connection details.
+
+    Args:
+        uri: Bolt URI. Defaults to ``settings.env.neo4j_uri``.
+        user: Username. Defaults to ``settings.env.neo4j_user``.
+        password: Password. Defaults to ``settings.env.neo4j_password``.
+
+    Returns:
+        An open driver. Callers are responsible for closing it (or using it
+        as a context manager) when done.
+
+    Raises:
+        GraphStoreError: If the driver cannot connect.
+    """
+    env = get_settings().env
+    resolved_uri = env.neo4j_uri if uri is None else uri
+    resolved_user = env.neo4j_user if user is None else user
+    resolved_password = env.neo4j_password if password is None else password
+    try:
+        driver = neo4j.GraphDatabase.driver(
+            resolved_uri, auth=(resolved_user, resolved_password)
+        )
+        driver.verify_connectivity()
+    except _NEO4J_ERRORS as exc:
+        raise GraphStoreError(
+            f"Could not connect to Neo4j at {resolved_uri!r}: {exc}"
+        ) from exc
+    return driver
+
+
+def ensure_constraints(driver: neo4j.Driver) -> None:
+    """Create the schema's constraint and index if they don't already exist.
+
+    Idempotent — safe to call on every process start.
+
+    Args:
+        driver: An open driver from :func:`get_driver`.
+
+    Raises:
+        GraphStoreError: If the constraint/index creation fails.
+    """
+    try:
+        with driver.session() as session:
+            session.run(
+                "CREATE CONSTRAINT item_id_unique IF NOT EXISTS "
+                "FOR (i:Item) REQUIRE i.id IS UNIQUE"
+            )
+            session.run(
+                "CREATE INDEX item_project_name IF NOT EXISTS "
+                "FOR (i:Item) ON (i.project_name)"
+            )
+    except _NEO4J_ERRORS as exc:
+        raise GraphStoreError(f"Could not create schema constraints: {exc}") from exc
+
+
+def write_relationship(
+    driver: neo4j.Driver,
+    source: ItemNode,
+    target: ItemNode,
+    relationship: Relationship,
+) -> None:
+    """Create or update a ``RELATES_TO`` edge, creating both endpoint nodes.
+
+    Both items are upserted (created if missing, refreshed if present) since
+    a relationship is the trigger for an item's first appearance in the
+    graph. Calling this again for the same ``(source.id, target.id, label)``
+    updates the existing edge's ``confidence`` rather than creating a
+    duplicate.
+
+    Args:
+        driver: An open driver from :func:`get_driver`.
+        source: The relationship's source item.
+        target: The relationship's target item.
+        relationship: The edge to write.
+
+    Raises:
+        GraphStoreError: If the write fails.
+    """
+    query = """
+    MERGE (a:Item {id: $source.id})
+    SET a += $source
+    MERGE (b:Item {id: $target.id})
+    SET b += $target
+    MERGE (a)-[r:RELATES_TO {label: $label}]->(b)
+    ON CREATE SET r.created_at = $created_at
+    SET r.confidence = $confidence
+    """
+    try:
+        with driver.session() as session:
+            session.run(
+                query,
+                source=_item_properties(source),
+                target=_item_properties(target),
+                label=relationship.label,
+                confidence=relationship.confidence,
+                created_at=relationship.created_at,
+            )
+    except _NEO4J_ERRORS as exc:
+        raise GraphStoreError(
+            f"Could not write relationship {source.id!r} -{relationship.label}-> "
+            f"{target.id!r}: {exc}"
+        ) from exc
+
+
+def get_item(driver: neo4j.Driver, item_id: str) -> ItemNode | None:
+    """Fetch a single item node by id.
+
+    Args:
+        driver: An open driver from :func:`get_driver`.
+        item_id: The item's id.
+
+    Returns:
+        The item, or ``None`` if it has no node in the graph (it may still
+        exist in SQLite and Chroma without any confirmed relationship).
+    """
+    try:
+        with driver.session() as session:
+            record = session.run(
+                "MATCH (i:Item {id: $id}) RETURN i", id=item_id
+            ).single()
+    except _NEO4J_ERRORS as exc:
+        raise GraphStoreError(f"Could not fetch item {item_id!r}: {exc}") from exc
+    return None if record is None else _item_from_node(record["i"])
+
+
+def get_related_items(driver: neo4j.Driver, item_id: str) -> list[RelatedItem]:
+    """Fetch an item's direct (one-hop) neighbors in either direction.
+
+    Args:
+        driver: An open driver from :func:`get_driver`.
+        item_id: The item whose neighbors to fetch.
+
+    Returns:
+        Related items with the connecting relationship and its direction
+        relative to ``item_id``.
+
+    Raises:
+        GraphStoreError: If the query fails.
+    """
+    query = """
+    MATCH (i:Item {id: $id})-[r:RELATES_TO]->(other:Item)
+    RETURN other, r, 'outgoing' AS direction
+    UNION
+    MATCH (i:Item {id: $id})<-[r:RELATES_TO]-(other:Item)
+    RETURN other, r, 'incoming' AS direction
+    """
+    try:
+        with driver.session() as session:
+            records = list(session.run(query, id=item_id))
+    except _NEO4J_ERRORS as exc:
+        raise GraphStoreError(
+            f"Could not fetch neighbors of {item_id!r}: {exc}"
+        ) from exc
+    return [
+        RelatedItem(
+            item=_item_from_node(record["other"]),
+            relationship=Relationship(
+                label=record["r"]["label"],
+                confidence=record["r"].get("confidence"),
+                created_at=record["r"].get("created_at"),
+            ),
+            direction=record["direction"],
+        )
+        for record in records
+    ]
+
+
+def delete_item(driver: neo4j.Driver, item_id: str) -> None:
+    """Delete an item node and all of its relationships.
+
+    SQLite's ``delete_item()`` cascades to ``chunks`` on its own; per
+    ``docs/Database_Schema.docx`` section 5, callers deleting an item must
+    call this too, since Neo4j doesn't enforce foreign keys against SQLite.
+    A no-op if the item has no graph node.
+
+    Args:
+        driver: An open driver from :func:`get_driver`.
+        item_id: The item's id.
+
+    Raises:
+        GraphStoreError: If the delete fails.
+    """
+    try:
+        with driver.session() as session:
+            session.run("MATCH (i:Item {id: $id}) DETACH DELETE i", id=item_id)
+    except _NEO4J_ERRORS as exc:
+        raise GraphStoreError(f"Could not delete item {item_id!r}: {exc}") from exc
