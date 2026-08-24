@@ -2,16 +2,17 @@
 
 Runs against the real configured sentence-transformers model and a real
 embedded Chroma collection — no mocking. The model loads once per test
-session (cached by ``pipeline.embeddings._model``) and must already be
-locally cached (or reachable) as `sentence-transformers/all-MiniLM-L6-v2`.
+session (cached by ``pipeline.embeddings._model``, keyed on model name) and
+must already be locally cached (or reachable) as
+`sentence-transformers/all-MiniLM-L6-v2`.
 """
 
 from datetime import UTC, datetime
 
+import numpy as np
 import pytest
 
-from config.settings import get_settings
-from pipeline.embeddings import _model, embed_chunks
+from pipeline.embeddings import embed_chunks, embed_query
 from storage.chroma_store import get_collection, query
 
 
@@ -74,13 +75,21 @@ class TestEmbedChunks:
             ["The cat sat on the mat.", "Quarterly revenue grew by twelve percent."],
         )
 
-        results = query(
-            collection, _embed_query("A kitten rested on the rug."), top_k=2
-        )
+        results = query(collection, embed_query("A kitten rested on the rug."), top_k=2)
 
         assert results[0].document == "The cat sat on the mat."
 
 
-def _embed_query(text: str) -> list[float]:
-    model = _model(get_settings().config.embedding.model)
-    return model.encode([text], convert_to_numpy=True)[0].tolist()
+class TestEmbedQuery:
+    def test_returns_a_vector_of_the_models_dimensionality(self):
+        assert len(embed_query("some query text")) == 384
+
+    def test_similar_text_yields_a_closer_vector_by_cosine_distance(self):
+        cat = np.array(embed_query("The cat sat on the mat."))
+        kitten = np.array(embed_query("A kitten rested on the rug."))
+        revenue = np.array(embed_query("Quarterly revenue grew by twelve percent."))
+
+        def cosine_distance(a, b):
+            return 1 - (a @ b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+        assert cosine_distance(cat, kitten) < cosine_distance(cat, revenue)

@@ -1,0 +1,134 @@
+"""Relationship detection: candidate narrowing via Chroma, then LLM confirmation.
+
+Per ``docs/Technical_Design_Document.docx``, relationships are found by
+vector-similarity candidate narrowing, never by an LLM comparison against
+the full dataset — this module queries Chroma for the item's nearest
+neighbors and only asks the LLM to judge those.
+
+Full item details (title, url) for the graph nodes this writes aren't
+available from Chroma's metadata alone, so — unlike
+``docs/Component_Map.docx``'s dependency list for ``RelationshipDetector``,
+which names only ``ChromaStore``, ``ProviderInterface``, and ``Neo4jStore``
+— this module also reads from SQLite. See ``DECISIONS.md``.
+"""
+
+from __future__ import annotations
+
+import logging
+import sqlite3
+from datetime import UTC, datetime
+
+import neo4j
+from chromadb.api.models.Collection import Collection
+
+from config.settings import get_settings
+from pipeline.embeddings import embed_query
+from providers.base import ProviderError, RelationshipJudgment, get_provider
+from storage.chroma_store import query
+from storage.neo4j_store import (
+    GraphStoreError,
+    ItemNode,
+    Relationship,
+    write_relationship,
+)
+from storage.sqlite_store import Item, get_chunks_for_item, get_item
+
+logger = logging.getLogger(__name__)
+
+
+def detect_relationships(
+    conn: sqlite3.Connection,
+    driver: neo4j.Driver,
+    collection: Collection,
+    source_item_id: str,
+) -> list[tuple[str, RelationshipJudgment]]:
+    """Find and write confirmed relationships for one recently-ingested item.
+
+    Queries Chroma for the item's nearest-neighbor chunks (narrowed to the
+    same ``project_name`` when the item has one classified), deduplicates
+    matches down to distinct candidate items, and asks the LLM to confirm or
+    reject each one. A candidate whose LLM call or graph write fails is
+    logged and skipped rather than aborting the rest — one bad candidate
+    shouldn't cost the item every other relationship it might have.
+
+    Args:
+        conn: An open SQLite connection, for looking up full item details.
+        driver: An open Neo4j driver.
+        collection: An open Chroma collection.
+        source_item_id: The effective SQLite id of the item to find
+            relationships for (typically one just ingested).
+
+    Returns:
+        ``(candidate_item_id, judgment)`` pairs for every relationship
+        confirmed and written.
+    """
+    source = get_item(conn, source_item_id)
+    if source is None:
+        logger.warning(
+            "detect_relationships called for unknown item %r", source_item_id
+        )
+        return []
+
+    chunks = get_chunks_for_item(conn, source_item_id)
+    if not chunks:
+        return []
+    source_text = chunks[0].text
+
+    top_k = get_settings().config.retrieval.relationship_candidate_count
+    where: dict = {"item_id": {"$ne": source_item_id}}
+    if source.project_name is not None:
+        where = {"$and": [where, {"project_name": source.project_name}]}
+    candidates = query(collection, embed_query(source_text), top_k=top_k, where=where)
+
+    provider = get_provider("relationship")
+    source_node = _to_item_node(source)
+
+    confirmed: list[tuple[str, RelationshipJudgment]] = []
+    seen_item_ids: set[str] = set()
+    for candidate in candidates:
+        if candidate.item_id in seen_item_ids:
+            continue
+        seen_item_ids.add(candidate.item_id)
+
+        candidate_item = get_item(conn, candidate.item_id)
+        if candidate_item is None:
+            continue
+
+        try:
+            judgment = provider.generate_relationship(source_text, candidate.document)
+            if judgment is None:
+                continue
+            write_relationship(
+                driver,
+                source_node,
+                _to_item_node(candidate_item),
+                Relationship(
+                    label=judgment.label,
+                    confidence=judgment.confidence,
+                    created_at=datetime.now(UTC),
+                ),
+            )
+        except (ProviderError, GraphStoreError) as exc:
+            logger.warning(
+                "Relationship check between %r and %r failed, skipping: %s",
+                source_item_id,
+                candidate.item_id,
+                exc,
+            )
+            continue
+
+        confirmed.append((candidate.item_id, judgment))
+
+    return confirmed
+
+
+def _to_item_node(item: Item) -> ItemNode:
+    return ItemNode(
+        id=item.id,
+        source_type=item.source_type,
+        title=item.title,
+        project_name=item.project_name,
+        topic=item.topic,
+        created_at=item.created_at,
+        url=item.url_or_path,
+    )
