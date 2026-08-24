@@ -8,6 +8,54 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-24 — Metadata generation is a pure batching function; a failed group degrades rather than aborts
+
+**Context**: `Component_Map.docx` lists `MetadataGenerator`'s dependencies
+as `ProviderInterface, SQLiteStore, EmbeddingGenerator`, which could be read
+as this module writing directly to SQLite and chaining into embedding
+generation. `Database_Schema.docx` stores `project_name`/`topic` at the
+*item* level, and `config.yaml`'s `ingestion.batch_metadata_group_size`
+("items grouped per metadata-extraction LLM call") confirms metadata is
+generated per item, not per chunk — the FLOW.md text written when the
+provider layer was built ("Each chunk →
+`get_provider("metadata").generate_metadata()`") was imprecise and is
+corrected alongside this change.
+
+**Decision**: `pipeline/metadata.py::generate_metadata(items)` stays a pure
+function — `list[ExtractedItem]` in, `list[ItemMetadata]` out, grouped into
+`ingestion.batch_metadata_group_size`-sized LLM calls — with no SQLite or
+Chroma calls of its own. The item write to SQLite (combining
+`ExtractedItem`'s fields with this function's `ItemMetadata` result) is left
+to the caller (the eventual `scheduler/daily_batch.py`), matching how
+`pipeline/filters.py` and `pipeline/chunking.py` were already built: small,
+storage-free functions the orchestrator composes, easy to unit test without
+a real or fake database. Component_Map's dependency table is read as the
+architectural boundary this module is *permitted* to cross (it may
+legitimately end up influencing what gets written to SQLite), not a literal
+same-function call requirement — `Component_Map.docx`'s own section 3 states
+its rules in terms of what layers may depend on which, not literal call
+graphs.
+
+A group's LLM call failing after retries (`ProviderError`) degrades that
+group to `ItemMetadata(project_name=None, topic=None)` rather than
+propagating and losing every other group's results — both fields are
+optional everywhere they're stored (`items.project_name`/`items.topic` are
+nullable columns), so an unclassified item is a normal, storage-representable
+outcome, not a failure state worth aborting an entire ingestion run over.
+
+**Alternatives considered**:
+- *Have `generate_metadata()` write to SQLite/call embeddings itself* —
+  rejected; it would require this module to accept a live connection just
+  to test its batching logic, and couples metadata generation to storage
+  and embedding lifecycles it doesn't otherwise need to know about.
+- *Let a failed group's `ProviderError` propagate and abort the whole
+  batch* — rejected; one bad LLM call shouldn't cost every other item in
+  the run its classification, especially since it's an optional field.
+
+**Affects**: `pipeline/metadata.py`, `FLOW.md`
+
+---
+
 ## 2026-08-24 — Extractor error handling: skip-and-log per item, never raise mid-scan
 
 **Context**: `Coding_Conventions.docx` section 2.4 says extractors "catch

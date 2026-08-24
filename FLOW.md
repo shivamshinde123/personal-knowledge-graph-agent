@@ -6,13 +6,15 @@ change to an entry point or call chain.
 
 > **Status**: the configuration layer (`config/settings.py`), all three
 > storage backends (`storage/sqlite_store.py`, `storage/chroma_store.py`,
-> `storage/neo4j_store.py`), and the provider layer (`providers/`) are
-> implemented and merged to `main`. The local files extractor
-> (`extractors/local_files.py`) is added on this branch; the other five
-> extractors and all of `pipeline/` are next. The ingestion and query entry
-> points below are documented as designed in `docs/` and are marked _(not yet
-> implemented)_ until their modules exist. They are kept here so the intended
-> shape stays visible while it is being built.
+> `storage/neo4j_store.py`), the provider layer (`providers/`), and the
+> local files extractor (`extractors/local_files.py`) are implemented and
+> merged to `main`. `pipeline/filters.py` and `pipeline/chunking.py` are on
+> a separate, not-yet-merged branch; `pipeline/metadata.py` is added on this
+> branch. `pipeline/embeddings.py`, `pipeline/relationships.py`, and the
+> other five extractors are next. The ingestion and query entry points below
+> are documented as designed in `docs/` and are marked _(not yet
+> implemented)_ until their modules exist. They are kept here so the
+> intended shape stays visible while it is being built.
 
 ---
 
@@ -135,10 +137,10 @@ only `providers/base.py`'s `get_provider()` and its return type,
    LangChain chat model (`ChatOllama` / `ChatOpenAI`) — this is where every
    provider call's prompt building, JSON response parsing, and
    retry-with-backoff actually live, shared by both
-3. `provider.generate_metadata(texts)` — what
-   `pipeline/metadata.py::generate_metadata()` will call for the
-   `project_name`/`topic` fields (batched: one call per group of
-   `config.yaml`'s `batch_metadata_group_size`)
+3. `provider.generate_metadata(texts)` — called by
+   `pipeline/metadata.py::generate_metadata()` for the `project_name`/`topic`
+   fields (batched: one call per group of `config.yaml`'s
+   `batch_metadata_group_size`, see below)
 4. `provider.generate_relationship(source_text, candidate_text)` — what
    `pipeline/relationships.py::detect_relationships()` will call to confirm
    or reject each vector-narrowed candidate pair; returns `None` (not
@@ -175,6 +177,24 @@ calls `pipeline/filters.py` next.
 
 ---
 
+## Shared: metadata generation (`pipeline/metadata.py`)
+
+Not an entry point itself. Operates at the *item* level, not the chunk
+level — `project_name`/`topic` are columns on `items`, not `chunks`
+(`docs/Database_Schema.docx`) — grouped into
+`config.yaml`'s `ingestion.batch_metadata_group_size`-sized LLM calls rather
+than one call per item.
+
+- `generate_metadata(items) -> list[ItemMetadata]` — a pure function: no
+  SQLite/Chroma calls of its own (see DECISIONS.md, 2026-08-24, for why that
+  boundary was chosen over having this module write items itself). Each
+  item's text is truncated before being sent, to keep a batched prompt a
+  reasonable size. A group whose LLM call exhausts its retries
+  (`ProviderError`) degrades to `ItemMetadata(None, None)` for just that
+  group rather than raising and losing every other group's results.
+
+---
+
 ## Entry point: `scheduler/daily_batch.py` (`main()`) — _(not yet implemented)_
 
 1. `main()` reads `last_run_timestamp` from `ingestion_runs`
@@ -182,13 +202,13 @@ calls `pipeline/filters.py` next.
 2. For each of the six extractors (`extractors/*.py`):
    a. `extract_new_items(since=last_run_timestamp)` → list of normalized items
    b. Each item → `pipeline/filters.py::apply_noise_filter()`
-   c. Surviving items → `pipeline/chunking.py::chunk_text()`
-   d. Each chunk → `pipeline/metadata.py::generate_metadata()` (rule-based
-      fields direct; `project_name`/`topic` via
-      `get_provider("metadata").generate_metadata()`)
+   c. Surviving items → `pipeline/metadata.py::generate_metadata()` →
+      `project_name`/`topic`, combined with the item's other fields and
+      written via `storage/sqlite_store.py::insert_item()`
+   d. Each item's text → `pipeline/chunking.py::chunk_text()`
    e. Each chunk → `pipeline/embeddings.py::embed()` → stored in Chroma
-   f. Raw text + metadata → `storage/sqlite_store.py::insert_item()` /
-      `insert_chunk()`
+   f. Chunk text → `storage/sqlite_store.py::insert_chunk()` /
+      `replace_chunks()`
 
    **Branch point**: each extractor catches its own errors. A failing source is
    recorded in `ingestion_runs.error_log` and the remaining five continue.
