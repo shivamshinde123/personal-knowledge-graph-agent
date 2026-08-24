@@ -36,6 +36,8 @@ the pipeline layer rather than split across two places.
 
 **Affects**: `storage/chroma_store.py`
 
+---
+
 ## 2026-08-24 — SQLite item inserts upsert on `(source_type, source_ref_id)`, returning the effective id
 
 **Context**: `Database_Schema.docx` defines `UNIQUE(source_type, source_ref_id)`
