@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 
 SOURCE_TYPE = "notion"
 
+# A full scan visits every page the integration can see, one API call per
+# page's block tree, which can take a long time on a large workspace — log
+# progress every N pages rather than staying silent until the run finishes.
+_PROGRESS_LOG_INTERVAL = 25
+
 
 def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
     """Extract Notion pages edited after ``since``.
@@ -47,21 +52,42 @@ def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
         raise ExtractorError("NOTION_API_KEY is not configured")
     client = Client(auth=api_key)
 
+    logger.info("Notion extraction starting (since=%s)", since)
     items: list[ExtractedItem] = []
+    scanned = 0
     for page in _iter_pages(client):
+        scanned += 1
+        if scanned % _PROGRESS_LOG_INTERVAL == 0:
+            logger.info(
+                "Notion extraction in progress: scanned %d page(s), kept %d",
+                scanned,
+                len(items),
+            )
         item = _extract_item(client, page, since)
         if item is not None:
             items.append(item)
+    logger.info(
+        "Notion extraction finished: scanned %d page(s), extracted %d item(s)",
+        scanned,
+        len(items),
+    )
     return items
 
 
 def _iter_pages(client: Client):
     try:
         cursor = None
+        page_number = 0
         while True:
             response = client.search(
                 filter={"property": "object", "value": "page"},
                 start_cursor=cursor,
+            )
+            page_number += 1
+            logger.debug(
+                "Notion search page %d returned %d result(s)",
+                page_number,
+                len(response["results"]),
             )
             yield from response["results"]
             if not response.get("has_more"):

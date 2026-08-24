@@ -192,7 +192,9 @@ calls `pipeline/filters.py` next.
   page's `title`-type property. Missing `NOTION_API_KEY`, or a failed
   `search()` call, raises `ExtractorError` (source-level); a single page's
   block-fetch failing is logged and skipped, not fatal — see DECISIONS.md,
-  2026-08-24.
+  2026-08-24. Logs an INFO progress line every 25 pages scanned (a full
+  scan visits every visible page and can take a long time on a large
+  workspace — see DECISIONS.md, 2026-08-24).
 
 ---
 

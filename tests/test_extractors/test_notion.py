@@ -238,3 +238,22 @@ class TestErrorHandling:
         items = extract_new_items()
 
         assert [item.source_ref_id for item in items] == ["page-good"]
+
+
+class TestProgressLogging:
+    def test_logs_progress_every_interval_and_a_final_summary(
+        self, monkeypatch, caplog
+    ):
+        pages = [make_page(f"page-{i}", f"Page {i}") for i in range(30)]
+        blocks_by_parent = {page["id"]: [block("paragraph", "text")] for page in pages}
+        install_fake_client(monkeypatch, pages, blocks_by_parent)
+
+        with caplog.at_level("INFO", logger="extractors.notion"):
+            items = extract_new_items()
+
+        assert len(items) == 30
+        progress_logs = [r for r in caplog.records if "scanned 25" in r.message]
+        assert len(progress_logs) == 1
+        assert any(
+            "finished" in r.message and "30" in r.message for r in caplog.records
+        )

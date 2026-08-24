@@ -8,6 +8,31 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-24 — Notion extractor logs scan progress every 25 pages
+
+**Context**: A full, unfiltered `extract_new_items()` run visits every page
+the integration can see, one Notion API call per page's block tree.
+Verifying the extractor against this workspace's real data showed this can
+take a long time on a workspace with many/deeply nested pages, with no
+output at all until the whole run finishes — indistinguishable from a hang
+from the outside (this is exactly what made an earlier, unrelated bug look
+like a stuck process before it was traced to a real cause).
+
+**Decision**: Log an INFO-level progress line every 25 pages scanned
+(`_PROGRESS_LOG_INTERVAL`), plus a start line and a final summary line
+(pages scanned vs. items extracted). Each individual `search()` pagination
+call also logs at DEBUG. 25 is an arbitrary but reasonable cadence — frequent
+enough to show a long run is alive, infrequent enough not to spam logs on
+an ordinary-sized workspace.
+
+**Alternatives considered**: A time-based interval (e.g. log every 30s) —
+rejected as more code for no real benefit here, since page count is already
+a meaningful, monotonically increasing progress signal.
+
+**Affects**: `extractors/notion.py`
+
+---
+
 ## 2026-08-24 — Daily batch integration tests must pin `_EXTRACTORS` to `local_file`
 
 **Context**: Adding `notion.extract_new_items` to `scheduler/daily_batch.py`'s
