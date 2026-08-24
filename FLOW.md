@@ -4,13 +4,13 @@ A map of how the code actually executes: entry points, the order calls happen
 in, and which module hands off to which. Updated in the same commit as any
 change to an entry point or call chain.
 
-> **Status**: the configuration layer (`config/settings.py`) and the Neo4j
-> half of the storage layer (`storage/neo4j_store.py`) are implemented;
-> `sqlite_store.py` and `chroma_store.py` are in review on separate PRs. The
-> ingestion and query entry points below are documented as designed in
-> `docs/` and are marked _(not yet implemented)_ until their modules exist.
-> They are kept here so the intended shape stays visible while it is being
-> built.
+> **Status**: the configuration layer (`config/settings.py`) plus the SQLite
+> and Neo4j storage modules (`storage/sqlite_store.py`,
+> `storage/neo4j_store.py`) are implemented. `chroma_store.py` is tracked in a
+> separate PR. The ingestion and query entry points below are documented as
+> designed in `docs/` and are marked _(not yet implemented)_ until their
+> modules exist. They are kept here so the intended shape stays visible while
+> it is being built.
 
 ---
 
@@ -57,6 +57,35 @@ both endpoint nodes.
    cascade-on-delete; callers must call this explicitly alongside
    `storage/chroma_store.py::delete_by_item()` since neither store enforces
    foreign keys against SQLite
+
+---
+
+## Shared: SQLite storage (`storage/sqlite_store.py`)
+
+Not an entry point itself — used by the ingestion and query entry points
+below once they're implemented. Documented here because its call shape
+(upsert-then-lookup, replace-not-append for chunks) matters to anything that
+calls it.
+
+1. `connect(db_path=None)` — opens a connection (default:
+   `settings.env.sqlite_db_path`, or `":memory:"` for tests), enables
+   `PRAGMA foreign_keys`, and runs the schema (idempotent — safe to call on
+   every process start)
+2. Ingesting an item:
+   a. `insert_item(conn, item)` → upserts on `(source_type, source_ref_id)`
+      and returns the *effective* item id — which may differ from
+      `item.id` if this source ref was already ingested (see DECISIONS.md,
+      2026-08-24)
+   b. `replace_chunks(conn, effective_item_id, chunks)` → deletes any
+      existing chunks for that item and inserts the new set in one
+      transaction, keeping `chunks_fts` in sync via triggers
+3. Querying: `get_item()` / `get_chunks_for_item()` for direct lookups,
+   `keyword_search(conn, query, top_k)` for BM25-ranked full-text search —
+   this is the keyword half of hybrid search that `agent/search_nodes.py`
+   will call
+4. Daily batch bookkeeping: `start_ingestion_run()` →
+   `complete_ingestion_run(status=...)` → `get_last_run_timestamp()` reads the
+   watermark for the next run's `since=`
 
 ---
 
