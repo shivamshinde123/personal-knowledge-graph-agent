@@ -88,12 +88,13 @@ class GmailFilters(BaseModel):
 
 
 class FiltersConfig(BaseModel):
-    """Per-source noise filtering rules."""
+    """Per-source noise filtering rules, plus the cross-source content filter."""
 
     browser_history: BrowserHistoryFilters = Field(
         default_factory=BrowserHistoryFilters
     )
     gmail: GmailFilters = Field(default_factory=GmailFilters)
+    min_content_length: int = 20
 
 
 class ChunkingConfig(BaseModel):
