@@ -194,6 +194,33 @@ def delete_by_item(collection: Collection, item_id: str) -> None:
         ) from exc
 
 
+def get_item_embeddings(collection: Collection, item_id: str) -> list[list[float]]:
+    """Fetch every stored embedding for an item's chunks.
+
+    Used to build a whole-document embedding (e.g. by averaging) from
+    already-computed chunk vectors, rather than re-embedding text — see
+    ``pipeline/relationships.py``.
+
+    Args:
+        collection: An open collection from :func:`get_collection`.
+        item_id: The item whose chunk embeddings to fetch.
+
+    Returns:
+        The item's chunk embeddings, in no particular order. Empty if the
+        item has no chunks in the collection.
+
+    Raises:
+        VectorStoreError: If the fetch fails.
+    """
+    try:
+        result = collection.get(where={"item_id": item_id}, include=["embeddings"])
+    except Exception as exc:
+        raise VectorStoreError(
+            f"Could not fetch embeddings for item {item_id!r}: {exc}"
+        ) from exc
+    return [list(vector) for vector in result["embeddings"]]
+
+
 def query(
     collection: Collection,
     query_embedding: list[float],

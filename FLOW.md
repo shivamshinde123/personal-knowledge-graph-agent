@@ -118,6 +118,11 @@ module only persists and searches vectors already produced elsewhere.
 4. Deleting an item: `delete_by_item(collection, item_id)` — SQLite's
    `delete_item()` cascades to `chunks` on its own, but callers must call
    this too since Chroma isn't a foreign-key participant
+5. `get_item_embeddings(collection, item_id)` — fetches every chunk vector
+   already stored for an item, for building a whole-document embedding by
+   averaging rather than re-embedding text; used by
+   `pipeline/relationships.py`'s candidate narrowing (see DECISIONS.md,
+   2026-08-24)
 
 ---
 
@@ -245,13 +250,17 @@ Not an entry point itself. The last pipeline stage, run after an item's
 metadata/chunks/embeddings are already persisted.
 
 - `detect_relationships(conn, driver, collection, source_item_id) ->
-  list[tuple[str, RelationshipJudgment]]` — takes the item's first chunk
-  (by `chunk_index`) as representative text, embeds it
-  (`pipeline/embeddings.py::embed_query()`), and queries Chroma for its
-  nearest neighbors, excluding the item's own chunks
+  list[tuple[str, RelationshipJudgment]]` — builds a whole-document query
+  vector by averaging every chunk embedding the item already has in Chroma
+  (`storage/chroma_store.py::get_item_embeddings()` →
+  `_mean_embedding()`), not just the first chunk (see DECISIONS.md,
+  2026-08-24, for why: a shared first-chunk boilerplate block would
+  otherwise dominate similarity). Queries Chroma for that vector's nearest
+  neighbors, excluding the item's own chunks
   (`where: {"item_id": {"$ne": source_item_id}}`) and narrowed to the same
   `project_name` when the item has one classified. Deduplicates matches
-  down to distinct candidate items, then asks
+  down to distinct candidate items, then — using the item's first chunk as
+  representative text for the LLM prompt itself, unchanged — asks
   `get_provider("relationship").generate_relationship()` to confirm or
   reject each one. A confirmed candidate is written via
   `storage/neo4j_store.py::write_relationship()`, using SQLite lookups
