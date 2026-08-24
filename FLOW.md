@@ -8,13 +8,13 @@ change to an entry point or call chain.
 > storage backends (`storage/sqlite_store.py`, `storage/chroma_store.py`,
 > `storage/neo4j_store.py`), the provider layer (`providers/`), and the
 > local files extractor (`extractors/local_files.py`) are implemented and
-> merged to `main`, along with `pipeline/filters.py` and
-> `pipeline/chunking.py`. `pipeline/metadata.py` is added on this branch;
-> `pipeline/embeddings.py`, `pipeline/relationships.py`, and the other five
-> extractors are next. The ingestion and query entry points below are
-> documented as designed in `docs/` and are marked _(not yet implemented)_
-> until their modules exist. They are kept here so the intended shape stays
-> visible while it is being built.
+> merged to `main`, along with `pipeline/filters.py`, `pipeline/chunking.py`,
+> and `pipeline/metadata.py`. `pipeline/embeddings.py` is added on this
+> branch; `pipeline/relationships.py` and the other five extractors are
+> next. The ingestion and query entry points below are documented as
+> designed in `docs/` and are marked _(not yet implemented)_ until their
+> modules exist. They are kept here so the intended shape stays visible
+> while it is being built.
 
 ---
 
@@ -97,8 +97,8 @@ calls it.
 
 Not an entry point itself — used alongside `sqlite_store.py` by the
 ingestion and query entry points below. Embeddings are always computed by
-the caller (`pipeline/embeddings.py`); this module only persists and
-searches vectors already produced elsewhere.
+the caller (`pipeline/embeddings.py::embed_chunks()`, see below); this
+module only persists and searches vectors already produced elsewhere.
 
 1. `get_collection(persist_dir=None)` — opens the single `chunks` collection
    (default: `settings.env.chroma_persist_dir`), configured for cosine
@@ -217,6 +217,26 @@ than one call per item.
 
 ---
 
+## Shared: embeddings (`pipeline/embeddings.py`)
+
+Not an entry point itself. Unlike `pipeline/metadata.py`, this stage writes
+to Chroma directly rather than staying storage-free — see DECISIONS.md,
+2026-08-24, for why the two pipeline stages made opposite choices there.
+
+- `embed_chunks(collection, item_id, source_type, chunk_texts, *,
+  project_name=None, topic=None, created_at=None) -> list[Chunk]` — encodes
+  every chunk with the configured `sentence-transformers` model (loaded
+  once, cached by model name), calls
+  `storage/chroma_store.py::upsert_chunks()` itself, and returns
+  SQLite-ready `Chunk` objects (each with a freshly generated
+  `embedding_id` pointing at the vector just written) for the caller to
+  persist via `storage/sqlite_store.py::replace_chunks()`. Takes an
+  already-open `collection` rather than opening its own, since
+  `get_collection()` opens a new client on every call by design — the
+  caller opens one collection and reuses it across the whole ingestion run.
+
+---
+
 ## Entry point: `scheduler/daily_batch.py` (`main()`) — _(not yet implemented)_
 
 1. `main()` reads `last_run_timestamp` from `ingestion_runs`
@@ -228,9 +248,9 @@ than one call per item.
       `project_name`/`topic`, combined with the item's other fields and
       written via `storage/sqlite_store.py::insert_item()`
    d. Each item's text → `pipeline/chunking.py::chunk_text()`
-   e. Each chunk → `pipeline/embeddings.py::embed()` → stored in Chroma
-   f. Chunk text → `storage/sqlite_store.py::insert_chunk()` /
-      `replace_chunks()`
+   e. Chunks → `pipeline/embeddings.py::embed_chunks()` → vectors stored in
+      Chroma, SQLite-ready `Chunk` objects returned
+   f. Those `Chunk` objects → `storage/sqlite_store.py::replace_chunks()`
 
    **Branch point**: each extractor catches its own errors. A failing source is
    recorded in `ingestion_runs.error_log` and the remaining five continue.

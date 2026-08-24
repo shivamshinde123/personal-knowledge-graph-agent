@@ -8,6 +8,54 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-24 — `embed_chunks()` writes to Chroma directly and takes an open collection
+
+**Context**: Unlike `pipeline/metadata.py` (kept storage-free — see the
+2026-08-24 entry on that), `Component_Map.docx` lists `EmbeddingGenerator`'s
+only dependency as `ChromaStore`, and there's no other layer that would
+ever need a bare in-memory vector — the entire point of computing one here
+is to persist it. Storage-free wasn't the natural design for this stage the
+way it was for metadata.
+
+**Decision**: `embed_chunks()` computes vectors and calls
+`storage/chroma_store.py::upsert_chunks()` itself, returning SQLite-ready
+`Chunk` objects (with a freshly generated `embedding_id` each) for the
+caller to persist via `storage/sqlite_store.py::replace_chunks()`. It takes
+an already-open Chroma `collection` as a parameter rather than calling
+`get_collection()` itself, since that function opens a new client on every
+call (by design — see the 2026-08-24 Chroma entry); the caller opens one
+collection and reuses it across every item in an ingestion run, the same
+way `storage/sqlite_store.py` functions all take an open `conn` rather than
+connecting themselves. The `sentence-transformers` model is loaded once via
+`functools.cache` keyed on the configured model name, since loading it is
+expensive (seconds, even from local cache) relative to encoding.
+
+**Affects**: `pipeline/embeddings.py`
+
+---
+
+## 2026-08-24 — Embedding tests run against the real model and a real embedded Chroma collection
+
+**Context**: `sentence-transformers/all-MiniLM-L6-v2` is config.yaml's
+locked-in embedding model (`Tech_Stack.docx`), not an implementation detail
+this module is free to swap for something lighter in tests the way
+`pipeline/chunking.py` avoided `tiktoken` — there's no reduced-dependency
+stand-in for "compute a real embedding" the way there was for "approximate
+a token count."
+
+**Decision**: `tests/test_pipeline/test_embeddings.py` uses the real
+configured model (already locally cached from `uv add
+sentence-transformers` verification) and a real embedded Chroma collection
+in a temp directory — no mocking. One test asserts an actual semantic
+property (a query about "a kitten on a rug" ranks nearest to "the cat sat on
+the mat," not a revenue sentence), which a mocked embedding call couldn't
+meaningfully verify. `functools.cache` on model loading keeps the one-time
+load cost (seconds) from repeating across the file's tests.
+
+**Affects**: `tests/test_pipeline/test_embeddings.py`
+
+---
+
 ## 2026-08-24 — Metadata generation is a pure batching function; a failed group degrades rather than aborts
 
 **Context**: `Component_Map.docx` lists `MetadataGenerator`'s dependencies
