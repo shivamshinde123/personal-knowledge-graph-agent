@@ -6,13 +6,14 @@ change to an entry point or call chain.
 
 > **Status**: the configuration layer (`config/settings.py`), all three
 > storage backends (`storage/sqlite_store.py`, `storage/chroma_store.py`,
-> `storage/neo4j_store.py`), and the provider layer (`providers/`) are
-> implemented and merged to `main`. The local files extractor
-> (`extractors/local_files.py`) is added on this branch; the other five
-> extractors and all of `pipeline/` are next. The ingestion and query entry
-> points below are documented as designed in `docs/` and are marked _(not yet
-> implemented)_ until their modules exist. They are kept here so the intended
-> shape stays visible while it is being built.
+> `storage/neo4j_store.py`), the provider layer (`providers/`), and the
+> local files extractor (`extractors/local_files.py`) are implemented and
+> merged to `main`. `pipeline/filters.py` and `pipeline/chunking.py` are
+> added on this branch; `pipeline/metadata.py`, `embeddings.py`,
+> `relationships.py`, and the other five extractors are next. The ingestion
+> and query entry points below are documented as designed in `docs/` and are
+> marked _(not yet implemented)_ until their modules exist. They are kept
+> here so the intended shape stays visible while it is being built.
 
 ---
 
@@ -172,6 +173,28 @@ calls `pipeline/filters.py` next.
   via `python-docx`; filters by `st_mtime > since`. A missing watch
   directory is logged and skipped, not fatal — other configured
   directories still get scanned.
+
+---
+
+## Shared: pipeline filtering and chunking (`pipeline/filters.py`, `pipeline/chunking.py`)
+
+Not entry points themselves — called by `scheduler/daily_batch.py::main()`
+below, once per item, between extraction and metadata/embedding.
+
+- `apply_noise_filter(item) -> bool` — cross-source only: drops an item if
+  its extracted text is empty or shorter than
+  `config.yaml`'s `filters.min_content_length`. Source-specific rules
+  (browser history's domain blocklist/visit count, Gmail's excluded labels)
+  are applied inside those extractors instead, before normalization — see
+  DECISIONS.md, 2026-08-24, since `ExtractedItem` has no `visit_count` or
+  `labels` field for a generic filter to inspect.
+- `chunk_text(text) -> list[str]` — greedily packs paragraphs (split on
+  blank lines) up to `chunking.target_chunk_size_tokens`; a paragraph
+  already over the target on its own (no natural boundary to prefer) falls
+  back to a fixed sliding window with `chunking.chunk_overlap_tokens` of
+  overlap between windows. Token count is an approximate word count, not a
+  real tokenizer — see DECISIONS.md, 2026-08-24, for why (keeping chunking
+  fully offline under `provider_mode: fully_local`).
 
 ---
 

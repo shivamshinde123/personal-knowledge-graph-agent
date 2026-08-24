@@ -12,6 +12,7 @@ ingestion:
   batch_metadata_group_size: 10 # items grouped per metadata-extraction LLM call
 
 filters:
+  min_content_length: 20 # chars; items shorter than this after extraction are dropped as noise
   browser_history:
     min_visit_count: 2
     domain_blocklist:
