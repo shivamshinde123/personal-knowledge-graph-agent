@@ -4,14 +4,15 @@ A map of how the code actually executes: entry points, the order calls happen
 in, and which module hands off to which. Updated in the same commit as any
 change to an entry point or call chain.
 
-> **Status**: the configuration layer (`config/settings.py`) is implemented,
-> all three storage backends are implemented and merged to `main`
-> (`storage/sqlite_store.py`, `storage/chroma_store.py`,
-> `storage/neo4j_store.py`), and the provider layer (`providers/`) is added
-> on this branch. The ingestion and query entry points below are documented
-> as designed in `docs/` and are marked _(not yet implemented)_ until their
-> modules exist. They are kept here so the intended shape stays visible while
-> it is being built.
+> **Status**: the configuration layer (`config/settings.py`), all three
+> storage backends (`storage/sqlite_store.py`, `storage/chroma_store.py`,
+> `storage/neo4j_store.py`), and the provider layer (`providers/`) are
+> implemented and merged to `main`. The local files extractor
+> (`extractors/local_files.py`) is added on this branch; the other five
+> extractors and all of `pipeline/` are next. The ingestion and query entry
+> points below are documented as designed in `docs/` and are marked _(not yet
+> implemented)_ until their modules exist. They are kept here so the intended
+> shape stays visible while it is being built.
 
 ---
 
@@ -148,6 +149,29 @@ only `providers/base.py`'s `get_provider()` and its return type,
    `context` positionally (`[1]`, `[2]`, …), which the synthesizer resolves
    against each `ContextChunk`'s `title`/`url` before returning the final
    cited answer
+
+---
+
+## Shared: extractors (`extractors/`)
+
+Not an entry point itself — invoked by `scheduler/daily_batch.py::main()`
+below, once per source. Every extractor exposes one function with the same
+signature and depends on nothing but `config.settings` and its own
+`extractors/base.py` (never `storage/` or `agent/` — see
+`docs/Component_Map.docx`); the daily batch, not the extractor, is what
+calls `pipeline/filters.py` next.
+
+- `extract_new_items(since) -> list[ExtractedItem]` — `since=None` (first
+  run) returns everything; otherwise only items changed after `since`. A
+  per-item failure (unreadable file, malformed record) is logged and
+  skipped, never raised — see DECISIONS.md, 2026-08-24. A source-level
+  failure (the whole source unreachable) raises `ExtractorError`, which
+  `daily_batch.py` catches per source.
+- `extractors/local_files.py` — walks `settings.env.watch_dirs`
+  recursively; extracts `.txt`/`.md` directly, `.pdf` via `pypdf`, `.docx`
+  via `python-docx`; filters by `st_mtime > since`. A missing watch
+  directory is logged and skipped, not fatal — other configured
+  directories still get scanned.
 
 ---
 

@@ -8,6 +8,59 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-24 — Extractor error handling: skip-and-log per item, never raise mid-scan
+
+**Context**: `Coding_Conventions.docx` section 2.4 says extractors "catch
+and log their own errors so one source's failure does not stop the daily
+batch for the remaining five sources," but doesn't distinguish a
+source-level failure (the whole source is unreachable) from an item-level
+one (a single file is corrupted). Local Files is entirely item-level: there
+is no "the source is down," only individual files that may fail to open,
+stat, or parse.
+
+**Decision**: `extract_new_items()` never raises for a per-file problem — an
+unreadable stat, a corrupted PDF, an unsupported extension — it logs a
+warning and skips that file, continuing the scan. `ExtractorError` (in the
+new shared `extractors/base.py`) is reserved for a genuine source-level
+failure; Local Files never raises it, since a missing watch directory
+(plausible if the user hasn't created it yet) is also just logged and
+skipped rather than treated as fatal — the remaining watch directories, if
+any, still get scanned. A future extractor with an actual "is the source
+reachable at all" question (Notion's API being down, Gmail auth expiring)
+is where `ExtractorError` earns its use.
+
+**Alternatives considered**:
+- *Raise `ExtractorError` on any file-level failure* — rejected; one
+  unparseable PDF among thousands of files shouldn't abort ingestion of
+  every other file in the same run.
+- *Silently skip missing watch directories with no log line* — rejected; a
+  misconfigured or not-yet-created `LOCAL_FILES_WATCH_DIRS` entry should be
+  visible somewhere, even if it isn't fatal.
+
+**Affects**: `extractors/base.py`, `extractors/local_files.py`
+
+---
+
+## 2026-08-24 — Local file `created_at` uses `st_ctime` with no cross-platform correction
+
+**Context**: `Data_Extraction_Specification.docx` section 2's common
+contract wants a `created_at` timestamp per item, but true file-creation
+time isn't portably available from Python's stdlib: `st_ctime` is creation
+time on Windows, but metadata-change time on Linux/Mac (getting real
+creation time there needs a platform-specific extension, e.g. reading
+`st_birthtime` where the OS exposes it).
+
+**Decision**: Use `st_ctime` as a best-effort `created_at` on every
+platform, with no correction. This is a single-user local tool, and
+`created_at` is never used for anything beyond display — no filtering,
+sorting-critical logic, or dedup depends on it being exactly right — so the
+Linux/Mac inaccuracy (reporting the last metadata change instead of true
+creation) isn't worth a platform-specific dependency to fix.
+
+**Affects**: `extractors/local_files.py`
+
+---
+
 ## 2026-08-24 — Both concrete providers share one LangChain-backed adapter
 
 **Context**: `Technical_Design_Document.docx` section 12.3 specifies the
