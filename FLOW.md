@@ -4,18 +4,16 @@ A map of how the code actually executes: entry points, the order calls happen
 in, and which module hands off to which. Updated in the same commit as any
 change to an entry point or call chain.
 
-> **Status**: the configuration layer (`config/settings.py`), all three
-> storage backends (`storage/sqlite_store.py`, `storage/chroma_store.py`,
-> `storage/neo4j_store.py`), the provider layer (`providers/`), and the
-> local files extractor (`extractors/local_files.py`) are implemented and
-> merged to `main`, along with `pipeline/filters.py`, `pipeline/chunking.py`,
-> `pipeline/metadata.py`, and `pipeline/embeddings.py`.
-> `pipeline/relationships.py` is added on this branch, completing the
-> pipeline layer; the other five extractors, `scheduler/daily_batch.py`
-> itself, and the agent/API/frontend layers are next. The ingestion and
-> query entry points below are documented as designed in `docs/` and are
-> marked _(not yet implemented)_ until their modules exist. They are kept
-> here so the intended shape stays visible while it is being built.
+> **Status**: the configuration layer, all three storage backends, the
+> provider layer, the entire pipeline layer (`filters`, `chunking`,
+> `metadata`, `embeddings`, `relationships`), and the local files extractor
+> are implemented and merged to `main`. `scheduler/daily_batch.py` is added
+> on this branch, wiring all of the above into a real, runnable ingestion
+> entry point — the `scheduler/daily_batch.py` section below is no longer
+> _(not yet implemented)_. The other five extractors and the agent/API/
+> frontend layers are next. The query entry points below are still
+> documented as designed in `docs/` and marked _(not yet implemented)_ until
+> their modules exist.
 
 ---
 
@@ -264,32 +262,57 @@ metadata/chunks/embeddings are already persisted.
 
 ---
 
-## Entry point: `scheduler/daily_batch.py` (`main()`) — _(not yet implemented)_
+## Entry point: `scheduler/daily_batch.py` (`main()`)
 
-1. `main()` reads `last_run_timestamp` from `ingestion_runs`
-   (`storage/sqlite_store.py`)
-2. For each of the six extractors (`extractors/*.py`):
-   a. `extract_new_items(since=last_run_timestamp)` → list of normalized items
-   b. Each item → `pipeline/filters.py::apply_noise_filter()`
-   c. Surviving items → `pipeline/metadata.py::generate_metadata()` →
-      `project_name`/`topic`, combined with the item's other fields and
-      written via `storage/sqlite_store.py::insert_item()`
-   d. Each item's text → `pipeline/chunking.py::chunk_text()`
-   e. Chunks → `pipeline/embeddings.py::embed_chunks()` → vectors stored in
-      Chroma, SQLite-ready `Chunk` objects returned
-   f. Those `Chunk` objects → `storage/sqlite_store.py::replace_chunks()`
+Run via `uv run python scheduler/daily_batch.py`, registered with cron /
+Task Scheduler on `config.yaml`'s `ingestion.schedule`. `main()` is a thin
+wrapper: it opens the real, settings-derived SQLite connection, Chroma
+collection, and Neo4j driver, then delegates to `_run(conn, collection,
+driver)` — the actual orchestration, kept separate so tests can pass in
+test doubles/temp resources instead.
 
-   **Branch point**: each extractor catches its own errors. A failing source is
-   recorded in `ingestion_runs.error_log` and the remaining five continue.
-3. After all sources are processed:
-   `pipeline/relationships.py::detect_relationships()` runs per new item —
-   queries Chroma for candidates, confirms via
-   `get_provider("relationship").generate_relationship()`, writes edges via
-   `storage/neo4j_store.py::write_relationship()`
-4. **Branch point**: only when every source succeeded (`status = success`) does
-   `storage/sqlite_store.py::update_last_run_timestamp()` advance the watermark.
-   A `partial_failure` leaves it unchanged so the failed source is retried
-   tomorrow.
+1. `_run()` reads the watermark via `get_last_run_timestamp(conn)` and
+   starts a run record via `start_ingestion_run(conn)`
+2. For each registered extractor in `_EXTRACTORS` (currently just
+   `("local_file", local_files.extract_new_items)` — adding a source means
+   adding one entry here, per `docs/File_Folder_Structure.docx` section 4):
+   a. `extract(since)` → list of `ExtractedItem`. An `ExtractorError` here
+      is caught, logged, and recorded in `errors`; the loop moves on to the
+      next source
+
+      **Branch point**: an extractor failure doesn't stop the batch — the
+      remaining sources still run.
+   b. Surviving `apply_noise_filter()` items are collected for the *whole
+      source* and passed to `generate_metadata()` **once**, not per item —
+      this is what actually uses `config.yaml`'s
+      `ingestion.batch_metadata_group_size` grouping (see DECISIONS.md,
+      2026-08-24)
+   c. Each `(item, metadata)` pair → `_process_item()`:
+      - `storage/sqlite_store.py::insert_item()` — combines the item's
+        extracted fields with its LLM metadata
+      - `pipeline/chunking.py::chunk_text()` → `pipeline/embeddings.py::
+        embed_chunks()` → vectors stored in Chroma, SQLite-ready `Chunk`s
+        returned → `storage/sqlite_store.py::replace_chunks()`
+      - if chunking/embedding/`replace_chunks()` raises, the just-inserted
+        item row is deleted before the error propagates — no orphaned item
+        with zero chunks (see DECISIONS.md, 2026-08-24)
+
+      **Branch point**: a single item's processing failure is caught,
+      logged, and recorded in `errors`; the rest of that source's items
+      still get processed.
+3. After every source is processed: for each successfully-processed item's
+   id, `pipeline/relationships.py::detect_relationships()` runs (its own
+   internal per-candidate resilience is backed by a top-level catch here
+   too, recorded in `errors` on failure)
+4. `status` is computed from `errors`/`items_processed`
+   (`"success"`/`"partial_failure"`/`"failed"` — see DECISIONS.md,
+   2026-08-24) and written via `complete_ingestion_run()`
+
+   **Branch point**: only `status = "success"` advances the watermark
+   (`storage/sqlite_store.py::get_last_run_timestamp()`'s own behavior).
+   `"partial_failure"` and `"failed"` both leave it unchanged, so every
+   source is retried on the next run — `"partial_failure"` just means some
+   items got through this time too.
 
 ---
 
