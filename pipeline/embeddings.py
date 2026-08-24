@@ -94,3 +94,21 @@ def embed_chunks(
 
     upsert_chunks(collection, vector_chunks)
     return sqlite_chunks
+
+
+def embed_query(text: str) -> list[float]:
+    """Embed a single piece of text for a similarity search.
+
+    Used for query-time vector search and for
+    :func:`pipeline.relationships.detect_relationships`'s candidate search,
+    so both share this module's cached model loading instead of loading
+    their own copy.
+
+    Args:
+        text: The text to embed.
+
+    Returns:
+        The embedding vector.
+    """
+    model = _model(get_settings().config.embedding.model)
+    return model.encode([text], convert_to_numpy=True)[0].tolist()

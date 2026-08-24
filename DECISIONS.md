@@ -8,6 +8,58 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-24 — Relationship detection reads SQLite for full item details, despite Component_Map omitting it
+
+**Context**: `Component_Map.docx` lists `RelationshipDetector`'s
+dependencies as `ChromaStore, ProviderInterface, Neo4jStore` — no
+`SQLiteStore`. But `storage/neo4j_store.py::ItemNode` has `title`/`url`
+fields, and Chroma's `VectorChunk` metadata (`item_id`, `source_type`,
+`project_name`, `topic`, `created_at`) has neither — there's no source for
+those fields other than SQLite's `items` table. This is the same kind of
+gap as `pipeline/metadata.py`'s Component_Map read (2026-08-24 entry), but
+resolved the opposite way: there, the missing capability (writing SQLite)
+was left to the caller; here, the missing *data* has no other owner, so the
+module has to go get it.
+
+**Decision**: `detect_relationships()` takes an open SQLite `conn` and
+calls `get_item()`/`get_chunks_for_item()` to build accurate `ItemNode`s
+for both the source and every confirmed candidate, and to get the source
+item's representative chunk text. Chroma's own metadata is still what
+narrows and ranks candidates (via `query()`) — SQLite is only consulted
+after a candidate has already survived that vector search, so this doesn't
+turn relationship detection into a full-table scan.
+
+The candidate search excludes the source item itself (`where: {"item_id":
+{"$ne": source_item_id}}` — a chunk from the same item is by far the
+closest match otherwise) and narrows to the same `project_name` when the
+source item has one classified, matching the "candidate narrowing" language
+already in `storage/chroma_store.py`'s docstring. Only the item's *first*
+chunk (by `chunk_index`) is used as representative text for both the
+narrowing-query embedding and the LLM confirmation prompt — matching
+`pipeline/metadata.py`'s "one representative excerpt, not the whole
+document" approach to keeping this a reasonably cheap, single call per
+item rather than an all-chunks comparison.
+
+A candidate whose provider call or Neo4j write fails
+(`ProviderError`/`GraphStoreError`) is logged and skipped, continuing to
+the next candidate — matching the resilience pattern used everywhere else
+in the pipeline (extractors, metadata generation): one bad candidate
+shouldn't cost the item every other relationship it might have.
+
+**Alternatives considered**:
+- *Only use Chroma/Neo4j, leave `title`/`url` unset* — rejected; a
+  relationship-graph node with no title is far less useful for the eventual
+  `agent/graph_traversal.py` and answer citations, for a field that's one
+  cheap lookup away.
+- *Compare all of an item's chunks, not just the first* — rejected as
+  unnecessary cost for now; a representative excerpt already worked well
+  enough for metadata classification, and nothing in the design docs asks
+  for exhaustive chunk-level relationship comparison.
+
+**Affects**: `pipeline/relationships.py`
+
+---
+
 ## 2026-08-24 — `embed_chunks()` writes to Chroma directly and takes an open collection
 
 **Context**: Unlike `pipeline/metadata.py` (kept storage-free — see the

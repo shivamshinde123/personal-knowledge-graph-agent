@@ -9,12 +9,13 @@ change to an entry point or call chain.
 > `storage/neo4j_store.py`), the provider layer (`providers/`), and the
 > local files extractor (`extractors/local_files.py`) are implemented and
 > merged to `main`, along with `pipeline/filters.py`, `pipeline/chunking.py`,
-> and `pipeline/metadata.py`. `pipeline/embeddings.py` is added on this
-> branch; `pipeline/relationships.py` and the other five extractors are
-> next. The ingestion and query entry points below are documented as
-> designed in `docs/` and are marked _(not yet implemented)_ until their
-> modules exist. They are kept here so the intended shape stays visible
-> while it is being built.
+> `pipeline/metadata.py`, and `pipeline/embeddings.py`.
+> `pipeline/relationships.py` is added on this branch, completing the
+> pipeline layer; the other five extractors, `scheduler/daily_batch.py`
+> itself, and the agent/API/frontend layers are next. The ingestion and
+> query entry points below are documented as designed in `docs/` and are
+> marked _(not yet implemented)_ until their modules exist. They are kept
+> here so the intended shape stays visible while it is being built.
 
 ---
 
@@ -47,8 +48,9 @@ both endpoint nodes.
 2. `ensure_constraints(driver)` — creates the `item_id` uniqueness
    constraint and `project_name` index (idempotent, safe on every process
    start)
-3. Relationship detection: for each candidate pair,
-   `write_relationship(driver, source, target, relationship)` — `MERGE`s
+3. Relationship detection: `pipeline/relationships.py::detect_relationships()`
+   calls `write_relationship(driver, source, target, relationship)` per
+   confirmed candidate — `MERGE`s
    both `Item` nodes (upserting their properties) and `MERGE`s the
    `RELATES_TO` edge keyed on `(source, target, label)`; re-detecting the
    same labeled relationship updates `confidence` rather than duplicating
@@ -141,10 +143,10 @@ only `providers/base.py`'s `get_provider()` and its return type,
    `pipeline/metadata.py::generate_metadata()` for the `project_name`/`topic`
    fields (batched: one call per group of `config.yaml`'s
    `batch_metadata_group_size`, see below)
-4. `provider.generate_relationship(source_text, candidate_text)` — what
-   `pipeline/relationships.py::detect_relationships()` will call to confirm
-   or reject each vector-narrowed candidate pair; returns `None` (not
-   related) or a judgment with a `label`/`confidence` that maps onto
+4. `provider.generate_relationship(source_text, candidate_text)` — called by
+   `pipeline/relationships.py::detect_relationships()` to confirm or reject
+   each vector-narrowed candidate; returns `None` (not related) or a
+   judgment with a `label`/`confidence` that maps onto
    `storage/neo4j_store.py::Relationship`
 5. `provider.generate_answer(question, context)` — what
    `agent/synthesizer.py::synthesize()` will call; the response cites
@@ -234,6 +236,31 @@ to Chroma directly rather than staying storage-free — see DECISIONS.md,
   already-open `collection` rather than opening its own, since
   `get_collection()` opens a new client on every call by design — the
   caller opens one collection and reuses it across the whole ingestion run.
+
+---
+
+## Shared: relationship detection (`pipeline/relationships.py`)
+
+Not an entry point itself. The last pipeline stage, run after an item's
+metadata/chunks/embeddings are already persisted.
+
+- `detect_relationships(conn, driver, collection, source_item_id) ->
+  list[tuple[str, RelationshipJudgment]]` — takes the item's first chunk
+  (by `chunk_index`) as representative text, embeds it
+  (`pipeline/embeddings.py::embed_query()`), and queries Chroma for its
+  nearest neighbors, excluding the item's own chunks
+  (`where: {"item_id": {"$ne": source_item_id}}`) and narrowed to the same
+  `project_name` when the item has one classified. Deduplicates matches
+  down to distinct candidate items, then asks
+  `get_provider("relationship").generate_relationship()` to confirm or
+  reject each one. A confirmed candidate is written via
+  `storage/neo4j_store.py::write_relationship()`, using SQLite lookups
+  (`get_item()`) to fill in `title`/`url` on both graph nodes — data
+  Chroma's own metadata doesn't carry, despite `Component_Map.docx` not
+  listing `SQLiteStore` as a dependency for this stage; see DECISIONS.md,
+  2026-08-24. A candidate whose provider call or graph write fails is
+  logged and skipped, not raised, same resilience pattern as the rest of
+  the pipeline.
 
 ---
 
