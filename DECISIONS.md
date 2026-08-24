@@ -8,6 +8,85 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-24 — Both concrete providers share one LangChain-backed adapter
+
+**Context**: `Technical_Design_Document.docx` section 12.3 specifies the
+provider/adapter pattern and its three-method contract
+(`generate_metadata`/`generate_relationship`/`generate_answer`), and
+`File_Folder_Structure.docx` lists `local_provider.py` (Ollama) and
+`openrouter_provider.py` as separate modules, but neither says how much
+those two implementations should actually share. In practice they're
+identical: OpenRouter is used specifically because it's OpenAI-API-compatible
+and needs no vendor-specific handling, so the only real difference between
+"local" and "cloud" here is which chat model backs the calls.
+
+**Decision**: `providers/base.py` defines one concrete class,
+`LangChainProvider`, that implements all three interface methods against
+any LangChain `BaseChatModel` (prompt building, JSON response parsing, and
+retry-with-backoff all live here, once). `local_provider.py` and
+`openrouter_provider.py` are reduced to a single factory function each —
+`create_local_provider()` / `create_openrouter_provider()` — that resolve
+config/env values and construct a `ChatOllama` / `ChatOpenAI` (pointed at
+`https://openrouter.ai/api/v1`) to hand to `LangChainProvider`. Using
+LangChain's chat model classes specifically (rather than the raw `ollama`
+or `openai` SDKs) also keeps the door open for LangSmith tracing later
+(`langsmith_api_key`/`langsmith_project` are already in `EnvSettings`) with
+no extra instrumentation code, matching the project's stated LangChain/
+LangGraph/LangSmith depth goal.
+
+**Alternatives considered**:
+- *Two fully separate hand-rolled classes* — rejected; it would duplicate
+  every prompt, every parser, and the retry logic itself for no behavioral
+  difference, and any prompt-wording fix would need to land in two places.
+- *Raw `ollama` + `openai` SDKs instead of LangChain chat models* — rejected;
+  LangChain's chat model interface (`.invoke()`, `.content`) is already
+  vendor-agnostic in the same way `ProviderInterface` itself is, so building
+  on it avoids re-solving that problem, and it's free LangSmith
+  instrumentation for later.
+
+**Affects**: `providers/base.py`, `providers/local_provider.py`,
+`providers/openrouter_provider.py`
+
+---
+
+## 2026-08-24 — Provider retries and structured JSON prompting live in the shared adapter
+
+**Context**: `Coding_Conventions.docx` section 2.4 requires LLM provider
+calls to "use retry with exponential backoff for transient errors, and raise
+`ProviderError` after retries are exhausted," but doesn't specify retry
+counts/delays (not present in `config.yaml` either), and no document
+specifies a response format for `generate_metadata`/`generate_relationship`.
+
+**Decision**: `_retry_with_backoff()` retries up to 3 times with delays of
+1s/2s/4s, and treats *any* exception from the wrapped call as retryable —
+including a `json.JSONDecodeError` or a `ValueError` from response
+validation, not just transport errors. `generate_metadata` and
+`generate_relationship` prompt for a strict JSON response (an array of
+`{"project_name", "topic"}` objects for metadata; a single
+`{"related": bool, "label"?, "confidence"?}` object for relationships) and
+parse it inside the retried call, so a one-off malformed response from the
+model gets a fresh attempt rather than immediately becoming a
+`ProviderError`. `generate_answer` prompts the model to cite context by
+position (`[1]`, `[2]`, …) so a caller (the eventual `agent/synthesizer.py`)
+can resolve those markers against the `ContextChunk`s it passed in, without
+this layer needing to know how citations are rendered in the final API
+response.
+
+**Alternatives considered**:
+- *Only retry on transport/connection errors, fail fast on parse errors* —
+  rejected; LLM output is stochastic, so a malformed JSON response is
+  plausibly fixed by simply asking again, and the ingestion tasks calling
+  this (`generate_metadata`/`generate_relationship`) run unattended in the
+  daily batch where a transient bad response shouldn't abort the item.
+- *Have the caller retry instead of the provider* — rejected; every future
+  caller (pipeline stages, the synthesizer) would need to reimplement the
+  same backoff loop, exactly the duplication the `ProviderInterface`
+  abstraction exists to avoid.
+
+**Affects**: `providers/base.py`
+
+---
+
 ## 2026-08-24 — Chroma collection uses cosine similarity and no attached embedding function
 
 **Context**: `Database_Schema.docx` defines the Chroma field schema (id,
