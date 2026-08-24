@@ -8,6 +8,62 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-24 — Daily batch integration tests must pin `_EXTRACTORS` to `local_file`
+
+**Context**: Adding `notion.extract_new_items` to `scheduler/daily_batch.py`'s
+`_EXTRACTORS` registry broke `tests/test_scheduler/test_daily_batch.py`
+silently: `TestFullRun` and `TestFailureHandling` call `daily_batch._run()`
+directly against the real, module-level `_EXTRACTORS` list, without mocking
+it (only the LLM provider is faked in that suite). Since this machine's
+`config/.env` has a real `NOTION_API_KEY` configured, every one of those
+"local files" integration tests started making real calls against the real
+Notion workspace, running for over an hour before being caught.
+
+**Decision**: Add an autouse `local_files_only` fixture to both
+`TestFullRun` and `TestFailureHandling` that pins
+`daily_batch._EXTRACTORS` to `[("local_file", local_files.extract_new_items)]`
+for the duration of each test in those classes — matching what the classes'
+own docstrings already claim to test. Any test that needs a different
+extractor set (e.g. to simulate a source-level failure) still overrides
+`_EXTRACTORS` explicitly afterward within the test body, which layers
+correctly on top of the autouse fixture's shared `monkeypatch`.
+
+**Alternatives considered**: Requiring `NOTION_API_KEY` to be unset while
+running tests — rejected as fragile and easy to violate by accident (as
+happened here); test isolation should not depend on what happens to be in a
+developer's `.env`. General rule going forward: any test file exercising
+`daily_batch._run()`/`main()` must explicitly control `_EXTRACTORS` rather
+than rely on the real registry, so adding a new source extractor can never
+silently make existing tests real-network-dependent again.
+
+**Affects**: `tests/test_scheduler/test_daily_batch.py`
+
+---
+
+## 2026-08-24 — Notion extractor uses the official `notion-client` SDK
+
+**Context**: `Tech_Stack.docx` and `Environment_Config_Reference.docx` specify
+`NOTION_API_KEY` (already present as `EnvSettings.notion_api_key`) and the
+extraction behavior (poll pages via the API, compare `last_edited_time`
+against `last_run_timestamp`, convert blocks to plain text), but neither
+document names a specific HTTP client library for the integration.
+
+**Decision**: Use Notion's official `notion-client` Python SDK
+(`Client(auth=...)`, with `client.search()` and
+`client.blocks.children.list()`) rather than calling the REST API directly
+with `requests`/`httpx`. It's maintained by Notion, handles pagination
+cursors and auth headers, and returns plain dicts shaped exactly like the
+REST API's JSON — so the extractor's block-parsing code reads the same
+either way, with less boilerplate.
+
+**Alternatives considered**: Raw HTTP calls via `httpx` — rejected as pure
+extra maintenance (manual pagination, headers, versioning) with no benefit,
+since no other part of the system depends on an HTTP client abstraction.
+
+**Affects**: `extractors/notion.py`, `pyproject.toml`
+
+---
+
 ## 2026-08-24 — Relationship labels are constrained to a fixed vocabulary
 
 **Context**: A real end-to-end ingestion run against the repo's own 12

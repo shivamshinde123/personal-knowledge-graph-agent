@@ -6,14 +6,12 @@ change to an entry point or call chain.
 
 > **Status**: the configuration layer, all three storage backends, the
 > provider layer, the entire pipeline layer (`filters`, `chunking`,
-> `metadata`, `embeddings`, `relationships`), and the local files extractor
-> are implemented and merged to `main`. `scheduler/daily_batch.py` is added
-> on this branch, wiring all of the above into a real, runnable ingestion
-> entry point — the `scheduler/daily_batch.py` section below is no longer
-> _(not yet implemented)_. The other five extractors and the agent/API/
-> frontend layers are next. The query entry points below are still
-> documented as designed in `docs/` and marked _(not yet implemented)_ until
-> their modules exist.
+> `metadata`, `embeddings`, `relationships`), `scheduler/daily_batch.py`,
+> and two extractors (local files, Notion) are implemented and merged to
+> `main`. Four extractors (Gmail, GitHub, Google Calendar, Browser History)
+> and the agent/API/frontend layers are next. The query entry points below
+> are still documented as designed in `docs/` and marked
+> _(not yet implemented)_ until their modules exist.
 
 ---
 
@@ -185,6 +183,16 @@ calls `pipeline/filters.py` next.
   via `python-docx`; filters by `st_mtime > since`. A missing watch
   directory is logged and skipped, not fatal — other configured
   directories still get scanned.
+- `extractors/notion.py` — lists every page the integration (`NOTION_API_KEY`)
+  can see via `Client.search()` (paginated), filters by
+  `last_edited_time > since`, then recursively walks each page's blocks via
+  `Client.blocks.children.list()` (`_collect_block_text()`), converting each
+  block's `rich_text` to plain text and joining blocks with blank lines so
+  headings/paragraphs stay natural chunk boundaries. Title comes from the
+  page's `title`-type property. Missing `NOTION_API_KEY`, or a failed
+  `search()` call, raises `ExtractorError` (source-level); a single page's
+  block-fetch failing is logged and skipped, not fatal — see DECISIONS.md,
+  2026-08-24.
 
 ---
 
@@ -288,9 +296,14 @@ test doubles/temp resources instead.
 
 1. `_run()` reads the watermark via `get_last_run_timestamp(conn)` and
    starts a run record via `start_ingestion_run(conn)`
-2. For each registered extractor in `_EXTRACTORS` (currently just
-   `("local_file", local_files.extract_new_items)` — adding a source means
-   adding one entry here, per `docs/File_Folder_Structure.docx` section 4):
+2. For each registered extractor in `_EXTRACTORS` (currently
+   `("local_file", local_files.extract_new_items)` and
+   `("notion", notion.extract_new_items)` — adding a source means adding
+   one entry here, per `docs/File_Folder_Structure.docx` section 4;
+   `tests/test_scheduler/test_daily_batch.py`'s integration tests pin
+   `_EXTRACTORS` to `local_file` only via an autouse fixture, so a new
+   entry here never makes those tests real-network-dependent — see
+   DECISIONS.md, 2026-08-24):
    a. `extract(since)` → list of `ExtractedItem`. An `ExtractorError` here
       is caught, logged, and recorded in `errors`; the loop moves on to the
       next source
