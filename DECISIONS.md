@@ -8,6 +8,52 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-24 — SQLite item inserts upsert on `(source_type, source_ref_id)`, returning the effective id
+
+**Context**: `Database_Schema.docx` defines `UNIQUE(source_type, source_ref_id)`
+on `items` to "prevent the same source item from being ingested twice," but
+doesn't say what should happen when a previously-ingested item is edited at
+the source (e.g. a Notion page revised, a local file re-saved) and the daily
+batch picks it up again via `extract_new_items(since=...)`. A plain
+`INSERT` would raise on the unique constraint; `INSERT OR IGNORE` would
+silently keep stale content forever.
+
+**Decision**: `insert_item()` upserts via
+`ON CONFLICT(source_type, source_ref_id) DO UPDATE SET ...`, updating every
+column except `id` — so a re-ingested edit overwrites the existing row in
+place rather than being rejected or ignored. Since the conflict update never
+touches `id`, an existing row keeps its original id even though the caller
+passed a freshly generated one for what it believed was a new item. To keep
+that consistent, `insert_item()` returns the *effective* item id (looked up
+by `source_type, source_ref_id` after the upsert) rather than `None`; callers
+must use the returned id — not `item.id` — when inserting that item's chunks
+via `insert_chunk()`/`replace_chunks()`. A companion `replace_chunks()`
+helper deletes an item's existing chunks before inserting the new set in one
+transaction, since an edited item's old chunk boundaries and FTS entries are
+no longer valid once chunking is re-run over the updated text.
+
+**Alternatives considered**:
+- *`INSERT OR IGNORE`* — rejected; a source item edited after its first
+  ingestion would never be reflected in storage, silently going stale.
+- *Raise on conflict and require the pipeline to call an explicit
+  `update_item()`* — rejected as needless ceremony; the pipeline layer
+  doesn't know in advance whether a given source ref is new or a re-ingested
+  edit, so it would have to catch the conflict and branch anyway.
+- *Let the conflict update also overwrite `id`* — rejected; `chunks.item_id`
+  is a foreign key, and rewriting `items.id` out from under existing chunk
+  rows would either orphan them or require a cascading id rewrite with no
+  benefit over just keeping the original id.
+
+**Affects**: `storage/sqlite_store.py`
+
+**Note**: FTS5 keyword search (`chunks_fts`) uses external-content sync
+triggers (`chunks_ai`/`chunks_ad`/`chunks_au`) since `Database_Schema.docx`
+defines the virtual table but not how it stays in sync with `chunks`. This is
+the standard SQLite-documented pattern for `content=` FTS5 tables, not a
+deviation worth its own entry.
+
+---
+
 ## 2026-08-14 — Blank `.env` values mean "unset", and relative paths anchor to the repo root
 
 **Context**: Two problems surfaced in review of the scaffolding PR, both of
