@@ -4,14 +4,13 @@ A map of how the code actually executes: entry points, the order calls happen
 in, and which module hands off to which. Updated in the same commit as any
 change to an entry point or call chain.
 
-> **Status**: the configuration layer (`config/settings.py`), the SQLite half
-> of the storage layer (`storage/sqlite_store.py`), and the provider layer
-> (`providers/`) are implemented. `chroma_store.py` and `neo4j_store.py` are
-> implemented on separate, not-yet-merged branches (PR #3, PR #4). The
-> ingestion and query entry points below are documented as designed in
-> `docs/` and are marked _(not yet implemented)_ until their modules exist.
-> They are kept here so the intended shape stays visible while it is being
-> built.
+> **Status**: the configuration layer (`config/settings.py`), the SQLite and
+> Neo4j storage modules (`storage/sqlite_store.py`, `storage/neo4j_store.py`),
+> and the provider layer (`providers/`) are implemented. `chroma_store.py` is
+> implemented on a separate, not-yet-merged branch (PR #3). The ingestion and
+> query entry points below are documented as designed in `docs/` and are
+> marked _(not yet implemented)_ until their modules exist. They are kept
+> here so the intended shape stays visible while it is being built.
 
 ---
 
@@ -26,6 +25,38 @@ Every entry point resolves configuration the same way, on first use:
 
 `reload_settings()` clears the cache and re-reads both sources; it is the
 mechanism `PUT /api/settings` uses to apply a provider change without a restart.
+
+---
+
+## Shared: Neo4j storage (`storage/neo4j_store.py`)
+
+Not an entry point itself — used by `pipeline/relationships.py` once it
+exists. An item only gets a graph node the first time it has a confirmed
+relationship (`docs/Database_Schema.docx` section 5), so there is no
+standalone "create item node" call — writing the first relationship creates
+both endpoint nodes.
+
+1. `get_driver(uri=None, user=None, password=None)` — opens a driver
+   (default: `settings.env.neo4j_uri`/`neo4j_user`/`neo4j_password`) and
+   calls `verify_connectivity()` up front, so a misconfigured or unreachable
+   server fails at startup rather than on the first query
+2. `ensure_constraints(driver)` — creates the `item_id` uniqueness
+   constraint and `project_name` index (idempotent, safe on every process
+   start)
+3. Relationship detection: for each candidate pair,
+   `write_relationship(driver, source, target, relationship)` — `MERGE`s
+   both `Item` nodes (upserting their properties) and `MERGE`s the
+   `RELATES_TO` edge keyed on `(source, target, label)`; re-detecting the
+   same labeled relationship updates `confidence` rather than duplicating
+   the edge
+4. Querying: `get_item()` for a single node (returns `None` for an item with
+   no confirmed relationship yet), `get_related_items(driver, item_id)` for
+   one-hop neighbors in both directions — this is what
+   `agent/graph_traversal.py` will call
+5. Deleting an item: `delete_item(driver, item_id)` — mirrors SQLite's
+   cascade-on-delete; callers must call this explicitly alongside
+   `storage/chroma_store.py::delete_by_item()` since neither store enforces
+   foreign keys against SQLite
 
 ---
 
