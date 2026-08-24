@@ -3,7 +3,12 @@
 Per ``docs/Technical_Design_Document.docx``, relationships are found by
 vector-similarity candidate narrowing, never by an LLM comparison against
 the full dataset — this module queries Chroma for the item's nearest
-neighbors and only asks the LLM to judge those.
+neighbors and only asks the LLM to judge those. The narrowing query uses a
+whole-document embedding (the mean of the item's own chunk embeddings, all
+already computed and stored by ``pipeline/embeddings.py``), not just the
+first chunk — the first chunk alone is often boilerplate (a title block, a
+"prepared for" line) shared near-verbatim across unrelated items, which
+would otherwise dominate the similarity signal. See ``DECISIONS.md``.
 
 Full item details (title, url) for the graph nodes this writes aren't
 available from Chroma's metadata alone, so — unlike
@@ -19,12 +24,12 @@ import sqlite3
 from datetime import UTC, datetime
 
 import neo4j
+import numpy as np
 from chromadb.api.models.Collection import Collection
 
 from config.settings import get_settings
-from pipeline.embeddings import embed_query
 from providers.base import ProviderError, RelationshipJudgment, get_provider
-from storage.chroma_store import query
+from storage.chroma_store import get_item_embeddings, query
 from storage.neo4j_store import (
     GraphStoreError,
     ItemNode,
@@ -74,11 +79,17 @@ def detect_relationships(
         return []
     source_text = chunks[0].text
 
+    document_embedding = _mean_embedding(
+        get_item_embeddings(collection, source_item_id)
+    )
+    if document_embedding is None:
+        return []
+
     top_k = get_settings().config.retrieval.relationship_candidate_count
     where: dict = {"item_id": {"$ne": source_item_id}}
     if source.project_name is not None:
         where = {"$and": [where, {"project_name": source.project_name}]}
-    candidates = query(collection, embed_query(source_text), top_k=top_k, where=where)
+    candidates = query(collection, document_embedding, top_k=top_k, where=where)
 
     provider = get_provider("relationship")
     source_node = _to_item_node(source)
@@ -132,3 +143,19 @@ def _to_item_node(item: Item) -> ItemNode:
         created_at=item.created_at,
         url=item.url_or_path,
     )
+
+
+def _mean_embedding(vectors: list[list[float]]) -> list[float] | None:
+    """Average a set of chunk embeddings into one whole-document vector.
+
+    Args:
+        vectors: An item's chunk embeddings, as returned by
+            :func:`storage.chroma_store.get_item_embeddings`.
+
+    Returns:
+        The mean vector, or ``None`` if ``vectors`` is empty (the item has
+        no chunks in Chroma yet).
+    """
+    if not vectors:
+        return None
+    return np.mean(np.array(vectors), axis=0).tolist()

@@ -16,7 +16,7 @@ import neo4j
 import pytest
 
 from pipeline.embeddings import embed_chunks
-from pipeline.relationships import detect_relationships
+from pipeline.relationships import _mean_embedding, detect_relationships
 from providers.base import ProviderError, RelationshipJudgment
 from storage.chroma_store import get_collection
 from storage.neo4j_store import ensure_constraints, get_driver, get_related_items
@@ -109,8 +109,8 @@ def make_item(**overrides) -> Item:
     return Item(**defaults)
 
 
-def ingest(conn, collection, *, ref: str, text: str, project_name=None) -> str:
-    """Insert an item with one embedded, SQLite-persisted chunk; return its id."""
+def ingest_multi(conn, collection, *, ref: str, texts, project_name=None) -> str:
+    """Insert an item with multiple embedded, SQLite-persisted chunks; return its id."""
     item_id = insert_item(
         conn,
         make_item(
@@ -121,10 +121,17 @@ def ingest(conn, collection, *, ref: str, text: str, project_name=None) -> str:
         ),
     )
     chunks = embed_chunks(
-        collection, item_id, "notion", [text], project_name=project_name
+        collection, item_id, "notion", list(texts), project_name=project_name
     )
     replace_chunks(conn, item_id, chunks)
     return item_id
+
+
+def ingest(conn, collection, *, ref: str, text: str, project_name=None) -> str:
+    """Insert an item with one embedded, SQLite-persisted chunk; return its id."""
+    return ingest_multi(
+        conn, collection, ref=ref, texts=[text], project_name=project_name
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -259,3 +266,79 @@ class TestDetectRelationships:
         )
 
         assert detect_relationships(conn, driver, collection, source_id) == []
+
+
+class TestWholeDocumentNarrowing:
+    """Regression coverage for using every chunk, not just the first, to narrow.
+
+    Real items often share near-identical boilerplate in their first chunk
+    (a title block, a "prepared for" line) — narrowing on that chunk alone
+    would treat every item sharing it as equally similar, regardless of
+    what the rest of the document actually says.
+    """
+
+    def test_narrowing_prefers_similar_substance_over_a_shared_first_chunk(
+        self, conn, driver, collection, monkeypatch
+    ):
+        # candidate_count=1: only the single nearest neighbor gets judged,
+        # so this only passes if narrowing actually distinguished B from C.
+        monkeypatch.setattr(
+            "pipeline.relationships.get_settings",
+            lambda: SimpleNamespace(
+                config=SimpleNamespace(
+                    retrieval=SimpleNamespace(relationship_candidate_count=1)
+                )
+            ),
+        )
+        boilerplate = (
+            "Personal Knowledge Graph Agent design document prepared by "
+            "Shivam Shinde"
+        )
+        source_id = ingest_multi(
+            conn,
+            collection,
+            ref="a",
+            texts=[
+                boilerplate,
+                "The storage layer uses SQLite, Chroma, and Neo4j for local "
+                "persistence of ingested items.",
+            ],
+        )
+        storage_related_id = ingest_multi(
+            conn,
+            collection,
+            ref="b",
+            texts=[
+                boilerplate,
+                "SQLite, Chroma, and Neo4j together form the storage layer "
+                "that persists all ingested items locally.",
+            ],
+        )
+        ingest_multi(
+            conn,
+            collection,
+            ref="c",
+            texts=[
+                boilerplate,
+                "A traditional Italian pasta recipe needs fresh tomatoes, "
+                "basil, garlic, and olive oil.",
+            ],
+        )
+        provider = FakeProvider(
+            default=RelationshipJudgment(label="discussed_in", confidence=0.9)
+        )
+        monkeypatch.setattr(
+            "pipeline.relationships.get_provider", lambda task: provider
+        )
+
+        result = detect_relationships(conn, driver, collection, source_id)
+
+        assert [item_id for item_id, _ in result] == [storage_related_id]
+
+
+class TestMeanEmbedding:
+    def test_averages_vectors_elementwise(self):
+        assert _mean_embedding([[1.0, 0.0], [0.0, 2.0]]) == pytest.approx([0.5, 1.0])
+
+    def test_empty_input_returns_none(self):
+        assert _mean_embedding([]) is None
