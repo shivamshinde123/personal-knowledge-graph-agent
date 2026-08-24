@@ -4,12 +4,14 @@ A map of how the code actually executes: entry points, the order calls happen
 in, and which module hands off to which. Updated in the same commit as any
 change to an entry point or call chain.
 
-> **Status**: the configuration layer (`config/settings.py`) and the SQLite
-> half of the storage layer (`storage/sqlite_store.py`) are implemented;
-> `chroma_store.py` and `neo4j_store.py` are next. The ingestion and query
-> entry points below are documented as designed in `docs/` and are marked
-> _(not yet implemented)_ until their modules exist. They are kept here so the
-> intended shape stays visible while it is being built.
+> **Status**: the configuration layer (`config/settings.py`), the SQLite half
+> of the storage layer (`storage/sqlite_store.py`), and the provider layer
+> (`providers/`) are implemented. `chroma_store.py` and `neo4j_store.py` are
+> implemented on separate, not-yet-merged branches (PR #3, PR #4). The
+> ingestion and query entry points below are documented as designed in
+> `docs/` and are marked _(not yet implemented)_ until their modules exist.
+> They are kept here so the intended shape stays visible while it is being
+> built.
 
 ---
 
@@ -56,6 +58,41 @@ calls it.
 
 ---
 
+## Shared: LLM providers (`providers/`)
+
+Not an entry point itself — every LLM call anywhere in the system goes
+through this layer (`CLAUDE.md`'s "never bypass the LLM Provider
+abstraction" ground rule). Callers never import `local_provider.py` or
+`openrouter_provider.py` directly, or a LangChain/Ollama/OpenAI SDK type —
+only `providers/base.py`'s `get_provider()` and its return type,
+`ProviderInterface`.
+
+1. `get_provider(task)` — `task` is `"metadata"`, `"relationship"`, or
+   `"answer"`; reads `settings.config.llm.provider_mode` and returns
+   `create_local_provider()` (Ollama), `create_openrouter_provider()`
+   (OpenRouter), or, under `mixed`, routes `"answer"` to OpenRouter and the
+   two cheaper ingestion tasks to Ollama (see DECISIONS.md, 2026-08-24)
+2. Both concrete providers construct a `LangChainProvider` around a
+   LangChain chat model (`ChatOllama` / `ChatOpenAI`) — this is where every
+   provider call's prompt building, JSON response parsing, and
+   retry-with-backoff actually live, shared by both
+3. `provider.generate_metadata(texts)` — what
+   `pipeline/metadata.py::generate_metadata()` will call for the
+   `project_name`/`topic` fields (batched: one call per group of
+   `config.yaml`'s `batch_metadata_group_size`)
+4. `provider.generate_relationship(source_text, candidate_text)` — what
+   `pipeline/relationships.py::detect_relationships()` will call to confirm
+   or reject each vector-narrowed candidate pair; returns `None` (not
+   related) or a judgment with a `label`/`confidence` that maps onto
+   `storage/neo4j_store.py::Relationship`
+5. `provider.generate_answer(question, context)` — what
+   `agent/synthesizer.py::synthesize()` will call; the response cites
+   `context` positionally (`[1]`, `[2]`, …), which the synthesizer resolves
+   against each `ContextChunk`'s `title`/`url` before returning the final
+   cited answer
+
+---
+
 ## Entry point: `scheduler/daily_batch.py` (`main()`) — _(not yet implemented)_
 
 1. `main()` reads `last_run_timestamp` from `ingestion_runs`
@@ -65,7 +102,8 @@ calls it.
    b. Each item → `pipeline/filters.py::apply_noise_filter()`
    c. Surviving items → `pipeline/chunking.py::chunk_text()`
    d. Each chunk → `pipeline/metadata.py::generate_metadata()` (rule-based
-      fields direct; `project_name`/`topic` via `providers.generate_metadata()`)
+      fields direct; `project_name`/`topic` via
+      `get_provider("metadata").generate_metadata()`)
    e. Each chunk → `pipeline/embeddings.py::embed()` → stored in Chroma
    f. Raw text + metadata → `storage/sqlite_store.py::insert_item()` /
       `insert_chunk()`
@@ -75,8 +113,8 @@ calls it.
 3. After all sources are processed:
    `pipeline/relationships.py::detect_relationships()` runs per new item —
    queries Chroma for candidates, confirms via
-   `providers.generate_relationship()`, writes edges via
-   `storage/neo4j_store.py::write_edge()`
+   `get_provider("relationship").generate_relationship()`, writes edges via
+   `storage/neo4j_store.py::write_relationship()`
 4. **Branch point**: only when every source succeeded (`status = success`) does
    `storage/sqlite_store.py::update_last_run_timestamp()` advance the watermark.
    A `partial_failure` leaves it unchanged so the failed source is retried
@@ -98,7 +136,8 @@ calls it.
 5. `agent/merger.py::merge()` — Reciprocal Rank Fusion across whichever nodes
    actually ran
 6. `agent/synthesizer.py::synthesize()` — fetches full text for the top results
-   from SQLite, calls `providers.generate_answer()`, returns a cited answer
+   from SQLite, calls `get_provider("answer").generate_answer()`, returns a
+   cited answer
 7. Response serialized per `docs/API_Specification.docx` and returned
 
 ---
