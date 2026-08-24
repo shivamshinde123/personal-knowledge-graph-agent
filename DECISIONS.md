@@ -8,6 +8,50 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-24 — Daily batch: metadata is batched per source, run status has three tiers, and a mid-item failure rolls back the item row
+
+**Context**: `scheduler/daily_batch.py` is the first module to actually
+compose every pipeline stage in sequence, which surfaced questions none of
+the individual modules needed to answer on their own: how items flow into
+`pipeline/metadata.py`'s batching, what `ingestion_runs.status` should be
+when only some sources fail, and what happens to a partially-processed item
+when a later pipeline stage fails.
+
+**Decisions**:
+- Each source's *entire* filtered item list is passed to
+  `generate_metadata()` in one call, not item-by-item — calling it once per
+  item would silently defeat `config.yaml`'s
+  `ingestion.batch_metadata_group_size` grouping, making every configured
+  batch size behave as if it were 1. `_run()` collects
+  `filtered_items = [item for item in raw_items if apply_noise_filter(item)]`
+  per source first, then batches.
+- `status` has three tiers, not the two `success`/`failed` a first read of
+  `Database_Schema.docx` might suggest: `"success"` (no errors at all),
+  `"partial_failure"` (at least one item was processed despite some
+  errors), `"failed"` (zero items processed). Only `"success"` advances the
+  watermark (already `storage/sqlite_store.py`'s behavior); `partial_failure`
+  vs `failed` distinguishes "mostly worked, retry the gaps" from "nothing
+  usable came out of this run" in `ingestion_runs` for anyone debugging a
+  bad run later.
+- `_process_item()` writes the SQLite item row *before* chunking/embedding
+  it (needed either way, since `embed_chunks()` requires the item's
+  effective id for Chroma metadata). A test writing a real integration run
+  caught that if chunking or embedding then failed, the item row was left
+  behind with zero chunks — a silent partial write, undercounting
+  `items_processed` while still polluting `items`. `_process_item()` now
+  wraps chunking/embedding/`replace_chunks()` in a try/except that calls
+  `delete_item()` before re-raising, so an item in SQLite always either has
+  its chunks too, or doesn't exist at all.
+- Both extractor-level failures (`ExtractorError`) and per-item failures
+  (any other exception during `_process_item()`) are caught, logged, and
+  appended to a shared `errors` list rather than aborting the run — matching
+  the resilience pattern already established in extractors, metadata
+  generation, and relationship detection.
+
+**Affects**: `scheduler/daily_batch.py`
+
+---
+
 ## 2026-08-24 — Relationship candidate narrowing uses a whole-document embedding, not the first chunk alone
 
 **Context**: A real ingestion run (using the fixed relationship-label
