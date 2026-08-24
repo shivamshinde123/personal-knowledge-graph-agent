@@ -46,6 +46,52 @@ one thing most worth testing — the actual Cypher.
 
 ---
 
+## 2026-08-24 — Neo4j temporal properties are converted back to stdlib `datetime`
+
+**Context**: `ItemNode.created_at` and `Relationship.created_at` are typed
+`datetime | None`, but the neo4j driver returns its own temporal type,
+`neo4j.time.DateTime`, for any property read back from a node or
+relationship — not `datetime.datetime`. Left unconverted, that silently
+violates the declared type and would break any caller doing stdlib
+`datetime` operations or JSON serialization on the result (found in Copilot
+review of PR #4).
+
+**Decision**: A `_to_datetime()` helper calls `neo4j.time.DateTime`'s own
+`.to_native()` method (a no-op for anything that's already a stdlib
+`datetime`, so it's safe to apply unconditionally to whatever a driver call
+returns) and is used everywhere a temporal property comes back from a
+record — `_item_from_node()` and the `Relationship` built in
+`get_related_items()`. Covered by
+`test_created_at_round_trips_as_a_stdlib_datetime`, which asserts
+`type(...) is datetime` rather than just equality, since
+`neo4j.time.DateTime` compares equal to an equivalent stdlib `datetime`
+despite being the wrong type.
+
+**Affects**: `storage/neo4j_store.py`
+
+---
+
+## 2026-08-24 — `get_driver()` closes the driver if `verify_connectivity()` fails; test suite refuses to wipe a non-local database
+
+Two smaller PR #4 review fixes, bundled since both are narrow correctness
+fixes to the same file with no real alternatives considered:
+
+- `get_driver()` previously left the newly constructed driver open if
+  `verify_connectivity()` raised, leaking a socket/thread pool on every
+  failed connection attempt in a long-running process (e.g. retrying a
+  misconfigured URI). It now closes the driver before re-raising.
+- `tests/test_storage/test_neo4j_store.py`'s fixture runs
+  `MATCH (n) DETACH DELETE n` before and after every test. That's fine
+  against the disposable local container it's designed for, but nothing
+  previously stopped `NEO4J_TEST_URI` from pointing at a real instance and
+  having the suite silently destroy it. The suite now refuses to run
+  (`pytest.skip` at module level) against any non-localhost host unless
+  `NEO4J_TEST_ALLOW_NONLOCAL_WIPE=1` is explicitly set.
+
+**Affects**: `storage/neo4j_store.py`, `tests/test_storage/test_neo4j_store.py`
+
+---
+
 ## 2026-08-14 — Blank `.env` values mean "unset", and relative paths anchor to the repo root
 
 **Context**: Two problems surfaced in review of the scaffolding PR, both of

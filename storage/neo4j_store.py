@@ -89,6 +89,19 @@ def _item_properties(item: ItemNode) -> dict[str, object]:
     }
 
 
+def _to_datetime(value: object) -> datetime | None:
+    """Convert a value read back from Neo4j into a standard-library datetime.
+
+    Temporal properties come back as ``neo4j.time.DateTime``, not
+    ``datetime.datetime`` — the driver's own type, not the stdlib one — so
+    it's converted via ``to_native()`` to satisfy the ``datetime | None``
+    type on :class:`ItemNode` and :class:`Relationship`.
+    """
+    if value is None or isinstance(value, datetime):
+        return value
+    return value.to_native()
+
+
 def _item_from_node(node: neo4j.graph.Node) -> ItemNode:
     return ItemNode(
         id=node["id"],
@@ -96,7 +109,7 @@ def _item_from_node(node: neo4j.graph.Node) -> ItemNode:
         title=node.get("title"),
         project_name=node.get("project_name"),
         topic=node.get("topic"),
-        created_at=node.get("created_at"),
+        created_at=_to_datetime(node.get("created_at")),
         url=node.get("url"),
     )
 
@@ -128,8 +141,14 @@ def get_driver(
         driver = neo4j.GraphDatabase.driver(
             resolved_uri, auth=(resolved_user, resolved_password)
         )
+    except _NEO4J_ERRORS as exc:
+        raise GraphStoreError(
+            f"Could not connect to Neo4j at {resolved_uri!r}: {exc}"
+        ) from exc
+    try:
         driver.verify_connectivity()
     except _NEO4J_ERRORS as exc:
+        driver.close()
         raise GraphStoreError(
             f"Could not connect to Neo4j at {resolved_uri!r}: {exc}"
         ) from exc
@@ -265,7 +284,7 @@ def get_related_items(driver: neo4j.Driver, item_id: str) -> list[RelatedItem]:
             relationship=Relationship(
                 label=record["r"]["label"],
                 confidence=record["r"].get("confidence"),
-                created_at=record["r"].get("created_at"),
+                created_at=_to_datetime(record["r"].get("created_at")),
             ),
             direction=record["direction"],
         )

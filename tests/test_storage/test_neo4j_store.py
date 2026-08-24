@@ -9,6 +9,7 @@ server is reachable.
 
 import os
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 
 import neo4j
 import pytest
@@ -28,6 +29,21 @@ from storage.neo4j_store import (
 TEST_URI = os.environ.get("NEO4J_TEST_URI", "bolt://localhost:7687")
 TEST_USER = os.environ.get("NEO4J_TEST_USER", "neo4j")
 TEST_PASSWORD = os.environ.get("NEO4J_TEST_PASSWORD", "testpassword123")
+
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def _is_local(uri: str) -> bool:
+    return urlsplit(uri).hostname in _LOCAL_HOSTS
+
+
+if not _is_local(TEST_URI) and not os.environ.get("NEO4J_TEST_ALLOW_NONLOCAL_WIPE"):
+    pytest.skip(
+        f"NEO4J_TEST_URI={TEST_URI!r} is not localhost, and this suite wipes "
+        "the entire database on every run. Set "
+        "NEO4J_TEST_ALLOW_NONLOCAL_WIPE=1 to opt in if that's intentional.",
+        allow_module_level=True,
+    )
 
 
 def _server_available() -> bool:
@@ -93,6 +109,27 @@ class TestWriteRelationship:
 
         assert get_item(driver, "item-1").title == "Design notes"
         assert get_item(driver, "item-2").title == "Follow-up email"
+
+    def test_created_at_round_trips_as_a_stdlib_datetime(self, driver):
+        source = make_item(id="item-1", created_at=datetime(2026, 8, 1, tzinfo=UTC))
+        target = make_item(id="item-2")
+
+        write_relationship(
+            driver,
+            source,
+            target,
+            Relationship(
+                label="implements", created_at=datetime(2026, 8, 3, tzinfo=UTC)
+            ),
+        )
+
+        stored = get_item(driver, "item-1")
+        assert type(stored.created_at) is datetime
+        assert stored.created_at == datetime(2026, 8, 1, tzinfo=UTC)
+
+        related = get_related_items(driver, "item-1")
+        assert type(related[0].relationship.created_at) is datetime
+        assert related[0].relationship.created_at == datetime(2026, 8, 3, tzinfo=UTC)
 
     def test_omits_unset_optional_properties(self, driver):
         source = make_item(id="item-1", title=None, project_name=None, topic=None)
