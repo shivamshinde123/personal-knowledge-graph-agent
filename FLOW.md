@@ -4,13 +4,15 @@ A map of how the code actually executes: entry points, the order calls happen
 in, and which module hands off to which. Updated in the same commit as any
 change to an entry point or call chain.
 
-> **Status**: the configuration layer (`config/settings.py`) and the SQLite
-> and Chroma halves of the storage layer (`storage/sqlite_store.py`,
-> `storage/chroma_store.py`) are implemented; `neo4j_store.py` is next. The
-> ingestion and query entry points below are documented as designed in
-> `docs/` and are marked _(not yet implemented)_ until their modules exist.
-> They are kept here so the intended shape stays visible while it is being
-> built.
+> **Status**: the configuration layer (`config/settings.py`) is implemented.
+> The Chroma half of the storage layer (`storage/chroma_store.py`) is added
+> on this branch; `storage/sqlite_store.py` is implemented on a separate,
+> not-yet-merged branch (PR #2) and `storage/neo4j_store.py` on another (PR
+> #4) — both are referenced below since they document the intended design,
+> not only what this branch itself contains. The ingestion and query entry
+> points below are documented as designed in `docs/` and are marked _(not
+> yet implemented)_ until their modules exist. They are kept here so the
+> intended shape stays visible while it is being built.
 
 ---
 

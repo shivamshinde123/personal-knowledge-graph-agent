@@ -1,9 +1,13 @@
 """Chroma storage: the single embedded vector collection.
 
 This module owns the vector store defined in ``docs/Database_Schema.docx``.
-It belongs to the storage layer: it imports only ``config.settings`` and
-holds the only live Chroma client in the system, per
-``docs/Component_Map.docx`` and ``docs/Coding_Conventions.docx``.
+It belongs to the storage layer: it imports only ``config.settings``, and per
+``docs/Component_Map.docx`` and ``docs/Coding_Conventions.docx`` it is the
+only module allowed to hold a live Chroma client. It does not itself cache
+or reuse a client across calls — ``get_collection()`` opens a new one every
+time it's called, so callers that want a single client for a process's
+lifetime (as ``api/main.py`` startup does) must call it once and hold onto
+the returned collection themselves.
 
 Embeddings are computed elsewhere (``pipeline/embeddings.py``, using the
 local sentence-transformers model configured in ``config.yaml``) and passed
@@ -13,7 +17,7 @@ Typical use::
 
     from storage.chroma_store import get_collection, upsert_chunks
 
-    collection = get_collection()
+    collection = get_collection()  # call once; hold onto the result
     upsert_chunks(collection, [vector_chunk])
 """
 
