@@ -8,6 +8,48 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-24 — Relationship labels are constrained to a fixed vocabulary
+
+**Context**: A real end-to-end ingestion run against the repo's own 12
+design documents (see below) produced 94 confirmed relationships, but with
+16 distinct free-form labels — the original prompt only gave the model
+examples ("implements", "discussed_in", "planned_in"), not a closed set.
+Most of that spread was near-duplicate phrasings of the same underlying
+relationship (`discussed_in` / `discusses` / `discusses_in`, `described_in`
+/ `documented_in` / `is_described_in`), which fragments anything downstream
+that wants to reason about or filter by relationship type
+(`agent/graph_traversal.py`, eventual UI filtering). `Database_Schema.docx`
+already implied a small canonical set by only ever naming three example
+labels, never suggesting free-form generation was intended.
+
+**Decision**: `providers/base.py` defines `_RELATIONSHIP_LABELS =
+("implements", "discussed_in", "planned_in", "companion_to")` — the three
+schema-doc examples plus `companion_to`, which came directly out of the
+real test run (several of this project's own design docs are explicitly
+"Companion to" one another, a genuinely distinct relationship from generic
+`discussed_in`). `_build_relationship_prompt()` now presents this as a
+closed choice rather than examples, instructing the model to fall back to
+`discussed_in` when nothing more specific applies (matching how it already
+dominated the free-form results — 58 of 94 edges — so it's the natural
+default). `_parse_relationship_response()` rejects any label outside this
+set, which triggers a retry via the existing "any exception is retryable"
+mechanism rather than silently accepting an off-vocabulary label.
+
+**Alternatives considered**:
+- *Leave labels free-form* — rejected based on direct evidence from a real
+  run: 16 labels for 94 edges is already too fragmented to be useful, and
+  nothing bounds the label space from growing further as more sources are
+  ingested.
+- *A larger fixed vocabulary (6+ labels covering source-specific cases like
+  `follows_up` for email threads)* — rejected for now as speculative ahead
+  of those extractors actually existing; easy to extend
+  `_RELATIONSHIP_LABELS` later once a real source produces relationships
+  that don't fit the current four.
+
+**Affects**: `providers/base.py`
+
+---
+
 ## 2026-08-24 — Daily batch: metadata is batched per source, run status has three tiers, and a mid-item failure rolls back the item row
 
 **Context**: `scheduler/daily_batch.py` is the first module to actually

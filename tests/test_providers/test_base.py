@@ -106,6 +106,25 @@ class TestGenerateRelationship:
         with pytest.raises(ProviderError):
             provider.generate_relationship("a", "b")
 
+    def test_a_label_outside_the_fixed_vocabulary_raises_provider_error(self):
+        chat_model = FakeChatModel(
+            ['{"related": true, "label": "loosely_reminds_me_of"}'] * 4
+        )
+        provider = LangChainProvider(chat_model, provider_name="test")
+
+        with pytest.raises(ProviderError):
+            provider.generate_relationship("a", "b")
+
+    def test_prompt_lists_the_fixed_label_vocabulary(self):
+        chat_model = FakeChatModel(['{"related": false}'])
+        provider = LangChainProvider(chat_model, provider_name="test")
+
+        provider.generate_relationship("a", "b")
+
+        prompt = chat_model.prompts[0]
+        for label in ("implements", "discussed_in", "planned_in", "companion_to"):
+            assert label in prompt
+
 
 class TestGenerateAnswer:
     def test_returns_the_raw_response_text(self):
