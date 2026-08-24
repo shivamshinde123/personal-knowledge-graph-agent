@@ -9,6 +9,7 @@ from storage.chroma_store import (
     VectorStoreError,
     delete_by_item,
     get_collection,
+    get_item_embeddings,
     query,
     upsert_chunks,
 )
@@ -126,6 +127,25 @@ class TestErrors:
 
         with pytest.raises(VectorStoreError):
             query(collection, [0.1, 0.2], top_k=1)
+
+
+class TestGetItemEmbeddings:
+    def test_returns_every_chunk_embedding_for_the_item(self, collection):
+        upsert_chunks(
+            collection,
+            [
+                make_chunk(id="a", item_id="item-1", embedding=[1.0, 0.0, 0.0]),
+                make_chunk(id="b", item_id="item-1", embedding=[0.0, 1.0, 0.0]),
+                make_chunk(id="c", item_id="item-2", embedding=[0.0, 0.0, 1.0]),
+            ],
+        )
+
+        vectors = get_item_embeddings(collection, "item-1")
+
+        assert sorted(vectors) == [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0]]
+
+    def test_returns_empty_list_for_an_item_with_no_chunks(self, collection):
+        assert get_item_embeddings(collection, "does-not-exist") == []
 
 
 class TestDeleteByItem:

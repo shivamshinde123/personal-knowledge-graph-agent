@@ -8,6 +8,62 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-24 — Relationship candidate narrowing uses a whole-document embedding, not the first chunk alone
+
+**Context**: A real ingestion run (using the fixed relationship-label
+vocabulary from PR #12, `providers/base.py`) showed `companion_to`
+dominating far more than expected — 84 of 94 edges. Investigating why:
+`detect_relationships()` used only the item's
+*first* chunk to build the query embedding for Chroma's candidate-narrowing
+search, and every one of these design documents' first chunk is
+near-identical boilerplate (title, "Prepared for: Shivam Shinde", a
+"Companion to: X" line). Two items sharing that boilerplate look highly
+similar by cosine distance on chunk 0 alone, regardless of what the rest of
+each document actually says — the narrowing step was effectively ranking on
+metadata noise, not content.
+
+**Decision**: The candidate-narrowing query vector is now the mean of
+*every* chunk embedding the item already has in Chroma
+(`storage/chroma_store.py::get_item_embeddings()` fetches them,
+`pipeline/relationships.py::_mean_embedding()` averages them) — not a fresh
+embedding of concatenated raw text, and not a re-embedding call at all.
+Averaging already-computed per-chunk vectors is standard practice for
+approximating whole-document semantics, and reuses vectors
+`pipeline/embeddings.py::embed_chunks()` already wrote during ingestion, so
+this adds no new embedding cost. Concatenating and re-embedding the full
+text was rejected outright: `all-MiniLM-L6-v2` has a limited input length,
+so a long document would just get silently truncated by the model itself —
+the same "only the front of the document counts" problem this decision
+exists to fix, one level down.
+
+The text actually sent to the LLM for the yes/no relationship judgment
+(`pipeline/relationships.py`'s `source_text`/`candidate_text`) is
+unchanged — still the first chunk. That's a separate, smaller-scope
+question (a single representative excerpt is *cheaper* per-candidate to
+send the LLM, where whole-document context matters less once vector search
+has already narrowed to genuinely similar items) and wasn't part of what
+broke here — the failure was specifically in candidate *narrowing*, not
+confirmation.
+
+**Verified**: re-ran the real ingestion (12 docs, real OpenRouter calls)
+after this change — label distribution split far more evenly across the
+fixed vocabulary instead of `companion_to` sweeping nearly every edge just
+because chunk 0 matched.
+
+**Alternatives considered**:
+- *Concatenate all chunk text and embed it as one string* — rejected; runs
+  into the embedding model's input length limit for any sufficiently long
+  document, reintroducing a version of the same bias.
+- *Leave chunk 0 as the narrowing signal, only expand what's sent to the
+  LLM* — rejected; the LLM only ever sees candidates the vector search
+  already surfaced, so a biased candidate list can't be corrected
+  downstream — genuinely related items with different opening boilerplate
+  might never even become candidates.
+
+**Affects**: `storage/chroma_store.py`, `pipeline/relationships.py`
+
+---
+
 ## 2026-08-24 — Relationship detection reads SQLite for full item details, despite Component_Map omitting it
 
 **Context**: `Component_Map.docx` lists `RelationshipDetector`'s
