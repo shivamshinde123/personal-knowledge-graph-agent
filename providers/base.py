@@ -41,6 +41,10 @@ Task = Literal["metadata", "relationship", "answer"]
 _MAX_RETRIES = 3
 _BASE_DELAY_SECONDS = 1.0
 
+# Fixed vocabulary for RelationshipJudgment.label — see DECISIONS.md,
+# 2026-08-24, for why this replaced free-form label generation.
+_RELATIONSHIP_LABELS = ("implements", "discussed_in", "planned_in", "companion_to")
+
 
 class ProviderError(Exception):
     """Raised when an LLM provider call fails after retries are exhausted."""
@@ -188,15 +192,16 @@ def _parse_metadata_response(raw: str, expected_count: int) -> list[ItemMetadata
 
 
 def _build_relationship_prompt(source_text: str, candidate_text: str) -> str:
+    labels = ", ".join(f'"{label}"' for label in _RELATIONSHIP_LABELS)
     return (
         "Determine whether the second text below is meaningfully related to "
         "the first (e.g. one implements, discusses, or was planned in the "
         "other) — not just topically similar. Respond with ONLY JSON: if "
-        'related, {"related": true, "label": string, "confidence": number '
-        "between 0 and 1}, where label is a short verb phrase describing "
-        'the relationship (e.g. "implements", "discussed_in", '
-        '"planned_in"); if not related, {"related": false}. No other '
-        f"text.\n\nText 1:\n{source_text}\n\nText 2:\n{candidate_text}"
+        'related, {"related": true, "label": one of '
+        f'[{labels}], "confidence": number between 0 and 1}}, choosing '
+        '"discussed_in" when no more specific label applies; if not '
+        'related, {"related": false}. No other text.\n\n'
+        f"Text 1:\n{source_text}\n\nText 2:\n{candidate_text}"
     )
 
 
@@ -207,8 +212,8 @@ def _parse_relationship_response(raw: str) -> RelationshipJudgment | None:
     if not parsed["related"]:
         return None
     label = parsed.get("label")
-    if not isinstance(label, str) or not label:
-        raise ValueError(f"Related judgment is missing a label: {raw!r}")
+    if label not in _RELATIONSHIP_LABELS:
+        raise ValueError(f"Related judgment has an unrecognized label: {raw!r}")
     confidence = parsed.get("confidence")
     return RelationshipJudgment(
         label=label, confidence=None if confidence is None else float(confidence)

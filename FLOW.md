@@ -147,7 +147,13 @@ only `providers/base.py`'s `get_provider()` and its return type,
    `pipeline/relationships.py::detect_relationships()` to confirm or reject
    each vector-narrowed candidate; returns `None` (not related) or a
    judgment with a `label`/`confidence` that maps onto
-   `storage/neo4j_store.py::Relationship`
+   `storage/neo4j_store.py::Relationship`. `label` is constrained to a
+   fixed vocabulary (`base._RELATIONSHIP_LABELS`:
+   `implements`/`discussed_in`/`planned_in`/`companion_to`) — a response
+   outside that set is treated as malformed and retried, same as invalid
+   JSON — see DECISIONS.md, 2026-08-24, for why free-form labels were
+   dropped after a real ingestion run showed them fragmenting into 16
+   near-duplicate variants
 5. `provider.generate_answer(question, context)` — what
    `agent/synthesizer.py::synthesize()` will call; the response cites
    `context` positionally (`[1]`, `[2]`, …), which the synthesizer resolves
