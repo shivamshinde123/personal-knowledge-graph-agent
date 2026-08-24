@@ -269,6 +269,7 @@ def insert_item(conn: sqlite3.Connection, item: Item) -> str:
         ).fetchone()
         conn.commit()
     except sqlite3.Error as exc:
+        conn.rollback()
         raise StorageError(f"Could not insert item {item.id!r}: {exc}") from exc
     return row["id"]
 
@@ -305,6 +306,7 @@ def delete_item(conn: sqlite3.Connection, item_id: str) -> None:
         conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
         conn.commit()
     except sqlite3.Error as exc:
+        conn.rollback()
         raise StorageError(f"Could not delete item {item_id!r}: {exc}") from exc
 
 
@@ -335,6 +337,7 @@ def insert_chunk(conn: sqlite3.Connection, chunk: Chunk) -> None:
         )
         conn.commit()
     except sqlite3.Error as exc:
+        conn.rollback()
         raise StorageError(f"Could not insert chunk {chunk.id!r}: {exc}") from exc
 
 
@@ -349,8 +352,10 @@ def replace_chunks(
 
     Args:
         conn: An open connection from :func:`connect`.
-        item_id: The item whose chunks are being replaced.
-        chunks: The new chunks. Each must have ``chunk.item_id == item_id``.
+        item_id: The item whose chunks are being replaced. Each chunk is
+            inserted under this id regardless of its own ``chunk.item_id``,
+            so a caller cannot accidentally attach a chunk to the wrong item.
+        chunks: The new chunks.
 
     Raises:
         StorageError: If the replacement fails; the transaction is rolled
@@ -364,7 +369,7 @@ def replace_chunks(
             [
                 (
                     c.id,
-                    c.item_id,
+                    item_id,
                     c.chunk_index,
                     c.text,
                     c.token_count,
@@ -451,6 +456,7 @@ def start_ingestion_run(conn: sqlite3.Connection) -> str:
         )
         conn.commit()
     except sqlite3.Error as exc:
+        conn.rollback()
         raise StorageError(f"Could not start ingestion run: {exc}") from exc
     return run_id
 
@@ -483,6 +489,7 @@ def complete_ingestion_run(
         )
         conn.commit()
     except sqlite3.Error as exc:
+        conn.rollback()
         raise StorageError(
             f"Could not complete ingestion run {run_id!r}: {exc}"
         ) from exc

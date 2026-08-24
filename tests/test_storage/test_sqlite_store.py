@@ -138,6 +138,19 @@ class TestChunks:
         chunks = get_chunks_for_item(conn, "item-1")
         assert [c.id for c in chunks] == ["fresh"]
 
+    def test_replace_chunks_ignores_a_mismatched_chunk_item_id(self, conn):
+        insert_item(conn, make_item())
+
+        replace_chunks(
+            conn,
+            "item-1",
+            [make_chunk(id="c0", item_id="some-other-item", embedding_id="e0")],
+        )
+
+        chunks = get_chunks_for_item(conn, "item-1")
+        assert [c.id for c in chunks] == ["c0"]
+        assert chunks[0].item_id == "item-1"
+
     def test_deleting_item_cascades_to_chunks(self, conn):
         insert_item(conn, make_item())
         insert_chunk(conn, make_chunk())
