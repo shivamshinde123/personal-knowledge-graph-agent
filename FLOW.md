@@ -4,13 +4,13 @@ A map of how the code actually executes: entry points, the order calls happen
 in, and which module hands off to which. Updated in the same commit as any
 change to an entry point or call chain.
 
-> **Status**: the configuration layer (`config/settings.py`) plus the SQLite
-> and Neo4j storage modules (`storage/sqlite_store.py`,
-> `storage/neo4j_store.py`) are implemented. `chroma_store.py` is tracked in a
-> separate PR. The ingestion and query entry points below are documented as
-> designed in `docs/` and are marked _(not yet implemented)_ until their
-> modules exist. They are kept here so the intended shape stays visible while
-> it is being built.
+> **Status**: the configuration layer (`config/settings.py`) is implemented,
+> and all three storage backends are implemented: SQLite and Neo4j
+> (`storage/sqlite_store.py`, `storage/neo4j_store.py`) are merged to `main`;
+> Chroma (`storage/chroma_store.py`) is added on this branch. The ingestion
+> and query entry points below are documented as designed in `docs/` and are
+> marked _(not yet implemented)_ until their modules exist. They are kept
+> here so the intended shape stays visible while it is being built.
 
 ---
 
@@ -86,6 +86,32 @@ calls it.
 4. Daily batch bookkeeping: `start_ingestion_run()` →
    `complete_ingestion_run(status=...)` → `get_last_run_timestamp()` reads the
    watermark for the next run's `since=`
+
+---
+
+## Shared: Chroma storage (`storage/chroma_store.py`)
+
+Not an entry point itself — used alongside `sqlite_store.py` by the
+ingestion and query entry points below. Embeddings are always computed by
+the caller (`pipeline/embeddings.py`); this module only persists and
+searches vectors already produced elsewhere.
+
+1. `get_collection(persist_dir=None)` — opens the single `chunks` collection
+   (default: `settings.env.chroma_persist_dir`), configured for cosine
+   similarity with no embedding function attached (see DECISIONS.md,
+   2026-08-24)
+2. Ingesting a chunk: `upsert_chunks(collection, [vector_chunk, ...])` —
+   `vector_chunk.id` must equal the corresponding
+   `storage/sqlite_store.py::Chunk.embedding_id`, and `vector_chunk.item_id`
+   must equal the SQLite item's effective id from `insert_item()`
+3. Querying: `query(collection, query_embedding, top_k, where=...)` — the
+   vector half of hybrid search that `agent/search_nodes.py` will call; an
+   optional `where` filter narrows by `source_type`/`project_name`/`topic`,
+   used both for filtered search and for relationship candidate narrowing in
+   `pipeline/relationships.py`
+4. Deleting an item: `delete_by_item(collection, item_id)` — SQLite's
+   `delete_item()` cascades to `chunks` on its own, but callers must call
+   this too since Chroma isn't a foreign-key participant
 
 ---
 

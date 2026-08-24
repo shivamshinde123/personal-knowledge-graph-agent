@@ -8,6 +8,36 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-24 — Chroma collection uses cosine similarity and no attached embedding function
+
+**Context**: `Database_Schema.docx` defines the Chroma field schema (id,
+embedding, document, metadata) but doesn't specify a distance metric or
+whether the collection should compute its own embeddings. Chroma's default
+distance metric is squared L2, and `get_or_create_collection` attaches a
+default embedding function unless told otherwise.
+
+**Decision**: `get_collection()` creates the collection with
+`metadata={"hnsw:space": "cosine"}`, matching sentence-transformers models
+(including `all-MiniLM-L6-v2`, configured in `config.yaml`), which are
+trained and compared with cosine similarity — L2 on their output would rank
+results differently than the model was designed for. It also passes
+`embedding_function=None`: every write in `chroma_store.py` supplies an
+already-computed vector (from `pipeline/embeddings.py`), so Chroma is never
+asked to embed text itself, keeping embedding model selection entirely in
+the pipeline layer rather than split across two places.
+
+**Alternatives considered**:
+- *Leave the default L2 metric* — rejected; it's a silent correctness issue
+  that would only surface as subtly-off search results, not an error.
+- *Let Chroma's default embedding function stay attached* — rejected; it
+  would silently attempt to embed text (using its own bundled model, not the
+  configured one) on any call that omits an explicit embedding, masking
+  bugs where a caller forgot to compute one.
+
+**Affects**: `storage/chroma_store.py`
+
+---
+
 ## 2026-08-24 — Neo4j tests run against a real local container, skipped if none is reachable
 
 **Context**: SQLite has `:memory:` and Chroma has an embedded persistent
