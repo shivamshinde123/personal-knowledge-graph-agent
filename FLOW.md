@@ -7,10 +7,10 @@ change to an entry point or call chain.
 > **Status**: the configuration layer, all three storage backends, the
 > provider layer, the entire pipeline layer (`filters`, `chunking`,
 > `metadata`, `embeddings`, `relationships`), `scheduler/daily_batch.py`,
-> and two extractors (local files, Notion) are implemented and merged to
-> `main`. Four extractors (Gmail, GitHub, Google Calendar, Browser History)
-> and the agent/API/frontend layers are next. The query entry points below
-> are still documented as designed in `docs/` and marked
+> and three extractors (local files, Notion, browser history) are
+> implemented and merged to `main`. Three extractors (Gmail, GitHub, Google
+> Calendar) and the agent/API/frontend layers are next. The query entry
+> points below are still documented as designed in `docs/` and marked
 > _(not yet implemented)_ until their modules exist.
 
 ---
@@ -195,6 +195,16 @@ calls `pipeline/filters.py` next.
   2026-08-24. Logs an INFO progress line every 25 pages scanned (a full
   scan visits every visible page and can take a long time on a large
   workspace — see DECISIONS.md, 2026-08-24).
+- `extractors/browser_history.py` — copies `settings.env.browser_history_path`
+  to a temp file before opening it (the browser holds the original locked
+  while running — see DECISIONS.md, 2026-08-24), then reads Chrome's `urls`
+  table (`url`, `title`, `visit_count`, `last_visit_time`), one
+  `ExtractedItem` per URL. Filters, in order: no/blank title dropped;
+  `visit_count < filters.browser_history.min_visit_count` dropped;
+  `domain_blocklist` substring match dropped (see DECISIONS.md, 2026-08-24);
+  `last_visit_time <= since` dropped. `raw_text` is the title only — no page
+  content is fetched, per `docs/Data_Extraction_Specification.docx` section
+  8.2. Missing/unreadable path raises `ExtractorError` (source-level).
 
 ---
 

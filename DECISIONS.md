@@ -8,6 +8,60 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-24 — Browser history reads a copy of the live SQLite file, one row per URL
+
+**Context**: Chrome (and other Chromium-based browsers) hold an exclusive
+lock on their `History` SQLite file while running, so opening the
+configured `BROWSER_HISTORY_PATH` directly would fail with "database is
+locked" almost every time the daily batch runs — the browser is normally
+open. Neither `docs/Data_Extraction_Specification.docx` nor
+`Environment_Config_Reference.docx` mention this. Separately, Chrome's
+schema has both a `urls` table (one row per URL, with `visit_count` and
+`last_visit_time` reflecting only the *most recent* visit) and a `visits`
+table (one row per individual visit event); the spec's "filtered to visits
+after `last_run_timestamp`" wording doesn't say which granularity to use.
+
+**Decision**: Copy the file to a temp directory before opening it
+(`shutil.copy2` into `tempfile.TemporaryDirectory()`), and read from the
+`urls` table — one `ExtractedItem` per URL, using `last_visit_time` as
+`last_edited_at` (there's no natural "created" concept for a history entry,
+so `created_at` is left `None`). This matches `source_type`/`source_ref_id`
+upsert semantics elsewhere (`source_ref_id = url`) and keeps re-visits from
+producing duplicate items.
+
+**Alternatives considered**: Reading the `visits` table for one row per
+visit event — rejected; `ExtractedItem`/`items` has no field for individual
+visit timestamps beyond `last_edited_at`, and per-visit granularity doesn't
+match "browser history is the lightest-weight source" (section 8.2) or the
+one-row-per-URL shape everywhere else in the design.
+
+**Affects**: `extractors/browser_history.py`
+
+---
+
+## 2026-08-24 — Domain blocklist matching is plain substring containment
+
+**Context**: `config.yaml`'s `filters.browser_history.domain_blocklist`
+mixes two entry shapes: bare domains (`"facebook.com"`) and
+domain-plus-path prefixes (`"google.com/search"`) — meant to block Google's
+search-results pages specifically without blocking all of Google (e.g.
+Maps). Neither doc specifies the matching algorithm.
+
+**Decision**: `entry in url` — plain substring containment against the full
+URL string. Handles both entry shapes without needing to parse the URL:
+`"facebook.com"` matches any URL containing that domain anywhere;
+`"google.com/search"` only matches URLs whose path actually starts with
+`/search`, correctly leaving `google.com/maps` unblocked.
+
+**Alternatives considered**: Parsing the URL with `urllib.parse` and
+matching hostname/path separately — rejected as unnecessary complexity for
+a filter with at most a handful of configured entries; plain substring
+matching is easy to reason about from the config value alone.
+
+**Affects**: `extractors/browser_history.py`
+
+---
+
 ## 2026-08-24 — Relationship confirmation is biased toward "unrelated" and filtered by confidence
 
 **Context**: Two real ingestion runs (the project's own design docs, and
