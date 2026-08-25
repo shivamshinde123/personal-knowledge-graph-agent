@@ -52,7 +52,12 @@ def detect_relationships(
     Queries Chroma for the item's nearest-neighbor chunks (narrowed to the
     same ``project_name`` when the item has one classified), deduplicates
     matches down to distinct candidate items, and asks the LLM to confirm or
-    reject each one. A candidate whose LLM call or graph write fails is
+    reject each one. A judgment confirmed with confidence below
+    ``config.yaml``'s ``retrieval.relationship_confidence_threshold`` is
+    discarded like an unconfirmed one — vector-narrowed candidates are only
+    ever topically adjacent, not necessarily related, so a low-confidence
+    "yes" from the LLM is treated as noise rather than written to the graph
+    (see DECISIONS.md). A candidate whose LLM call or graph write fails is
     logged and skipped rather than aborting the rest — one bad candidate
     shouldn't cost the item every other relationship it might have.
 
@@ -93,6 +98,9 @@ def detect_relationships(
 
     provider = get_provider("relationship")
     source_node = _to_item_node(source)
+    confidence_threshold = (
+        get_settings().config.retrieval.relationship_confidence_threshold
+    )
 
     confirmed: list[tuple[str, RelationshipJudgment]] = []
     seen_item_ids: set[str] = set()
@@ -108,6 +116,20 @@ def detect_relationships(
         try:
             judgment = provider.generate_relationship(source_text, candidate.document)
             if judgment is None:
+                continue
+            if (
+                judgment.confidence is not None
+                and judgment.confidence < confidence_threshold
+            ):
+                logger.debug(
+                    "Discarding low-confidence relationship between %r and %r: "
+                    "%s (%.2f < %.2f)",
+                    source_item_id,
+                    candidate.item_id,
+                    judgment.label,
+                    judgment.confidence,
+                    confidence_threshold,
+                )
                 continue
             write_relationship(
                 driver,

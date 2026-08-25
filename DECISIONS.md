@@ -8,6 +8,70 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-24 — Relationship confirmation is biased toward "unrelated" and filtered by confidence
+
+**Context**: Two real ingestion runs (the project's own design docs, and
+two real Notion recipe pages) showed the relationship-confirmation LLM call
+over-confirms far too readily. The original prompt told the model to pick
+`"discussed_in"` "when no more specific label applies" — a built-in fallback
+that made `related: true` the path of least resistance. In the docs run,
+65/78 `companion_to` edges traced back to every doc sharing a literal
+"Companion to: X" boilerplate line, not real content overlap. In the recipe
+run, two nearly-empty recipe template pages still got linked to unrelated
+project design docs. Confidence scores were already being requested and
+stored, but nothing ever used them — a `related: true` at confidence 0.1
+was written to the graph exactly like one at 0.95.
+
+**Decision**: Two changes, together:
+1. Rewrote `_build_relationship_prompt()` to explicitly state that most
+   vector-narrowed candidate pairs are NOT related, to require pointing at
+   a specific concrete connection rather than shared topic/vocabulary, and
+   to define each label's actual criteria (e.g. `companion_to` now requires
+   the pair to be *explicitly* designated as companion documents, not just
+   two documents from the same project) — removing the old fallback bias
+   toward `discussed_in`.
+2. Added `config.yaml`'s `retrieval.relationship_confidence_threshold`
+   (default `0.6`). `pipeline/relationships.py::detect_relationships()`
+   discards a confirmed judgment whose `confidence` is below this threshold
+   before writing it to Neo4j — the same as if the model had said
+   `related: false`. A judgment with no confidence value at all isn't
+   filtered (nothing to compare), since the schema doesn't require it.
+
+**Alternatives considered**: Fixing only the prompt — rejected, since a
+better prompt still doesn't stop a single bad/overconfident judgment from
+being written; the confidence threshold is a structural backstop
+independent of prompt quality. Fixing only the threshold — rejected, since
+the original prompt's built-in bias toward finding *some* label meant most
+judgments would come back with moderate-to-high confidence regardless of
+whether they were actually correct.
+
+**Verified against real data — partial success, real limitation found**:
+calling `provider.generate_relationship()` directly against the exact pair
+that produced the original false-positive (the "New Recipe" page vs. the
+`Product_Requirement_Document.docx` chunk containing "Companion document
+to: ...") still returned `companion_to` at confidence `0.9` — confidently
+wrong, so the confidence threshold doesn't catch it either. Isolating
+further: the same call with the literal "Companion document to:" phrase
+stripped from the candidate text correctly returned "not related". So the
+root cause is `claude-3-haiku` doing surface lexical pattern-matching on the
+word "Companion" rather than genuine judgment, and it does this with high
+confidence — neither the reworded prompt nor a confidence floor overrides
+that for this specific model. A genuinely related pair (two paraphrases of
+"the storage layer uses SQLite/Chroma/Neo4j") was still correctly confirmed
+as `implements`, and an unrelated pair with no shared boilerplate word was
+correctly rejected — so the fix is a real, if partial, improvement: it
+narrows the false-positive surface to cases with literal shared boilerplate
+vocabulary, it doesn't eliminate that specific failure mode. Likely
+model-capability-dependent (this was tested only against the cheap
+`claude-3-haiku` used for low-cost demo runs, not the project's configured
+default `claude-sonnet-4`) — worth re-testing with a stronger model before
+concluding whether further prompt work is needed.
+
+**Affects**: `providers/base.py`, `pipeline/relationships.py`,
+`config/config.yaml`, `config/settings.py`
+
+---
+
 ## 2026-08-24 — Notion extractor logs scan progress every 25 pages
 
 **Context**: A full, unfiltered `extract_new_items()` run visits every page

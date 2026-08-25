@@ -110,6 +110,7 @@ class RetrievalConfig(BaseModel):
     top_k_vector: int = 8
     top_k_keyword: int = 8
     relationship_candidate_count: int = 10
+    relationship_confidence_threshold: float = 0.6
 
 
 class EmbeddingConfig(BaseModel):

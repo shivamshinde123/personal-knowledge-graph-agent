@@ -194,13 +194,28 @@ def _parse_metadata_response(raw: str, expected_count: int) -> list[ItemMetadata
 def _build_relationship_prompt(source_text: str, candidate_text: str) -> str:
     labels = ", ".join(f'"{label}"' for label in _RELATIONSHIP_LABELS)
     return (
-        "Determine whether the second text below is meaningfully related to "
-        "the first (e.g. one implements, discusses, or was planned in the "
-        "other) — not just topically similar. Respond with ONLY JSON: if "
-        'related, {"related": true, "label": one of '
-        f'[{labels}], "confidence": number between 0 and 1}}, choosing '
-        '"discussed_in" when no more specific label applies; if not '
-        'related, {"related": false}. No other text.\n\n'
+        "These two texts were surfaced by a similarity search, which means "
+        "they may merely share vocabulary, formatting, or topic area "
+        "without being meaningfully related — most candidate pairs found "
+        "this way are NOT actually related. Default to unrelated unless "
+        "you can point to a specific, concrete connection between what "
+        "Text 2 actually says and what Text 1 actually says.\n\n"
+        "If related, choose exactly one label:\n"
+        '- "implements": Text 2 is a concrete realization of something '
+        "specifically planned or designed in Text 1 (or vice versa).\n"
+        '- "discussed_in": Text 2 explicitly discusses the same specific '
+        "subject matter as Text 1 — not merely a related theme or shared "
+        "domain vocabulary.\n"
+        '- "planned_in": Text 1 or Text 2 proposes or plans something the '
+        "other one carries out or refers back to.\n"
+        '- "companion_to": the two are explicitly designated as a paired '
+        "or companion document (e.g. one names the other by title as its "
+        "companion) — not just two documents from the same project.\n\n"
+        "Respond with ONLY JSON: if related, "
+        '{"related": true, "label": one of '
+        f'[{labels}], "confidence": number between 0 and 1 reflecting how '
+        "certain you are}; if not related, or if you are unsure, "
+        '{"related": false}. No other text.\n\n'
         f"Text 1:\n{source_text}\n\nText 2:\n{candidate_text}"
     )
 
