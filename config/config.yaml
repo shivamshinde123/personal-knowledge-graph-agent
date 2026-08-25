@@ -33,6 +33,7 @@ retrieval:
   top_k_vector: 8
   top_k_keyword: 8
   relationship_candidate_count: 10
+  relationship_confidence_threshold: 0.6 # confirmed relationships below this confidence are discarded
 
 embedding:
   model: sentence-transformers/all-MiniLM-L6-v2

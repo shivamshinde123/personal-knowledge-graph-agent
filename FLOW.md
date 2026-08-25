@@ -266,7 +266,16 @@ metadata/chunks/embeddings are already persisted.
   down to distinct candidate items, then — using the item's first chunk as
   representative text for the LLM prompt itself, unchanged — asks
   `get_provider("relationship").generate_relationship()` to confirm or
-  reject each one. A confirmed candidate is written via
+  reject each one. The prompt is deliberately biased toward "unrelated"
+  (most vector-narrowed candidates aren't actually related) and requires a
+  specific, describable connection rather than shared topic/vocabulary — see
+  DECISIONS.md, 2026-08-24. A confirmed judgment whose `confidence` is below
+  `config.yaml`'s `retrieval.relationship_confidence_threshold` (default
+  `0.6`) is discarded, same as an unconfirmed one (see DECISIONS.md,
+  2026-08-24 — this is a partial fix: verified against real data to catch
+  some but not all false positives, since a cheap model can still be
+  confidently wrong on cases with literal shared boilerplate text). A
+  confirmed-and-kept candidate is written via
   `storage/neo4j_store.py::write_relationship()`, using SQLite lookups
   (`get_item()`) to fill in `title`/`url` on both graph nodes — data
   Chroma's own metadata doesn't carry, despite `Component_Map.docx` not

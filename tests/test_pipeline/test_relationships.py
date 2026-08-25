@@ -140,7 +140,10 @@ def set_candidate_count(monkeypatch):
         "pipeline.relationships.get_settings",
         lambda: SimpleNamespace(
             config=SimpleNamespace(
-                retrieval=SimpleNamespace(relationship_candidate_count=5)
+                retrieval=SimpleNamespace(
+                    relationship_candidate_count=5,
+                    relationship_confidence_threshold=0.6,
+                )
             )
         ),
     )
@@ -268,6 +271,61 @@ class TestDetectRelationships:
         assert detect_relationships(conn, driver, collection, source_id) == []
 
 
+class TestConfidenceThreshold:
+    def test_a_confirmed_but_low_confidence_judgment_is_discarded(
+        self, conn, driver, collection, monkeypatch
+    ):
+        source_id = ingest(conn, collection, ref="a", text="Building the storage layer")
+        ingest(conn, collection, ref="b", text="Storage layer design notes")
+        provider = FakeProvider(
+            default=RelationshipJudgment(label="discussed_in", confidence=0.4)
+        )
+        monkeypatch.setattr(
+            "pipeline.relationships.get_provider", lambda task: provider
+        )
+
+        result = detect_relationships(conn, driver, collection, source_id)
+
+        assert result == []
+        assert get_related_items(driver, source_id) == []
+
+    def test_a_confirmed_judgment_at_or_above_the_threshold_is_kept(
+        self, conn, driver, collection, monkeypatch
+    ):
+        source_id = ingest(conn, collection, ref="a", text="Building the storage layer")
+        candidate_id = ingest(
+            conn, collection, ref="b", text="Storage layer design notes"
+        )
+        provider = FakeProvider(
+            default=RelationshipJudgment(label="discussed_in", confidence=0.6)
+        )
+        monkeypatch.setattr(
+            "pipeline.relationships.get_provider", lambda task: provider
+        )
+
+        result = detect_relationships(conn, driver, collection, source_id)
+
+        assert result == [(candidate_id, provider._default)]
+
+    def test_a_judgment_with_no_confidence_is_not_filtered(
+        self, conn, driver, collection, monkeypatch
+    ):
+        source_id = ingest(conn, collection, ref="a", text="Building the storage layer")
+        candidate_id = ingest(
+            conn, collection, ref="b", text="Storage layer design notes"
+        )
+        provider = FakeProvider(
+            default=RelationshipJudgment(label="discussed_in", confidence=None)
+        )
+        monkeypatch.setattr(
+            "pipeline.relationships.get_provider", lambda task: provider
+        )
+
+        result = detect_relationships(conn, driver, collection, source_id)
+
+        assert result == [(candidate_id, provider._default)]
+
+
 class TestWholeDocumentNarrowing:
     """Regression coverage for using every chunk, not just the first, to narrow.
 
@@ -286,7 +344,10 @@ class TestWholeDocumentNarrowing:
             "pipeline.relationships.get_settings",
             lambda: SimpleNamespace(
                 config=SimpleNamespace(
-                    retrieval=SimpleNamespace(relationship_candidate_count=1)
+                    retrieval=SimpleNamespace(
+                        relationship_candidate_count=1,
+                        relationship_confidence_threshold=0.6,
+                    )
                 )
             ),
         )

@@ -136,7 +136,10 @@ def fake_providers(monkeypatch):
         "pipeline.relationships.get_settings",
         lambda: SimpleNamespace(
             config=SimpleNamespace(
-                retrieval=SimpleNamespace(relationship_candidate_count=5)
+                retrieval=SimpleNamespace(
+                    relationship_candidate_count=5,
+                    relationship_confidence_threshold=0.6,
+                )
             )
         ),
     )

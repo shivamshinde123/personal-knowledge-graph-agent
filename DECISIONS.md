@@ -8,6 +8,151 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-24 — Relationship confirmation is biased toward "unrelated" and filtered by confidence
+
+**Context**: Two real ingestion runs (the project's own design docs, and
+two real Notion recipe pages) showed the relationship-confirmation LLM call
+over-confirms far too readily. The original prompt told the model to pick
+`"discussed_in"` "when no more specific label applies" — a built-in fallback
+that made `related: true` the path of least resistance. In the docs run,
+65/78 `companion_to` edges traced back to every doc sharing a literal
+"Companion to: X" boilerplate line, not real content overlap. In the recipe
+run, two nearly-empty recipe template pages still got linked to unrelated
+project design docs. Confidence scores were already being requested and
+stored, but nothing ever used them — a `related: true` at confidence 0.1
+was written to the graph exactly like one at 0.95.
+
+**Decision**: Two changes, together:
+1. Rewrote `_build_relationship_prompt()` to explicitly state that most
+   vector-narrowed candidate pairs are NOT related, to require pointing at
+   a specific concrete connection rather than shared topic/vocabulary, and
+   to define each label's actual criteria (e.g. `companion_to` now requires
+   the pair to be *explicitly* designated as companion documents, not just
+   two documents from the same project) — removing the old fallback bias
+   toward `discussed_in`.
+2. Added `config.yaml`'s `retrieval.relationship_confidence_threshold`
+   (default `0.6`). `pipeline/relationships.py::detect_relationships()`
+   discards a confirmed judgment whose `confidence` is below this threshold
+   before writing it to Neo4j — the same as if the model had said
+   `related: false`. A judgment with no confidence value at all isn't
+   filtered (nothing to compare), since the schema doesn't require it.
+
+**Alternatives considered**: Fixing only the prompt — rejected, since a
+better prompt still doesn't stop a single bad/overconfident judgment from
+being written; the confidence threshold is a structural backstop
+independent of prompt quality. Fixing only the threshold — rejected, since
+the original prompt's built-in bias toward finding *some* label meant most
+judgments would come back with moderate-to-high confidence regardless of
+whether they were actually correct.
+
+**Verified against real data — partial success, real limitation found**:
+calling `provider.generate_relationship()` directly against the exact pair
+that produced the original false-positive (the "New Recipe" page vs. the
+`Product_Requirement_Document.docx` chunk containing "Companion document
+to: ...") still returned `companion_to` at confidence `0.9` — confidently
+wrong, so the confidence threshold doesn't catch it either. Isolating
+further: the same call with the literal "Companion document to:" phrase
+stripped from the candidate text correctly returned "not related". So the
+root cause is `claude-3-haiku` doing surface lexical pattern-matching on the
+word "Companion" rather than genuine judgment, and it does this with high
+confidence — neither the reworded prompt nor a confidence floor overrides
+that for this specific model. A genuinely related pair (two paraphrases of
+"the storage layer uses SQLite/Chroma/Neo4j") was still correctly confirmed
+as `implements`, and an unrelated pair with no shared boilerplate word was
+correctly rejected — so the fix is a real, if partial, improvement: it
+narrows the false-positive surface to cases with literal shared boilerplate
+vocabulary, it doesn't eliminate that specific failure mode. Likely
+model-capability-dependent (this was tested only against the cheap
+`claude-3-haiku` used for low-cost demo runs, not the project's configured
+default `claude-sonnet-4`) — worth re-testing with a stronger model before
+concluding whether further prompt work is needed.
+
+**Affects**: `providers/base.py`, `pipeline/relationships.py`,
+`config/config.yaml`, `config/settings.py`
+
+---
+
+## 2026-08-24 — Notion extractor logs scan progress every 25 pages
+
+**Context**: A full, unfiltered `extract_new_items()` run visits every page
+the integration can see, one Notion API call per page's block tree.
+Verifying the extractor against this workspace's real data showed this can
+take a long time on a workspace with many/deeply nested pages, with no
+output at all until the whole run finishes — indistinguishable from a hang
+from the outside (this is exactly what made an earlier, unrelated bug look
+like a stuck process before it was traced to a real cause).
+
+**Decision**: Log an INFO-level progress line every 25 pages scanned
+(`_PROGRESS_LOG_INTERVAL`), plus a start line and a final summary line
+(pages scanned vs. items extracted). Each individual `search()` pagination
+call also logs at DEBUG. 25 is an arbitrary but reasonable cadence — frequent
+enough to show a long run is alive, infrequent enough not to spam logs on
+an ordinary-sized workspace.
+
+**Alternatives considered**: A time-based interval (e.g. log every 30s) —
+rejected as more code for no real benefit here, since page count is already
+a meaningful, monotonically increasing progress signal.
+
+**Affects**: `extractors/notion.py`
+
+---
+
+## 2026-08-24 — Daily batch integration tests must pin `_EXTRACTORS` to `local_file`
+
+**Context**: Adding `notion.extract_new_items` to `scheduler/daily_batch.py`'s
+`_EXTRACTORS` registry broke `tests/test_scheduler/test_daily_batch.py`
+silently: `TestFullRun` and `TestFailureHandling` call `daily_batch._run()`
+directly against the real, module-level `_EXTRACTORS` list, without mocking
+it (only the LLM provider is faked in that suite). Since this machine's
+`config/.env` has a real `NOTION_API_KEY` configured, every one of those
+"local files" integration tests started making real calls against the real
+Notion workspace, running for over an hour before being caught.
+
+**Decision**: Add an autouse `local_files_only` fixture to both
+`TestFullRun` and `TestFailureHandling` that pins
+`daily_batch._EXTRACTORS` to `[("local_file", local_files.extract_new_items)]`
+for the duration of each test in those classes — matching what the classes'
+own docstrings already claim to test. Any test that needs a different
+extractor set (e.g. to simulate a source-level failure) still overrides
+`_EXTRACTORS` explicitly afterward within the test body, which layers
+correctly on top of the autouse fixture's shared `monkeypatch`.
+
+**Alternatives considered**: Requiring `NOTION_API_KEY` to be unset while
+running tests — rejected as fragile and easy to violate by accident (as
+happened here); test isolation should not depend on what happens to be in a
+developer's `.env`. General rule going forward: any test file exercising
+`daily_batch._run()`/`main()` must explicitly control `_EXTRACTORS` rather
+than rely on the real registry, so adding a new source extractor can never
+silently make existing tests real-network-dependent again.
+
+**Affects**: `tests/test_scheduler/test_daily_batch.py`
+
+---
+
+## 2026-08-24 — Notion extractor uses the official `notion-client` SDK
+
+**Context**: `Tech_Stack.docx` and `Environment_Config_Reference.docx` specify
+`NOTION_API_KEY` (already present as `EnvSettings.notion_api_key`) and the
+extraction behavior (poll pages via the API, compare `last_edited_time`
+against `last_run_timestamp`, convert blocks to plain text), but neither
+document names a specific HTTP client library for the integration.
+
+**Decision**: Use Notion's official `notion-client` Python SDK
+(`Client(auth=...)`, with `client.search()` and
+`client.blocks.children.list()`) rather than calling the REST API directly
+with `requests`/`httpx`. It's maintained by Notion, handles pagination
+cursors and auth headers, and returns plain dicts shaped exactly like the
+REST API's JSON — so the extractor's block-parsing code reads the same
+either way, with less boilerplate.
+
+**Alternatives considered**: Raw HTTP calls via `httpx` — rejected as pure
+extra maintenance (manual pagination, headers, versioning) with no benefit,
+since no other part of the system depends on an HTTP client abstraction.
+
+**Affects**: `extractors/notion.py`, `pyproject.toml`
+
+---
+
 ## 2026-08-24 — Relationship labels are constrained to a fixed vocabulary
 
 **Context**: A real end-to-end ingestion run against the repo's own 12
