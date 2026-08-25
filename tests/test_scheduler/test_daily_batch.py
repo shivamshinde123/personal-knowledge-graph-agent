@@ -16,6 +16,7 @@ import neo4j
 import pytest
 
 import scheduler.daily_batch as daily_batch
+from extractors import local_files
 from extractors.base import ExtractorError
 from providers.base import ItemMetadata, RelationshipJudgment
 from storage.chroma_store import get_collection
@@ -146,6 +147,20 @@ def fake_providers(monkeypatch):
 
 
 class TestFullRun:
+    @pytest.fixture(autouse=True)
+    def local_files_only(self, monkeypatch):
+        """Restrict the real run to the local-files extractor.
+
+        This class exercises the local-files ingestion path specifically
+        (per the module docstring); without this, the real, unmocked
+        ``notion.extract_new_items`` in ``_EXTRACTORS`` would hit the
+        actual Notion API using whatever ``NOTION_API_KEY`` happens to be
+        configured on the machine running the tests.
+        """
+        monkeypatch.setattr(
+            daily_batch, "_EXTRACTORS", [("local_file", local_files.extract_new_items)]
+        )
+
     def test_ingests_files_end_to_end(self, conn, driver, collection, watch_dir):
         (watch_dir / "a.txt").write_text("Building the storage layer", encoding="utf-8")
         (watch_dir / "b.txt").write_text(
@@ -217,6 +232,13 @@ class TestFullRun:
 
 
 class TestFailureHandling:
+    @pytest.fixture(autouse=True)
+    def local_files_only(self, monkeypatch):
+        """See ``TestFullRun.local_files_only`` — same reasoning applies here."""
+        monkeypatch.setattr(
+            daily_batch, "_EXTRACTORS", [("local_file", local_files.extract_new_items)]
+        )
+
     def test_extractor_level_failure_leaves_watermark_unchanged(
         self, conn, driver, collection, monkeypatch
     ):
