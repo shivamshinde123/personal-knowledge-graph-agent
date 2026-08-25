@@ -40,6 +40,13 @@ from storage.sqlite_store import Item, get_chunks_for_item, get_item
 
 logger = logging.getLogger(__name__)
 
+# Per CLAUDE.md's locked-in decisions: "Browser History is intentionally
+# the lightest-weight source ... no relationship detection." Excluded from
+# candidate narrowing here (not just skipped as a detection source in
+# scheduler/daily_batch.py) so it never enters the graph in either
+# direction — see DECISIONS.md, 2026-08-25.
+_NO_RELATIONSHIP_DETECTION_SOURCE = "browser_history"
+
 
 def detect_relationships(
     conn: sqlite3.Connection,
@@ -49,8 +56,12 @@ def detect_relationships(
 ) -> list[tuple[str, RelationshipJudgment]]:
     """Find and write confirmed relationships for one recently-ingested item.
 
-    Queries Chroma for the item's nearest-neighbor chunks (narrowed to the
-    same ``project_name`` when the item has one classified), deduplicates
+    Returns immediately, without any LLM or graph work, if the item's
+    source is excluded from relationship detection entirely (currently just
+    ``browser_history`` — see the module-level constant and DECISIONS.md,
+    2026-08-25). Otherwise, queries Chroma for the item's nearest-neighbor
+    chunks (narrowed to the same ``project_name`` when the item has one
+    classified), deduplicates
     matches down to distinct candidate items, and asks the LLM to confirm or
     reject each one. A judgment confirmed with confidence below
     ``config.yaml``'s ``retrieval.relationship_confidence_threshold`` is
@@ -78,6 +89,8 @@ def detect_relationships(
             "detect_relationships called for unknown item %r", source_item_id
         )
         return []
+    if source.source_type == _NO_RELATIONSHIP_DETECTION_SOURCE:
+        return []
 
     chunks = get_chunks_for_item(conn, source_item_id)
     if not chunks:
@@ -91,9 +104,14 @@ def detect_relationships(
         return []
 
     top_k = get_settings().config.retrieval.relationship_candidate_count
-    where: dict = {"item_id": {"$ne": source_item_id}}
+    where: dict = {
+        "$and": [
+            {"item_id": {"$ne": source_item_id}},
+            {"source_type": {"$ne": _NO_RELATIONSHIP_DETECTION_SOURCE}},
+        ]
+    }
     if source.project_name is not None:
-        where = {"$and": [where, {"project_name": source.project_name}]}
+        where = {"$and": [*where["$and"], {"project_name": source.project_name}]}
     candidates = query(collection, document_embedding, top_k=top_k, where=where)
 
     provider = get_provider("relationship")
