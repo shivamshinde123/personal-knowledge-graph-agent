@@ -274,14 +274,21 @@ Not an entry point itself. The last pipeline stage, run after an item's
 metadata/chunks/embeddings are already persisted.
 
 - `detect_relationships(conn, driver, collection, source_item_id) ->
-  list[tuple[str, RelationshipJudgment]]` — builds a whole-document query
-  vector by averaging every chunk embedding the item already has in Chroma
+  list[tuple[str, RelationshipJudgment]]` — returns `[]` immediately, before
+  any Chroma query or LLM call, if the item's `source_type` is
+  `browser_history` (`_NO_RELATIONSHIP_DETECTION_SOURCE`): that source is
+  intentionally excluded from relationship detection entirely, per
+  `CLAUDE.md`'s locked-in decisions — see DECISIONS.md, 2026-08-25.
+  Otherwise, builds a whole-document query vector by averaging every chunk
+  embedding the item already has in Chroma
   (`storage/chroma_store.py::get_item_embeddings()` →
   `_mean_embedding()`), not just the first chunk (see DECISIONS.md,
   2026-08-24, for why: a shared first-chunk boilerplate block would
   otherwise dominate similarity). Queries Chroma for that vector's nearest
-  neighbors, excluding the item's own chunks
-  (`where: {"item_id": {"$ne": source_item_id}}`) and narrowed to the same
+  neighbors, excluding the item's own chunks and any `browser_history` item
+  (`where: {"$and": [{"item_id": {"$ne": source_item_id}}, {"source_type":
+  {"$ne": "browser_history"}}]}` — so browser history is never a candidate
+  either, see DECISIONS.md, 2026-08-25) and narrowed to the same
   `project_name` when the item has one classified. Deduplicates matches
   down to distinct candidate items, then — using the item's first chunk as
   representative text for the LLM prompt itself, unchanged — asks

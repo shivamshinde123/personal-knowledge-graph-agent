@@ -109,28 +109,38 @@ def make_item(**overrides) -> Item:
     return Item(**defaults)
 
 
-def ingest_multi(conn, collection, *, ref: str, texts, project_name=None) -> str:
+def ingest_multi(
+    conn, collection, *, ref: str, texts, project_name=None, source_type="notion"
+) -> str:
     """Insert an item with multiple embedded, SQLite-persisted chunks; return its id."""
     item_id = insert_item(
         conn,
         make_item(
             id=f"raw-{ref}",
+            source_type=source_type,
             source_ref_id=ref,
             title=f"Item {ref}",
             project_name=project_name,
         ),
     )
     chunks = embed_chunks(
-        collection, item_id, "notion", list(texts), project_name=project_name
+        collection, item_id, source_type, list(texts), project_name=project_name
     )
     replace_chunks(conn, item_id, chunks)
     return item_id
 
 
-def ingest(conn, collection, *, ref: str, text: str, project_name=None) -> str:
+def ingest(
+    conn, collection, *, ref: str, text: str, project_name=None, source_type="notion"
+) -> str:
     """Insert an item with one embedded, SQLite-persisted chunk; return its id."""
     return ingest_multi(
-        conn, collection, ref=ref, texts=[text], project_name=project_name
+        conn,
+        collection,
+        ref=ref,
+        texts=[text],
+        project_name=project_name,
+        source_type=source_type,
     )
 
 
@@ -269,6 +279,62 @@ class TestDetectRelationships:
         )
 
         assert detect_relationships(conn, driver, collection, source_id) == []
+
+
+class TestBrowserHistoryExcludedFromRelationships:
+    """Browser history is intentionally excluded from relationship detection.
+
+    Per CLAUDE.md's locked-in decisions: "Browser History is intentionally
+    the lightest-weight source ... no relationship detection." Its only
+    text is a short page title, which gives an LLM confirmation call almost
+    nothing real to reason about.
+    """
+
+    def test_a_browser_history_item_never_initiates_detection(
+        self, conn, driver, collection, monkeypatch
+    ):
+        source_id = ingest(
+            conn,
+            collection,
+            ref="a",
+            text="Sign in to your account",
+            source_type="browser_history",
+        )
+        ingest(conn, collection, ref="b", text="Sign in to your account details")
+        provider = FakeProvider(
+            default=RelationshipJudgment(label="discussed_in", confidence=0.9)
+        )
+        monkeypatch.setattr(
+            "pipeline.relationships.get_provider", lambda task: provider
+        )
+
+        result = detect_relationships(conn, driver, collection, source_id)
+
+        assert result == []
+        assert provider.calls == []
+
+    def test_a_browser_history_item_is_never_a_candidate_for_another_item(
+        self, conn, driver, collection, monkeypatch
+    ):
+        source_id = ingest(conn, collection, ref="a", text="Building the storage layer")
+        ingest(
+            conn,
+            collection,
+            ref="b",
+            text="Building the storage layer",
+            source_type="browser_history",
+        )
+        provider = FakeProvider(
+            default=RelationshipJudgment(label="discussed_in", confidence=0.9)
+        )
+        monkeypatch.setattr(
+            "pipeline.relationships.get_provider", lambda task: provider
+        )
+
+        result = detect_relationships(conn, driver, collection, source_id)
+
+        assert result == []
+        assert provider.calls == []
 
 
 class TestConfidenceThreshold:

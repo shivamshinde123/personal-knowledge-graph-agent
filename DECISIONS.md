@@ -8,6 +8,55 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-25 — Browser history is excluded from relationship detection, enforced in `pipeline/relationships.py`
+
+**Context**: A real end-to-end run of the daily batch (local files +
+browser history) surfaced generic browsing-history titles like "Sign in to
+your account" getting confirmed as `implements`/`discussed_in` relationships
+against real project design docs — a clear false positive, and a good
+illustration of why: a bare page title has almost no content for the
+relationship LLM call to reason about. Re-reading `CLAUDE.md`'s already
+locked-in decisions turned up the actual root cause: "Browser History is
+intentionally the lightest-weight source (title + URL + metadata only, no
+full page fetch, no relationship detection)" — `scheduler/daily_batch.py`
+was calling `detect_relationships()` unconditionally for every processed
+item regardless of source, which directly violates this. This was a real
+correctness bug against an already-decided design, not a prompt-tuning
+problem — the earlier relationship-confidence work (2026-08-24) was
+treating a symptom of this same gap without knowing the gap existed.
+
+**Decision**: Enforce the exclusion inside
+`pipeline/relationships.py::detect_relationships()` itself (a
+`_NO_RELATIONSHIP_DETECTION_SOURCE = "browser_history"` module constant),
+not in `scheduler/daily_batch.py`'s orchestration loop, so the rule lives
+in the one module that owns relationship-detection logic and protects any
+current or future caller automatically:
+1. `detect_relationships()` returns `[]` immediately, before any Chroma
+   query or LLM call, if the source item's `source_type` is
+   `browser_history` — it never *initiates* detection.
+2. The Chroma candidate-narrowing `where` clause also excludes
+   `source_type = browser_history`, so a browser history item is never
+   surfaced as a *candidate* for another item's detection either — the
+   source is excluded from the graph in both directions, matching
+   `Database_Schema.docx` section 5's "not necessarily a graph node" model
+   for items with no relationships.
+
+**Verified against real data**: re-ran the exact real scenario that
+produced the false positive (the same two "Sign in to your account" items,
+same effective SQLite item ids via the upsert-on-`source_ref_id`
+semantics) — zero relationship calls, zero edges written, confirmed both
+through the daily batch's own output and a direct Neo4j query. (Note:
+running the real test suite between the two verification runs also wiped
+the shared local Neo4j instance, per the Neo4j test fixtures' documented
+`MATCH (n) DETACH DELETE n` setup/teardown — expected test behavior, not
+part of this fix, but it means the graph edges from earlier real-data demos
+this session no longer exist in Neo4j, though the underlying SQLite/Chroma
+data is untouched.)
+
+**Affects**: `pipeline/relationships.py`, `tests/test_pipeline/test_relationships.py`
+
+---
+
 ## 2026-08-24 — Browser history reads a copy of the live SQLite file, one row per URL
 
 **Context**: Chrome (and other Chromium-based browsers) hold an exclusive
