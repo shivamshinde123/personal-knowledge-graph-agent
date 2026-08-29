@@ -8,6 +8,49 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-25 — `agent/graph.py::run()` resolves the session, loads history, and persists the turn — around the graph, not inside it
+
+**Context**: With `storage/sqlite_store.py::record_conversation_turn()`
+and `providers/base.py`'s `history` parameter both in place, something
+has to load a session's prior turns before the graph runs and persist the
+new turn after — and decide where that logic lives relative to the
+`StateGraph` itself.
+
+**Decision**: `run()` does this work itself, outside `_build_graph()`'s
+node sequence: resolves `session_id` (existing or fresh) and loads history
+via a new `_load_history()` helper *before* calling `graph.invoke()`
+(added to the initial state so `synthesize_node` can pass it to
+`synthesize()`), then calls `record_conversation_turn()` *after* the graph
+returns, using the final answer/sources. Kept out of the graph's own node
+sequence because session resolution and persistence aren't part of the
+retrieval pipeline the router/merger/synthesizer nodes model — they're
+framing around one call to it, the same way `scheduler/daily_batch.py`'s
+`main()` wraps `_run()` with connection setup/teardown rather than making
+connection lifecycle a pipeline "step."
+
+**Verified against real data — real limitation found**: ran a real two-turn
+conversation against the real ingested docs corpus. Turn 1 ("What storage
+technologies does this system use?") got a correct, real answer listing
+SQLite/Chroma/Neo4j. Turn 2 ("Why was the second one chosen over
+alternatives?") — meant to resolve to Chroma — instead answered about
+*frontend framework choice* (React vs. plain HTML/JS), a completely
+different part of the docs. Root cause, confirmed directly: history *did*
+reach the prompt correctly (the persisted messages show both turns
+recorded correctly), but **retrieval (vector/keyword search) runs on the
+current question's raw text only** — "Why was the second one chosen over
+alternatives?" carries no topical keywords of its own, so it retrieved
+whatever scored best for that literal wording, which happened to be an
+unrelated section that also discusses "two options... second chosen."
+History reaching the LLM prompt was necessary but not sufficient — the
+retrieval step itself needs to be history-aware (e.g. rewriting/expanding
+a vague follow-up question using prior turns before running search) for
+follow-up questions to reliably retrieve the *right* context. This is a
+real, open gap, not yet fixed — noted here rather than glossed over.
+
+**Affects**: `agent/graph.py`
+
+---
+
 ## 2026-08-25 — Conversation history is passed to `generate_answer()` as a separate, non-cited parameter
 
 **Context**: `Technical_Design_Document.docx` section 8.4 says follow-up

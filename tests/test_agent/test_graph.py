@@ -23,7 +23,13 @@ from storage.neo4j_store import (
     get_driver,
     write_relationship,
 )
-from storage.sqlite_store import Item, connect, insert_item, replace_chunks
+from storage.sqlite_store import (
+    Item,
+    connect,
+    get_messages_for_session,
+    insert_item,
+    replace_chunks,
+)
 
 TEST_URI = os.environ.get("NEO4J_TEST_URI", "bolt://localhost:7687")
 TEST_USER = os.environ.get("NEO4J_TEST_USER", "neo4j")
@@ -225,3 +231,105 @@ class TestRun:
         )
 
         assert result.session_id == "sess-123"
+
+
+class TestConversationMemory:
+    def test_a_turn_is_persisted_after_a_successful_run(
+        self, conn, collection, driver, monkeypatch
+    ):
+        ingest(
+            conn,
+            collection,
+            item_id="item-storage",
+            title="Storage design",
+            text="The storage layer uses SQLite, Chroma, and Neo4j.",
+        )
+        monkeypatch.setattr(
+            "agent.synthesizer.get_provider", lambda task: FakeProvider()
+        )
+
+        result = run(
+            conn, collection, driver, "What database technologies does it use?"
+        )
+
+        messages = get_messages_for_session(conn, result.session_id)
+        assert [m.role for m in messages] == ["user", "agent"]
+        assert messages[0].text == "What database technologies does it use?"
+        assert messages[1].text == "Here is the synthesized answer [1]."
+
+    def test_a_second_call_with_the_same_session_id_sees_prior_history(
+        self, conn, collection, driver, monkeypatch
+    ):
+        ingest(
+            conn,
+            collection,
+            item_id="item-storage",
+            title="Storage design",
+            text="The storage layer uses SQLite, Chroma, and Neo4j.",
+        )
+        provider = FakeProvider()
+        monkeypatch.setattr("agent.synthesizer.get_provider", lambda task: provider)
+
+        run(
+            conn,
+            collection,
+            driver,
+            "What database technologies does it use?",
+            "sess-1",
+        )
+        run(conn, collection, driver, "Tell me more about that", "sess-1")
+
+        # Second call's generate_answer should have received the first
+        # turn's question and answer as history.
+        _, _, history = provider.calls[-1]
+        assert len(history) == 2
+        assert history[0].role == "user"
+        assert history[0].text == "What database technologies does it use?"
+        assert history[1].role == "agent"
+
+    def test_a_fresh_session_has_no_history(
+        self, conn, collection, driver, monkeypatch
+    ):
+        ingest(
+            conn,
+            collection,
+            item_id="item-storage",
+            title="Storage design",
+            text="The storage layer uses SQLite, Chroma, and Neo4j.",
+        )
+        provider = FakeProvider()
+        monkeypatch.setattr("agent.synthesizer.get_provider", lambda task: provider)
+
+        run(conn, collection, driver, "What database technologies does it use?")
+
+        _, _, history = provider.calls[0]
+        assert history == ()
+
+    def test_sessions_do_not_share_history(self, conn, collection, driver, monkeypatch):
+        ingest(
+            conn,
+            collection,
+            item_id="item-storage",
+            title="Storage design",
+            text="The storage layer uses SQLite, Chroma, and Neo4j.",
+        )
+        provider = FakeProvider()
+        monkeypatch.setattr("agent.synthesizer.get_provider", lambda task: provider)
+
+        run(
+            conn,
+            collection,
+            driver,
+            "What database technologies does it use?",
+            "sess-a",
+        )
+        run(
+            conn,
+            collection,
+            driver,
+            "What database technologies does it use?",
+            "sess-b",
+        )
+
+        _, _, history_b = provider.calls[-1]
+        assert history_b == ()
