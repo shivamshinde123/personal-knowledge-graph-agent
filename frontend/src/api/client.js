@@ -74,4 +74,17 @@ export function putSettings(payload) {
   });
 }
 
+/** List past conversation sessions, most recently active first. Per section 3.4. */
+export function getSessions() {
+  return request("/sessions");
+}
+
+/**
+ * Full message history for one session, oldest first. Per section 3.5.
+ * @param {string} sessionId
+ */
+export function getSessionHistory(sessionId) {
+  return request(`/sessions/${encodeURIComponent(sessionId)}`);
+}
+
 export { ApiError };

@@ -8,6 +8,36 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-25 — `ChatWindow` decides once, at mount, whether to load session history
+
+**Context**: The sidebar now lists real sessions and lets the user pick
+one to reopen. `ChatWindow` needs to load that session's history when
+opened, but must *not* re-fetch and clobber its own local message state
+mid-conversation as new turns come in (its `sessionId` prop also changes
+after the very first turn in a brand-new chat, once the backend assigns a
+real id).
+
+**Decision**: `App.jsx` forces a full `ChatWindow` remount (a bumped `key`)
+whenever the *user* changes which session is active — "New chat" or
+picking a different sidebar entry — never on the ordinary `sessionId`
+prop update that happens after a turn completes within the same instance.
+`ChatWindow` itself reads its `sessionId` prop only inside a
+mount-only `useEffect` (empty dependency array) to decide whether to call
+`getSessionHistory()`; it holds its *own* `sessionId` state afterward,
+updated locally as turns complete, and never re-fetches based on prop
+changes.
+
+**Verified against real data**: fetched a real, previously-recorded
+two-turn session (from the earlier conversation-memory verification round)
+via the real `GET /api/sessions` and `GET /api/sessions/{id}` endpoints —
+confirmed the exact real messages, roles, timestamps, and sources come
+back in the shape `ChatWindow`/`MessageBubble` expect.
+
+**Affects**: `frontend/src/App.jsx`, `frontend/src/components/ChatWindow.jsx`,
+`frontend/src/components/Sidebar.jsx`, `frontend/src/api/client.js`
+
+---
+
 ## 2026-08-25 — `GET /api/sessions/{id}` returns a plain 404 JSON response, not `HTTPException`
 
 **Context**: An unknown `session_id` needs to be a 404 (per REST convention
