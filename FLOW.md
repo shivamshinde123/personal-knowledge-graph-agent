@@ -8,10 +8,13 @@ change to an entry point or call chain.
 > provider layer, the entire pipeline layer (`filters`, `chunking`,
 > `metadata`, `embeddings`, `relationships`), `scheduler/daily_batch.py`,
 > and three extractors (local files, Notion, browser history) are
-> implemented and merged to `main`. Three extractors (Gmail, GitHub, Google
-> Calendar) and the agent/API/frontend layers are next. The query entry
-> points below are still documented as designed in `docs/` and marked
-> _(not yet implemented)_ until their modules exist.
+> implemented and merged to `main`. The agent layer is starting:
+> `agent/router.py` is implemented (see below); the search nodes, graph
+> traversal, merger, synthesizer, and LangGraph wiring in `agent/graph.py`
+> are next, alongside the remaining three extractors (Gmail, GitHub, Google
+> Calendar) and the API/frontend layers. The `POST /api/query` entry point
+> below is still documented as designed in `docs/` and marked
+> _(not yet implemented)_ until `agent/graph.py` and `api/` exist.
 
 ---
 
@@ -369,6 +372,21 @@ test doubles/temp resources instead.
    `"partial_failure"` and `"failed"` both leave it unchanged, so every
    source is retried on the next run — `"partial_failure"` just means some
    items got through this time too.
+
+---
+
+## Shared: query router (`agent/router.py`)
+
+Not an entry point itself — will be called by `agent/graph.py::run()` once
+it exists (see below). A pure, rule-based heuristic, not an LLM call — see
+DECISIONS.md, 2026-08-25.
+
+- `route(question) -> RouteDecision` — `RouteDecision` has three booleans:
+  `vector_search` (`True` unless the question looks like an exact lookup —
+  a quoted phrase, or a `"from"`/`"by"` sender/author filter),
+  `keyword_search` (always `True`), and `graph_traversal` (`True` only when
+  the question's phrasing implies relationships between items — a fixed
+  list of phrases like "how does X relate to Y", "what led to X").
 
 ---
 
