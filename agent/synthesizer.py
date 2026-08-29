@@ -10,11 +10,12 @@ with the original question, to the LLM for synthesis.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from agent.merger import MergedResult
 from config.settings import get_settings
-from providers.base import ContextChunk, get_provider
+from providers.base import ContextChunk, ConversationTurn, get_provider
 from storage.sqlite_store import get_chunks_for_item, get_item
 
 _NO_RESULTS_ANSWER = "I couldn't find anything relevant to answer that."
@@ -44,6 +45,7 @@ def synthesize(
     merged_results: list[MergedResult],
     *,
     top_k: int | None = None,
+    history: Sequence[ConversationTurn] = (),
 ) -> SynthesizedAnswer:
     """Fetch full text for the top merged results and synthesize a cited answer.
 
@@ -57,6 +59,9 @@ def synthesize(
             ``retrieval.top_k_vector``, reusing the same cap already
             governing individual node result counts rather than
             introducing a new, undocumented knob (see DECISIONS.md).
+        history: Prior turns in this conversation (oldest first), for
+            resolving follow-up references like "the second one" — passed
+            straight through to the provider, not used for retrieval.
 
     Returns:
         The synthesized answer and the ordered list of sources it was
@@ -100,5 +105,5 @@ def synthesize(
     if not context:
         return SynthesizedAnswer(answer=_NO_RESULTS_ANSWER, sources=[])
 
-    answer = get_provider("answer").generate_answer(question, context)
+    answer = get_provider("answer").generate_answer(question, context, history)
     return SynthesizedAnswer(answer=answer, sources=sources)

@@ -12,6 +12,7 @@ import pytest
 
 from providers.base import (
     ContextChunk,
+    ConversationTurn,
     LangChainProvider,
     ProviderError,
     get_provider,
@@ -147,6 +148,30 @@ class TestGenerateAnswer:
         assert "What happened?" in prompt
         assert "[1]" in prompt
         assert "chunk text" in prompt
+
+    def test_no_history_omits_the_conversation_section(self):
+        chat_model = FakeChatModel(["answer"])
+        provider = LangChainProvider(chat_model, provider_name="test")
+
+        provider.generate_answer("q", [])
+
+        assert "Prior conversation" not in chat_model.prompts[0]
+
+    def test_history_is_included_in_the_prompt(self):
+        chat_model = FakeChatModel(["answer"])
+        provider = LangChainProvider(chat_model, provider_name="test")
+        history = [
+            ConversationTurn(role="user", text="What did I work on?"),
+            ConversationTurn(role="agent", text="You worked on X and Y [1]."),
+        ]
+
+        provider.generate_answer("Tell me more about the second one", [], history)
+
+        prompt = chat_model.prompts[0]
+        assert "Prior conversation" in prompt
+        assert "What did I work on?" in prompt
+        assert "You worked on X and Y [1]." in prompt
+        assert "Tell me more about the second one" in prompt
 
 
 class TestRetryBehavior:

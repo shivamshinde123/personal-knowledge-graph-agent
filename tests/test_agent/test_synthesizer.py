@@ -12,6 +12,7 @@ import pytest
 
 from agent.merger import MergedResult
 from agent.synthesizer import synthesize
+from providers.base import ConversationTurn
 from storage.sqlite_store import Chunk, Item, connect, insert_chunk, insert_item
 
 
@@ -38,10 +39,10 @@ class FakeProvider:
     def __init__(self, answer="Here is the answer [1]."):
         """Return ``answer`` for every call."""
         self._answer = answer
-        self.calls: list[tuple[str, list]] = []
+        self.calls: list[tuple[str, list, tuple]] = []
 
-    def generate_answer(self, question, context):
-        self.calls.append((question, list(context)))
+    def generate_answer(self, question, context, history=()):
+        self.calls.append((question, list(context), tuple(history)))
         return self._answer
 
 
@@ -85,7 +86,7 @@ class TestSynthesize:
         )
 
         assert result.answer == "Here is the answer [1]."
-        question, context = provider.calls[0]
+        question, context, _ = provider.calls[0]
         assert question == "What does the storage layer use?"
         assert context[0].text == "The storage layer uses SQLite."
         assert context[0].source_type == "notion"
@@ -116,7 +117,7 @@ class TestSynthesize:
 
         synthesize(conn, "question", [MergedResult("item-1", 1.0)])
 
-        _, context = provider.calls[0]
+        _, context, _hist = provider.calls[0]
         assert len(context) == 1
         assert "first chunk" in context[0].text
         assert "second chunk" in context[0].text
@@ -139,7 +140,7 @@ class TestSynthesize:
             ],
         )
 
-        _, context = provider.calls[0]
+        _, context, _hist = provider.calls[0]
         assert len(context) == 2
 
     def test_a_deleted_item_is_skipped_not_fatal(self, conn, monkeypatch):
@@ -176,3 +177,32 @@ class TestSynthesize:
         assert result.sources == []
         assert provider.calls == []
         assert result.answer
+
+    def test_history_is_passed_through_to_the_provider(self, conn, monkeypatch):
+        ingest(conn, item_id="item-1", texts=["The storage layer uses SQLite."])
+        provider = FakeProvider()
+        monkeypatch.setattr("agent.synthesizer.get_provider", lambda task: provider)
+        history = [
+            ConversationTurn(role="user", text="What did I work on?"),
+            ConversationTurn(role="agent", text="You worked on X."),
+        ]
+
+        synthesize(
+            conn,
+            "Tell me more",
+            [MergedResult("item-1", 1.0)],
+            history=history,
+        )
+
+        _, _, passed_history = provider.calls[0]
+        assert passed_history == tuple(history)
+
+    def test_default_history_is_empty(self, conn, monkeypatch):
+        ingest(conn, item_id="item-1", texts=["The storage layer uses SQLite."])
+        provider = FakeProvider()
+        monkeypatch.setattr("agent.synthesizer.get_provider", lambda task: provider)
+
+        synthesize(conn, "question", [MergedResult("item-1", 1.0)])
+
+        _, _, passed_history = provider.calls[0]
+        assert passed_history == ()

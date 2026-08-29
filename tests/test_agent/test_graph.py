@@ -91,10 +91,10 @@ class FakeProvider:
     def __init__(self, answer="Here is the synthesized answer [1]."):
         """Return ``answer`` for every generate_answer() call."""
         self._answer = answer
-        self.calls: list[tuple[str, list]] = []
+        self.calls: list[tuple[str, list, tuple]] = []
 
-    def generate_answer(self, question, context):
-        self.calls.append((question, list(context)))
+    def generate_answer(self, question, context, history=()):
+        self.calls.append((question, list(context), tuple(history)))
         return self._answer
 
 
