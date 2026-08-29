@@ -14,8 +14,9 @@ change to an entry point or call chain.
 > `agent/graph.py` are all implemented (see below). `agent/graph.py::run()`
 > does not yet implement multi-turn conversation memory — see DECISIONS.md,
 > 2026-08-25. The API layer is starting: `api/main.py` and
-> `GET /api/health` are implemented (see below). Remaining: the query,
-> sources, and settings endpoints, session persistence (part of the
+> `GET /api/health` and `POST /api/query` are implemented (see below), with
+> the four error-response handlers registered for every route. Remaining:
+> the sources and settings endpoints, session persistence (part of the
 > conversation-memory phase), the three extractors (Gmail, GitHub, Google
 > Calendar), and the React frontend.
 
@@ -525,6 +526,14 @@ means adding a route module under `api/routes/`, registering it in
 `create_app()`, and defining its request/response shape in
 `api/schemas.py`.
 
+`create_app()` also registers four exception handlers
+(`_register_exception_handlers()`), applying to every route: validation
+errors → 422, `ProviderError` → 502, `VectorStoreError`/`GraphStoreError`/
+`StorageError` → 500, anything else → 500 — all shaped as
+`{"error": str, "detail": str}` per `docs/API_Specification.docx` section 2.
+Route handlers don't need their own try/except for these — see
+DECISIONS.md, 2026-08-25.
+
 ---
 
 ## Entry point: `GET /api/health` (`api/routes/health.py`)
@@ -539,9 +548,15 @@ means adding a route module under `api/routes/`, registering it in
 
 ---
 
-## Entry point: `POST /api/query` (`api/routes/query.py`) — _(not yet implemented)_
+## Entry point: `POST /api/query` (`api/routes/query.py`)
 
-1. Request validated against `api/schemas.py`
+1. Request body validated against `api/schemas.py::QueryRequest`
+   (`question`, optional `session_id`) — a missing `question` is a 422 via
+   the shared validation-error handler above
 2. `agent/graph.py::run()` invoked, reading `conn`/`collection`/`driver`
-   from `request.app.state` (see above for `run()`'s own internal steps)
-3. Response serialized per `docs/API_Specification.docx` and returned
+   from `request.app.state` (see above for `run()`'s own internal steps),
+   timed with `time.monotonic()` for the response's `latency_ms`
+3. `QueryResult` reshaped into `api/schemas.py::QueryResponse` and returned
+   — a `ProviderError`/`VectorStoreError`/`GraphStoreError`/`StorageError`/
+   any other exception `run()` raises is caught by `api/main.py`'s shared
+   handlers above, not by this route itself

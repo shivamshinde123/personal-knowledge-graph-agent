@@ -19,3 +19,36 @@ class HealthResponse(BaseModel):
 
     status: Literal["ok", "degraded"]
     services: dict[str, ServiceStatus]
+
+
+class QueryRequest(BaseModel):
+    """``POST /api/query`` request body."""
+
+    question: str
+    session_id: str | None = None
+
+
+class SourceResponse(BaseModel):
+    """One cited source, within a ``QueryResponse``."""
+
+    item_id: str
+    source_type: str
+    title: str | None = None
+    url: str | None = None
+
+
+class QueryResponse(BaseModel):
+    """``POST /api/query`` response body."""
+
+    session_id: str
+    answer: str
+    sources: list[SourceResponse]
+    retrieval_methods_used: list[str]
+    latency_ms: int
+
+
+class ErrorResponse(BaseModel):
+    """Body shape for every error response, per API_Specification.docx section 2."""
+
+    error: str
+    detail: str

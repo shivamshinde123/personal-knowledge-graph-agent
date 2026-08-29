@@ -8,6 +8,42 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-25 — Errors are mapped to `{error, detail}` via handlers registered once in `api/main.py`
+
+**Context**: `API_Specification.docx` section 2 requires every error
+response to be `{"error": string, "detail": string}` with a standard HTTP
+status code, but doesn't specify HTTP status codes for specific failure
+types, or where the mapping logic should live.
+
+**Decision**: Four exception handlers registered once in
+`api/main.py::_register_exception_handlers()`, applying to every route
+(not just `/api/query`): `RequestValidationError` → 422, `ProviderError`
+(an LLM call failed after retries) → 502 (the failure is in an upstream
+dependency, not this service), `VectorStoreError`/`GraphStoreError`/
+`StorageError` (Chroma/Neo4j/SQLite) → 500, and any other exception → 500
+with a generic `"internal_error"`. Route handlers stay free of
+try/except noise — they just call `agent/graph.py::run()` and let
+failures propagate.
+
+The four storage/provider exception *types* are imported into `api/main.py`
+purely so the handlers can pattern-match on them for HTTP status mapping —
+not to call anything in `storage`/`providers`. This is presentation-layer
+plumbing done once, centrally, not business logic reaching into those
+layers from a route module (`api/__init__.py`'s stated layering rule is
+about the latter).
+
+**Verified against real data**: a real query against the real production
+stores actually hit `ProviderError` — the configured OpenRouter account is
+out of credits for `claude-sonnet-4` — and the handler correctly returned
+`502 {"error": "provider_error", ...}` rather than a raw traceback. Worth
+noting for whenever real `/api/query` usage is exercised again: OpenRouter
+credits need topping up, or `cloud_model` switched to a cheaper model, for
+the default `mixed` provider mode to actually answer queries right now.
+
+**Affects**: `api/main.py`
+
+---
+
 ## 2026-08-25 — FastAPI resources live on `app.state`, tests inject a no-op lifespan
 
 **Context**: `api/main.py` needs to hold a long-lived SQLite connection,
