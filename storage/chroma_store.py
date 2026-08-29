@@ -221,6 +221,52 @@ def get_item_embeddings(collection: Collection, item_id: str) -> list[list[float
     return [list(vector) for vector in result["embeddings"]]
 
 
+@dataclass(slots=True)
+class ItemChunkVector:
+    """One chunk's text and embedding, for per-chunk similarity comparisons."""
+
+    document: str
+    embedding: list[float]
+
+
+def get_item_chunk_vectors(
+    collection: Collection, item_id: str
+) -> list[ItemChunkVector]:
+    """Fetch every stored chunk's text *and* embedding for an item.
+
+    Unlike :func:`get_item_embeddings` (vectors only, for building a
+    whole-document embedding by averaging), this keeps each chunk's text
+    paired with its own vector — needed to pick out *which* chunk's text to
+    use once a per-chunk similarity comparison identifies the closest one.
+    See ``pipeline/relationships.py`` and ``DECISIONS.md``.
+
+    Args:
+        collection: An open collection from :func:`get_collection`.
+        item_id: The item whose chunks to fetch.
+
+    Returns:
+        The item's chunks, in no particular order. Empty if the item has no
+        chunks in the collection.
+
+    Raises:
+        VectorStoreError: If the fetch fails.
+    """
+    try:
+        result = collection.get(
+            where={"item_id": item_id}, include=["documents", "embeddings"]
+        )
+    except Exception as exc:
+        raise VectorStoreError(
+            f"Could not fetch chunk vectors for item {item_id!r}: {exc}"
+        ) from exc
+    return [
+        ItemChunkVector(document=document, embedding=list(embedding))
+        for document, embedding in zip(
+            result["documents"], result["embeddings"], strict=True
+        )
+    ]
+
+
 def query(
     collection: Collection,
     query_embedding: list[float],

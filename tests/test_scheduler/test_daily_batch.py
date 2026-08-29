@@ -140,6 +140,7 @@ def fake_providers(monkeypatch):
                 retrieval=SimpleNamespace(
                     relationship_candidate_count=5,
                     relationship_confidence_threshold=0.6,
+                    relationship_candidate_max_distance=None,
                 )
             )
         ),

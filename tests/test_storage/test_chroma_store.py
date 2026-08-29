@@ -9,6 +9,7 @@ from storage.chroma_store import (
     VectorStoreError,
     delete_by_item,
     get_collection,
+    get_item_chunk_vectors,
     get_item_embeddings,
     query,
     upsert_chunks,
@@ -146,6 +147,39 @@ class TestGetItemEmbeddings:
 
     def test_returns_empty_list_for_an_item_with_no_chunks(self, collection):
         assert get_item_embeddings(collection, "does-not-exist") == []
+
+
+class TestGetItemChunkVectors:
+    def test_returns_each_chunks_text_paired_with_its_embedding(self, collection):
+        upsert_chunks(
+            collection,
+            [
+                make_chunk(
+                    id="a",
+                    item_id="item-1",
+                    document="First chunk text.",
+                    embedding=[1.0, 0.0, 0.0],
+                ),
+                make_chunk(
+                    id="b",
+                    item_id="item-1",
+                    document="Second chunk text.",
+                    embedding=[0.0, 1.0, 0.0],
+                ),
+                make_chunk(id="c", item_id="item-2", document="Other item."),
+            ],
+        )
+
+        vectors = get_item_chunk_vectors(collection, "item-1")
+
+        by_text = {v.document: v.embedding for v in vectors}
+        assert by_text == {
+            "First chunk text.": [1.0, 0.0, 0.0],
+            "Second chunk text.": [0.0, 1.0, 0.0],
+        }
+
+    def test_returns_empty_list_for_an_item_with_no_chunks(self, collection):
+        assert get_item_chunk_vectors(collection, "does-not-exist") == []
 
 
 class TestDeleteByItem:

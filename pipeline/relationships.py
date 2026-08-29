@@ -10,6 +10,14 @@ first chunk — the first chunk alone is often boilerplate (a title block, a
 "prepared for" line) shared near-verbatim across unrelated items, which
 would otherwise dominate the similarity signal. See ``DECISIONS.md``.
 
+The text shown to the LLM for confirmation is chosen the same way, per
+pair: the candidate side already gets its actual matching chunk for free
+(Chroma's own search result *is* the chunk that caused the match), but the
+source side picks whichever of its own chunks is closest, by cosine
+similarity, to the candidate's whole-document embedding — not always a
+fixed chunk regardless of which candidate is being judged. See
+``DECISIONS.md``, 2026-08-29.
+
 Full item details (title, url) for the graph nodes this writes aren't
 available from Chroma's metadata alone, so — unlike
 ``docs/Component_Map.docx``'s dependency list for ``RelationshipDetector``,
@@ -29,7 +37,12 @@ from chromadb.api.models.Collection import Collection
 
 from config.settings import get_settings
 from providers.base import ProviderError, RelationshipJudgment, get_provider
-from storage.chroma_store import get_item_embeddings, query
+from storage.chroma_store import (
+    ItemChunkVector,
+    get_item_chunk_vectors,
+    get_item_embeddings,
+    query,
+)
 from storage.neo4j_store import (
     GraphStoreError,
     ItemNode,
@@ -62,10 +75,15 @@ def detect_relationships(
     ``browser_history`` — see the module-level constant and DECISIONS.md,
     2026-08-25). Otherwise, queries Chroma for the item's nearest-neighbor
     chunks (narrowed to the same ``project_name`` when the item has one
-    classified), deduplicates
-    matches down to distinct candidate items, and asks the LLM to confirm or
-    reject each one. A judgment confirmed with confidence below
-    ``config.yaml``'s ``retrieval.relationship_confidence_threshold`` is
+    classified), deduplicates matches down to distinct candidate items, and
+    asks the LLM to confirm or reject each one. A candidate farther than
+    ``config.yaml``'s ``retrieval.relationship_candidate_max_distance``
+    (cosine distance; ``null`` disables this) never reaches the LLM at all —
+    narrowing always returns its top-K nearest neighbors regardless of how
+    weak the match actually is, so without this filter, a document with no
+    genuine matches anywhere in the corpus still gets K arbitrary candidates
+    judged (see DECISIONS.md, 2026-08-29). A judgment confirmed with
+    confidence below ``retrieval.relationship_confidence_threshold`` is
     discarded like an unconfirmed one — vector-narrowed candidates are only
     ever topically adjacent, not necessarily related, so a low-confidence
     "yes" from the LLM is treated as noise rather than written to the graph
@@ -102,11 +120,9 @@ def detect_relationships(
     chunks = get_chunks_for_item(conn, source_item_id)
     if not chunks:
         return []
-    source_text = chunks[0].text
 
-    document_embedding = _mean_embedding(
-        get_item_embeddings(collection, source_item_id)
-    )
+    source_chunk_vectors = get_item_chunk_vectors(collection, source_item_id)
+    document_embedding = _mean_embedding([cv.embedding for cv in source_chunk_vectors])
     if document_embedding is None:
         return []
 
@@ -123,9 +139,9 @@ def detect_relationships(
 
     provider = get_provider("relationship")
     source_node = _to_item_node(source)
-    confidence_threshold = (
-        get_settings().config.retrieval.relationship_confidence_threshold
-    )
+    retrieval_config = get_settings().config.retrieval
+    confidence_threshold = retrieval_config.relationship_confidence_threshold
+    max_distance = retrieval_config.relationship_candidate_max_distance
 
     confirmed: list[tuple[str, RelationshipJudgment]] = []
     seen_item_ids: set[str] = set()
@@ -133,6 +149,13 @@ def detect_relationships(
         if candidate.item_id in seen_item_ids:
             continue
         seen_item_ids.add(candidate.item_id)
+
+        if max_distance is not None and candidate.distance > max_distance:
+            # Narrowing always returns its top-K nearest neighbors, even
+            # when none of them are genuinely close — this is the "least
+            # unrelated item available" case, filtered out before it ever
+            # costs an LLM call (see DECISIONS.md).
+            continue
 
         candidate_item = get_item(conn, candidate.item_id)
         if candidate_item is None:
@@ -146,6 +169,12 @@ def detect_relationships(
                 # what's really the same discovered relationship (see
                 # DECISIONS.md).
                 continue
+            candidate_embedding = _mean_embedding(
+                get_item_embeddings(collection, candidate.item_id)
+            )
+            source_text = _most_similar_chunk_text(
+                source_chunk_vectors, candidate_embedding
+            )
             judgment = provider.generate_relationship(source_text, candidate.document)
             if judgment is None:
                 continue
@@ -199,12 +228,52 @@ def _to_item_node(item: Item) -> ItemNode:
     )
 
 
+def _most_similar_chunk_text(
+    chunk_vectors: list[ItemChunkVector], target_embedding: list[float] | None
+) -> str:
+    """Pick whichever chunk's text is closest, by cosine similarity, to a target.
+
+    Used to choose which of the *source* item's own chunks to show the LLM
+    for one specific candidate — the chunk most relevant to that candidate
+    in particular, not a fixed chunk reused regardless of which candidate is
+    being judged (the candidate side doesn't need this: Chroma's own search
+    result already *is* the candidate's most relevant chunk). See
+    ``DECISIONS.md``, 2026-08-29.
+
+    Args:
+        chunk_vectors: The source item's chunks, text paired with embedding.
+            Never empty when called — the caller already confirmed at least
+            one chunk exists before reaching this point.
+        target_embedding: The candidate's whole-document embedding, or
+            ``None`` if it has no chunks in Chroma (an inconsistent but
+            possible state) — falls back to the first chunk's text.
+
+    Returns:
+        The text of the closest (or, on a ``None`` target, first) chunk.
+    """
+    if target_embedding is None:
+        return chunk_vectors[0].document
+    best = max(
+        chunk_vectors,
+        key=lambda cv: _cosine_similarity(cv.embedding, target_embedding),
+    )
+    return best.document
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Cosine similarity between two vectors, 0.0 if either is a zero vector."""
+    a_arr, b_arr = np.array(a), np.array(b)
+    denominator = np.linalg.norm(a_arr) * np.linalg.norm(b_arr)
+    if denominator == 0:
+        return 0.0
+    return float(np.dot(a_arr, b_arr) / denominator)
+
+
 def _mean_embedding(vectors: list[list[float]]) -> list[float] | None:
     """Average a set of chunk embeddings into one whole-document vector.
 
     Args:
-        vectors: An item's chunk embeddings, as returned by
-            :func:`storage.chroma_store.get_item_embeddings`.
+        vectors: An item's chunk embeddings.
 
     Returns:
         The mean vector, or ``None`` if ``vectors`` is empty (the item has

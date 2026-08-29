@@ -34,6 +34,7 @@ retrieval:
   top_k_keyword: 8
   relationship_candidate_count: 10
   relationship_confidence_threshold: 0.6 # confirmed relationships below this confidence are discarded
+  relationship_candidate_max_distance: 0.6 # candidates farther than this (cosine distance) never reach the LLM; null disables the filter
 
 embedding:
   model: sentence-transformers/all-MiniLM-L6-v2
