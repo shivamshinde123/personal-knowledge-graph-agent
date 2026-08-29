@@ -1,13 +1,24 @@
-"""Tests for GET /api/sources/status."""
+"""Tests for GET /api/sources/status and /api/sources/connections."""
 
 from datetime import UTC, datetime
 
+import pytest
+
+from agent.connection_check import ConnectionStatus
 from storage.sqlite_store import (
     Item,
     complete_ingestion_run,
     insert_item,
     start_ingestion_run,
 )
+
+
+@pytest.fixture(autouse=True)
+def reset_connection_cache(monkeypatch):
+    import agent.connection_check as connection_check_module
+
+    monkeypatch.setattr(connection_check_module, "_cache", None)
+    monkeypatch.setattr(connection_check_module, "_cache_time", None)
 
 
 class TestGetSourcesStatus:
@@ -42,3 +53,69 @@ class TestGetSourcesStatus:
         notion = next(s for s in body["sources"] if s["source_type"] == "notion")
         assert notion["items_processed"] == 1
         assert notion["status"] == "ok"
+
+
+class TestGetConnections:
+    def test_reports_gmail_github_calendar_as_not_configured(self, monkeypatch, client):
+        from types import SimpleNamespace
+
+        monkeypatch.setattr(
+            "agent.connection_check.get_settings",
+            lambda: SimpleNamespace(
+                env=SimpleNamespace(
+                    watch_dirs=[],
+                    notion_api_key=None,
+                    browser_history_path=None,
+                )
+            ),
+        )
+
+        response = client.get("/api/sources/connections")
+
+        assert response.status_code == 200
+        by_type = {c["source_type"]: c for c in response.json()["connections"]}
+        for source in ("gmail", "github", "calendar", "notion", "local_file"):
+            assert by_type[source]["status"] == "not_configured"
+
+    def test_reuses_the_cache_on_a_second_call(self, monkeypatch, client):
+        calls = []
+        monkeypatch.setattr(
+            "agent.connection_check.check_all_connections",
+            lambda: calls.append(1)
+            or [
+                ConnectionStatus(
+                    source_type="local_file",
+                    status="ok",
+                    detail=None,
+                    checked_at=datetime.now(UTC),
+                )
+            ],
+        )
+
+        client.get("/api/sources/connections")
+        client.get("/api/sources/connections")
+
+        assert len(calls) == 1
+
+
+class TestVerifyConnections:
+    def test_forces_a_fresh_check_even_with_a_warm_cache(self, monkeypatch, client):
+        calls = []
+        monkeypatch.setattr(
+            "agent.connection_check.check_all_connections",
+            lambda: calls.append(1)
+            or [
+                ConnectionStatus(
+                    source_type="local_file",
+                    status="ok",
+                    detail=None,
+                    checked_at=datetime.now(UTC),
+                )
+            ],
+        )
+
+        client.get("/api/sources/connections")
+        response = client.post("/api/sources/connections/verify")
+
+        assert response.status_code == 200
+        assert len(calls) == 2

@@ -1,5 +1,17 @@
 import { useEffect, useState } from "react";
-import { getSettings, getSourcesStatus, putSettings } from "../api/client.js";
+import {
+  getSettings,
+  getSourceConnections,
+  getSourcesStatus,
+  putSettings,
+  verifySourceConnections,
+} from "../api/client.js";
+
+const CONNECTION_LABELS = {
+  ok: "Connected",
+  error: "Error",
+  not_configured: "Not configured",
+};
 
 const PROVIDER_MODES = [
   {
@@ -29,18 +41,32 @@ const PROVIDER_MODES = [
 function SettingsPanel() {
   const [settings, setSettings] = useState(null);
   const [sources, setSources] = useState(null);
+  const [connections, setConnections] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null);
+  const [isVerifying, setIsVerifying] = useState(false);
 
   useEffect(() => {
-    Promise.all([getSettings(), getSourcesStatus()])
-      .then(([settingsResult, sourcesResult]) => {
+    Promise.all([getSettings(), getSourcesStatus(), getSourceConnections()])
+      .then(([settingsResult, sourcesResult, connectionsResult]) => {
         setSettings(settingsResult);
         setSources(sourcesResult);
+        setConnections(connectionsResult);
       })
       .catch((error) => setLoadError(error.message));
   }, []);
+
+  async function handleReverify() {
+    setIsVerifying(true);
+    try {
+      setConnections(await verifySourceConnections());
+    } catch (error) {
+      setLoadError(error.message);
+    } finally {
+      setIsVerifying(false);
+    }
+  }
 
   async function handleSave() {
     setIsSaving(true);
@@ -68,7 +94,7 @@ function SettingsPanel() {
     );
   }
 
-  if (!settings || !sources) {
+  if (!settings || !sources || !connections) {
     return (
       <div className="settings-panel">
         <h1>Settings</h1>
@@ -125,17 +151,48 @@ function SettingsPanel() {
       </section>
 
       <section className="settings-section">
-        <h2>Connected Data Sources</h2>
+        <div className="settings-section-header">
+          <h2>Connected Data Sources</h2>
+          <button
+            type="button"
+            className="reverify-button"
+            onClick={handleReverify}
+            disabled={isVerifying}
+          >
+            {isVerifying ? "Checking…" : "Reverify"}
+          </button>
+        </div>
+        {connections.connections.length > 0 && (
+          <p className="connections-checked-at">
+            Last checked:{" "}
+            {new Date(connections.connections[0].checked_at).toLocaleString()}
+          </p>
+        )}
         <div className="sources-grid">
-          {sources.sources.map((source) => (
-            <div className="source-status-card" key={source.source_type}>
-              <span>{source.source_type.replace("_", " ")}</span>
-              <span>
-                <span className={`status-dot ${source.status}`} />
-                {source.status === "ok" ? "OK" : "Error"}
-              </span>
-            </div>
-          ))}
+          {connections.connections.map((connection) => {
+            const itemsProcessed = sources.sources.find(
+              (source) => source.source_type === connection.source_type,
+            )?.items_processed;
+            return (
+              <div
+                className="source-status-card"
+                key={connection.source_type}
+                title={connection.detail ?? undefined}
+              >
+                <span>{connection.source_type.replace("_", " ")}</span>
+                <span className="source-status-value">
+                  <span className={`status-dot ${connection.status}`} />
+                  {CONNECTION_LABELS[connection.status] ?? connection.status}
+                  {connection.status === "ok" &&
+                    itemsProcessed !== undefined && (
+                      <span className="source-item-count">
+                        ({itemsProcessed} ingested)
+                      </span>
+                    )}
+                </span>
+              </div>
+            );
+          })}
         </div>
       </section>
 

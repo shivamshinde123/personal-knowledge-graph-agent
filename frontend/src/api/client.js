@@ -58,6 +58,20 @@ export function getSourcesStatus() {
   return request("/sources/status");
 }
 
+/**
+ * Each source's live connection status — cached server-side; a fresh
+ * check only runs if the cache is stale. Extension beyond
+ * API_Specification.docx section 3.3 — see DECISIONS.md.
+ */
+export function getSourceConnections() {
+  return request("/sources/connections");
+}
+
+/** Force a fresh connection check for every source, bypassing the cache. */
+export function verifySourceConnections() {
+  return request("/sources/connections/verify", { method: "POST" });
+}
+
 /** Current LLM provider configuration. Per section 3.6. */
 export function getSettings() {
   return request("/settings");

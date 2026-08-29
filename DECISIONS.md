@@ -8,6 +8,22 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-29 — Live, cached connection checks for the Settings screen
+
+**Context**: The Settings screen's "Connected Data Sources" section (`agent/sources_status.py`) reports the *last daily batch run's* outcome per source — before this fix, that meant every source, including the three with no extractor built yet (Gmail, GitHub, Calendar), showed a green "OK" the moment nothing had ever run or failed, which reads as "verified working" when it actually means "nothing has been checked." Flagged directly from using the running frontend against real data.
+
+**Decision**: Added `agent/connection_check.py` — a separate concern from `sources_status.py`, actually checking each source's connectivity/configuration right now: a real, cheap Notion API call (`users.me()`) if `NOTION_API_KEY` is set; a filesystem check for local files' watch directories and the browser history file; and, honestly, a fixed `"not_configured"` for Gmail/GitHub/Calendar with a "not yet built" detail message, never defaulting to `"ok"`. Results are cached in-process (module-level, 5-minute default TTL) since the Notion check is a real network call too expensive to repeat on every Settings-page load. Two new endpoints (extension beyond `docs/API_Specification.docx`, same pattern as `POST /api/ingest/trigger`): `GET /api/sources/connections` (cache-or-fresh) and `POST /api/sources/connections/verify` (always forces a fresh check — the Settings screen's "Reverify" button).
+
+**A bug caught by my own test, before it shipped**: the initial cache implementation derived the cache's age from `_cache[0].checked_at` — an `IndexError` waiting to happen if `check_all_connections()` ever returned an empty list. Fixed by tracking `_cache_time` as its own module-level variable, independent of the cached list's contents.
+
+**Alternatives considered**: Folding connection status into the existing `GET /api/sources/status` response — rejected: that endpoint's meaning ("last batch run's outcome") and this one's ("is it connected right now") are genuinely different questions that happen to share a "per source" shape; conflating them would make the batch-history data harder to reason about. Live-checking on every single `GET` with no cache at all — rejected given the real Notion API call's cost/latency; the cache plus an explicit "Reverify" button gives the same up-to-date-on-demand behavior without paying for a real API call on every page navigation.
+
+**Verified against real data**: the real running frontend, against the real backend and real `config/.env` credentials. `GET /api/sources/connections` returned genuinely live results — `notion: "ok", "Notion API token verified."` (a real API call succeeded), `local_file`/`browser_history: "ok"` (real filesystem checks passed), and `gmail`/`github`/`calendar: "not_configured"` (correctly distinct from "ok" now). Confirmed caching: a second `GET` returned the identical `checked_at` timestamp; `POST /api/sources/connections/verify` returned a new, later timestamp, confirming it bypasses the cache as intended.
+
+**Affects**: `agent/connection_check.py`, `api/routes/sources.py`, `api/schemas.py`, `frontend/src/api/client.js`, `frontend/src/components/SettingsPanel.jsx`, `frontend/src/index.css`
+
+---
+
 ## 2026-08-29 — `openrouter_provider.py` caps `max_tokens` explicitly
 
 **Context**: `providers/openrouter_provider.py::create_openrouter_provider()`'s `ChatOpenAI` construction set no `max_tokens`, defaulting to the routed model's own maximum (64000 for `anthropic/claude-sonnet-4`) — first hit as a real diagnostic-script failure during the boilerplate-fix work (see this file's "Relationship prompt neutralizes shared boilerplate" entry), then again for real while verifying the new LangSmith eval layer end to end: a real answer-synthesis call failed with an OpenRouter 402 because the account's remaining credit balance couldn't cover a 64000-token request. Tracked as GitHub issue #44.

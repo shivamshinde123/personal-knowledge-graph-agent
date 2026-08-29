@@ -728,6 +728,34 @@ DECISIONS.md, 2026-08-25.
 
 ---
 
+## Entry point: `GET`/`POST /api/sources/connections` (`api/routes/sources.py`)
+
+Extension beyond `docs/API_Specification.docx` (same pattern as
+`POST /api/ingest/trigger`) — live per-source connectivity/configuration,
+distinct from `GET /api/sources/status`'s "last batch run outcome" above.
+See DECISIONS.md, 2026-08-29.
+
+1. `GET /sources/connections` → `agent/connection_check.py::
+   get_connection_status()` — returns the in-process cache if younger than
+   5 minutes, else runs `check_all_connections()` fresh and caches the
+   result (`_cache`/`_cache_time`, both module-level)
+2. `POST /sources/connections/verify` → same, with `force_refresh=True` —
+   always runs fresh regardless of cache age; what the Settings screen's
+   "Reverify" button calls
+3. `check_all_connections()` checks all six sources, always in the same
+   order: `local_file`/`browser_history` — a real filesystem check
+   (configured path/dir exists and is reachable); `notion` — a real,
+   cheap Notion API call (`Client(auth=...).users.me()`) if
+   `NOTION_API_KEY` is set; `gmail`/`github`/`calendar` — always
+   `"not_configured"` with a "not yet built" detail, since no extractor
+   exists for these yet (see GitHub issues #38-#40) — never silently
+   reported as `"ok"`
+4. Returns `{"connections": [{"source_type", "status", "detail",
+   "checked_at"}, ...]}`, `status` one of `"ok"` / `"error"` /
+   `"not_configured"`
+
+---
+
 ## Entry point: `GET /api/settings` (`api/routes/settings.py`)
 
 1. `config/settings.py::get_settings().config.llm` read directly — no
@@ -823,10 +851,16 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    placeholder in with the real answer and `SourceChip.jsx`-rendered
    sources (or an error state) once it resolves, and reports the (possibly
    new) `session_id` up to `App.jsx` via `onTurnCompleted`
-4. `SettingsPanel.jsx` — on mount, calls `api/client.js::getSettings()` and
-   `getSourcesStatus()` in parallel; "Save Changes" calls `putSettings()`
-   with the current `provider_mode`/`cloud_model` and updates local state
-   from the response
+4. `SettingsPanel.jsx` — on mount, calls `api/client.js::getSettings()`,
+   `getSourcesStatus()`, and `getSourceConnections()` in parallel; "Save
+   Changes" calls `putSettings()` with the current
+   `provider_mode`/`cloud_model` and updates local state from the
+   response. Each connected-source card shows the live connection status
+   (`getSourceConnections()`'s cache-or-fresh result) rather than the
+   batch-run status alone; "Reverify" calls
+   `verifySourceConnections()` (force-refreshes, bypassing the cache) and
+   replaces the connections state with the fresh result — see
+   DECISIONS.md, 2026-08-29
 5. `api/client.js` is the only module making network calls (per
    `docs/Coding_Conventions.docx` section 3) — every function maps
    directly to one `docs/API_Specification.docx` endpoint, talking to
