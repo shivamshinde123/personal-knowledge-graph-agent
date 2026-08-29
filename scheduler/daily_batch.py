@@ -5,6 +5,13 @@ Run via ``uv run python scheduler/daily_batch.py``, registered with cron
 ``ingestion.schedule``. Per ``docs/File_Folder_Structure.docx`` section 4,
 adding a new source means adding one entry to ``_EXTRACTORS`` below — no
 other module needs to change.
+
+An item that was already ingested and gets re-extracted (edited since its
+last ingestion) has its existing relationships cleared before relationship
+detection re-runs for it — otherwise ``has_any_relationship()`` would skip
+re-judging any candidate it was already related to, silently freezing a
+relationship confirmed against content that no longer exists. See
+``DECISIONS.md``.
 """
 
 from __future__ import annotations
@@ -12,6 +19,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from uuid import uuid4
 
@@ -28,7 +36,7 @@ from pipeline.metadata import generate_metadata
 from pipeline.relationships import detect_relationships
 from providers.base import ItemMetadata
 from storage.chroma_store import get_collection
-from storage.neo4j_store import get_driver
+from storage.neo4j_store import delete_relationships_for_item, get_driver
 from storage.sqlite_store import (
     Item,
     complete_ingestion_run,
@@ -47,6 +55,14 @@ _EXTRACTORS: list[tuple[str, Callable[[datetime | None], list[ExtractedItem]]]] 
     ("notion", notion.extract_new_items),
     ("browser_history", browser_history.extract_new_items),
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class _ProcessedItem:
+    """The result of storing one item, including whether it already existed."""
+
+    item_id: str
+    was_update: bool
 
 
 def main() -> None:
@@ -73,7 +89,8 @@ def _run(
     run_id = start_ingestion_run(conn)
     errors: list[str] = []
     items_processed = 0
-    new_item_ids: list[str] = []
+    processed_item_ids: list[str] = []
+    updated_item_ids: list[str] = []
 
     for source_name, extract in _EXTRACTORS:
         try:
@@ -90,7 +107,7 @@ def _run(
 
         for item, metadata in zip(filtered_items, metadata_list, strict=True):
             try:
-                item_id = _process_item(conn, collection, item, metadata)
+                processed = _process_item(conn, collection, item, metadata)
             except Exception as exc:
                 logger.error(
                     "%s: failed to process item %r: %s",
@@ -101,9 +118,22 @@ def _run(
                 errors.append(f"{source_name}/{item.source_ref_id}: {exc}")
                 continue
             items_processed += 1
-            new_item_ids.append(item_id)
+            processed_item_ids.append(processed.item_id)
+            if processed.was_update:
+                updated_item_ids.append(processed.item_id)
 
-    for item_id in new_item_ids:
+    for item_id in updated_item_ids:
+        try:
+            # Content changed — existing relationships were judged against
+            # what's no longer there. Clear them so has_any_relationship()
+            # doesn't skip re-judging every candidate this item is already
+            # connected to (see module docstring, DECISIONS.md).
+            delete_relationships_for_item(driver, item_id)
+        except Exception as exc:
+            logger.error("Could not clear stale relationships for %r: %s", item_id, exc)
+            errors.append(f"relationships-cleanup/{item_id}: {exc}")
+
+    for item_id in processed_item_ids:
         try:
             detect_relationships(conn, driver, collection, item_id)
         except Exception as exc:
@@ -130,7 +160,7 @@ def _process_item(
     collection: Collection,
     item: ExtractedItem,
     metadata: ItemMetadata,
-) -> str:
+) -> _ProcessedItem:
     """Store, chunk, and embed one filtered item.
 
     If chunking/embedding fails after the item row is already written, the
@@ -138,12 +168,17 @@ def _process_item(
     SQLite either has its chunks too, or doesn't exist.
 
     Returns:
-        The item's effective SQLite id.
+        The item's effective SQLite id, and whether this updated a
+        pre-existing row rather than inserting a new one —
+        ``insert_item()``'s upsert keeps an existing row's original id, so
+        comparing its return value to the freshly generated id passed in
+        is enough to tell the two cases apart without any extra query.
     """
+    generated_id = str(uuid4())
     item_id = insert_item(
         conn,
         Item(
-            id=str(uuid4()),
+            id=generated_id,
             source_type=item.source_type,
             source_ref_id=item.source_ref_id,
             title=item.title,
@@ -155,6 +190,7 @@ def _process_item(
             topic=metadata.topic,
         ),
     )
+    was_update = item_id != generated_id
 
     try:
         chunks = chunk_text(item.raw_text)
@@ -171,7 +207,7 @@ def _process_item(
     except Exception:
         delete_item(conn, item_id)
         raise
-    return item_id
+    return _ProcessedItem(item_id=item_id, was_update=was_update)
 
 
 if __name__ == "__main__":

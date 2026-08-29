@@ -90,6 +90,20 @@ class FakeRelationshipProvider:
         return self._judgment
 
 
+class RejectingRelationshipProvider:
+    """A fake ProviderInterface that always confirms nothing is related.
+
+    Not just ``FakeRelationshipProvider(judgment=None)`` — its ``judgment or
+    default`` falls back to the default judgment on ``None`` (``None or x``
+    is ``x`` in Python), so there's no way to make it actually return
+    ``None`` via that constructor. This is the real "reject everything"
+    double.
+    """
+
+    def generate_relationship(self, source_text, candidate_text):
+        return None
+
+
 @pytest.fixture
 def driver():
     d = get_driver(uri=TEST_URI, user=TEST_USER, password=TEST_PASSWORD)
@@ -230,6 +244,82 @@ class TestFullRun:
         ).fetchone()
         assert run["status"] == "success"
         assert run["items_processed"] == 0
+
+
+class TestRelationshipStalenessOnEdit:
+    """An edited, re-ingested item gets its relationships re-judged.
+
+    Not silently frozen against its old content. See DECISIONS.md,
+    2026-08-29.
+    """
+
+    @pytest.fixture(autouse=True)
+    def local_files_only(self, monkeypatch):
+        """See ``TestFullRun.local_files_only`` — same reasoning applies here."""
+        monkeypatch.setattr(
+            daily_batch, "_EXTRACTORS", [("local_file", local_files.extract_new_items)]
+        )
+
+    def test_editing_an_already_related_item_clears_its_stale_edge(
+        self, conn, driver, collection, watch_dir, monkeypatch
+    ):
+        # since=None on every run: isolates this test to the update-path
+        # behavior itself, independent of file-mtime timing/resolution.
+        monkeypatch.setattr(daily_batch, "get_last_run_timestamp", lambda conn: None)
+
+        (watch_dir / "a.txt").write_text("Building the storage layer", encoding="utf-8")
+        (watch_dir / "b.txt").write_text(
+            "Storage layer design notes and decisions", encoding="utf-8"
+        )
+        daily_batch._run(conn, collection, driver)
+
+        a_id = next(
+            row["id"]
+            for row in conn.execute("SELECT id, title FROM items").fetchall()
+            if row["title"] == "a.txt"
+        )
+        assert get_related_items(driver, a_id) != []
+
+        # Edit "a.txt" into something with nothing to do with "b.txt", and
+        # have the (now re-invoked) LLM correctly say so.
+        (watch_dir / "a.txt").write_text(
+            "A grocery list: milk, eggs, bread, spinach", encoding="utf-8"
+        )
+        monkeypatch.setattr(
+            "pipeline.relationships.get_provider",
+            lambda task: RejectingRelationshipProvider(),
+        )
+
+        daily_batch._run(conn, collection, driver)
+
+        assert get_related_items(driver, a_id) == []
+
+    def test_an_unedited_items_relationships_are_left_alone(
+        self, conn, driver, collection, watch_dir, monkeypatch
+    ):
+        monkeypatch.setattr(daily_batch, "get_last_run_timestamp", lambda conn: None)
+
+        (watch_dir / "a.txt").write_text("Building the storage layer", encoding="utf-8")
+        (watch_dir / "b.txt").write_text(
+            "Storage layer design notes and decisions", encoding="utf-8"
+        )
+        daily_batch._run(conn, collection, driver)
+
+        a_id = next(
+            row["id"]
+            for row in conn.execute("SELECT id, title FROM items").fetchall()
+            if row["title"] == "a.txt"
+        )
+        related_before = {r.item.id for r in get_related_items(driver, a_id)}
+        assert related_before != set()
+
+        # Second run, nothing edited: even though every item gets
+        # reprocessed as an "update" (since=None), a genuinely unchanged
+        # relationship should be re-confirmed, not lost.
+        daily_batch._run(conn, collection, driver)
+
+        related_after = {r.item.id for r in get_related_items(driver, a_id)}
+        assert related_after == related_before
 
 
 class TestFailureHandling:

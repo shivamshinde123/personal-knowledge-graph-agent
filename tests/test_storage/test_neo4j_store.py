@@ -19,6 +19,7 @@ from storage.neo4j_store import (
     ItemNode,
     Relationship,
     delete_item,
+    delete_relationships_for_item,
     ensure_constraints,
     get_driver,
     get_item,
@@ -202,6 +203,34 @@ class TestDeleteItem:
 
     def test_deleting_a_nonexistent_item_is_harmless(self, driver):
         delete_item(driver, "does-not-exist")
+
+
+class TestDeleteRelationshipsForItem:
+    def test_removes_outgoing_and_incoming_edges_but_keeps_the_node(self, driver):
+        a, b, c = make_item(id="a"), make_item(id="b"), make_item(id="c")
+        write_relationship(driver, a, b, Relationship(label="implements"))
+        write_relationship(driver, c, a, Relationship(label="planned_in"))
+
+        delete_relationships_for_item(driver, "a")
+
+        assert get_related_items(driver, "a") == []
+        assert get_item(driver, "a") is not None
+        # Unrelated to "a"'s edges specifically — "b" and "c" nodes untouched.
+        assert get_item(driver, "b") is not None
+        assert get_item(driver, "c") is not None
+
+    def test_does_not_affect_other_items_relationships(self, driver):
+        a, b, c = make_item(id="a"), make_item(id="b"), make_item(id="c")
+        write_relationship(driver, a, b, Relationship(label="implements"))
+        write_relationship(driver, b, c, Relationship(label="discussed_in"))
+
+        delete_relationships_for_item(driver, "a")
+
+        related_to_b = {r.item.id for r in get_related_items(driver, "b")}
+        assert related_to_b == {"c"}
+
+    def test_an_item_with_no_relationships_or_no_node_is_harmless(self, driver):
+        delete_relationships_for_item(driver, "does-not-exist")
 
 
 class TestHasAnyRelationship:

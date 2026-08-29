@@ -329,6 +329,38 @@ def get_related_items(driver: neo4j.Driver, item_id: str) -> list[RelatedItem]:
     ]
 
 
+def delete_relationships_for_item(driver: neo4j.Driver, item_id: str) -> None:
+    """Delete every ``RELATES_TO`` edge touching an item, keeping its node.
+
+    Used when an already-related item is edited and re-ingested: its
+    existing relationships were judged against the *old* content, and
+    ``has_any_relationship()`` would otherwise skip re-judging any
+    candidate it was already connected to, silently freezing a possibly
+    stale edge forever. Called before relationship detection re-runs for
+    an updated item, so re-detection starts clean. See ``DECISIONS.md``.
+
+    Unlike :func:`delete_item`, the node itself (and its
+    ``title``/``project_name``/etc. properties) is left in place — only
+    its edges are removed. A no-op if the item has no edges (or no node).
+
+    Args:
+        driver: An open driver from :func:`get_driver`.
+        item_id: The item whose relationships should be cleared.
+
+    Raises:
+        GraphStoreError: If the delete fails.
+    """
+    try:
+        with driver.session() as session:
+            session.run(
+                "MATCH (i:Item {id: $id})-[r:RELATES_TO]-() DELETE r", id=item_id
+            )
+    except _NEO4J_ERRORS as exc:
+        raise GraphStoreError(
+            f"Could not delete relationships for item {item_id!r}: {exc}"
+        ) from exc
+
+
 def delete_item(driver: neo4j.Driver, item_id: str) -> None:
     """Delete an item node and all of its relationships.
 
