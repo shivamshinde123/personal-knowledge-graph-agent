@@ -34,6 +34,7 @@ from storage.neo4j_store import (
     GraphStoreError,
     ItemNode,
     Relationship,
+    has_any_relationship,
     write_relationship,
 )
 from storage.sqlite_store import Item, get_chunks_for_item, get_item
@@ -68,9 +69,15 @@ def detect_relationships(
     discarded like an unconfirmed one — vector-narrowed candidates are only
     ever topically adjacent, not necessarily related, so a low-confidence
     "yes" from the LLM is treated as noise rather than written to the graph
-    (see DECISIONS.md). A candidate whose LLM call or graph write fails is
-    logged and skipped rather than aborting the rest — one bad candidate
-    shouldn't cost the item every other relationship it might have.
+    (see DECISIONS.md). A candidate already connected to the source by any
+    existing edge, in either direction, is skipped before the LLM is even
+    called — detection runs per newly-processed item, so without this check
+    the same real-world relationship could get independently judged (and
+    written as a second, opposite-direction edge) once when each endpoint
+    is processed (see DECISIONS.md). A candidate whose LLM call or graph
+    write fails is logged and skipped rather than aborting the rest — one
+    bad candidate shouldn't cost the item every other relationship it might
+    have.
 
     Args:
         conn: An open SQLite connection, for looking up full item details.
@@ -132,6 +139,13 @@ def detect_relationships(
             continue
 
         try:
+            if has_any_relationship(driver, source_item_id, candidate.item_id):
+                # Already related, in either direction — from this item's
+                # own earlier run, or from the candidate's. Re-judging
+                # would risk writing a second, opposite-direction edge for
+                # what's really the same discovered relationship (see
+                # DECISIONS.md).
+                continue
             judgment = provider.generate_relationship(source_text, candidate.document)
             if judgment is None:
                 continue

@@ -229,6 +229,43 @@ def write_relationship(
         ) from exc
 
 
+def has_any_relationship(driver: neo4j.Driver, item_a: str, item_b: str) -> bool:
+    """Whether any ``RELATES_TO`` edge already connects two items, either direction.
+
+    Used by ``pipeline/relationships.py`` to avoid re-judging (and
+    re-writing) a pair that's already related — relationship detection runs
+    per newly-processed item, so without this check, item A being processed
+    can write ``A -[label]-> B``, and later item B being independently
+    processed can write a second, separate ``B -[label]-> A`` edge for what
+    is really the same discovered relationship. See ``DECISIONS.md``.
+
+    Args:
+        driver: An open driver from :func:`get_driver`.
+        item_a: One item's id.
+        item_b: The other item's id.
+
+    Returns:
+        ``True`` if a ``RELATES_TO`` edge exists between them in either
+        direction, regardless of label.
+
+    Raises:
+        GraphStoreError: If the query fails.
+    """
+    query = """
+    MATCH (a:Item {id: $item_a})-[:RELATES_TO]-(b:Item {id: $item_b})
+    RETURN count(*) > 0 AS connected
+    """
+    try:
+        with driver.session() as session:
+            record = session.run(query, item_a=item_a, item_b=item_b).single()
+    except _NEO4J_ERRORS as exc:
+        raise GraphStoreError(
+            f"Could not check for an existing relationship between "
+            f"{item_a!r} and {item_b!r}: {exc}"
+        ) from exc
+    return bool(record is not None and record["connected"])
+
+
 def get_item(driver: neo4j.Driver, item_id: str) -> ItemNode | None:
     """Fetch a single item node by id.
 

@@ -8,6 +8,52 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-29 — Skip relationship candidates already connected in either direction
+
+**Context**: `pipeline/relationships.py::detect_relationships()` runs once
+per newly-processed item, independently narrowing candidates and asking the
+LLM to judge each one. Because it runs per-item rather than per-pair, the
+same real-world relationship between item A and item B can get judged
+twice: once when A is processed (writing `A -[label]-> B`), and again,
+independently, when B is later processed (writing a second, separate
+`B -[label2]-> A` edge — possibly with a different label from a second,
+independent LLM call). `storage/neo4j_store.py::write_relationship()`'s
+`MERGE` is keyed on direction + label, so it has no way to recognize these
+as "the same relationship" and dedupe them itself.
+
+**Decision**: Added `storage/neo4j_store.py::has_any_relationship(driver,
+item_a, item_b) -> bool`, using an undirected Cypher pattern
+(`(a)-[:RELATES_TO]-(b)`) that matches an edge in either direction
+regardless of label. `detect_relationships()` now calls this before every
+LLM judgment call and skips the candidate entirely (no LLM call, no graph
+write) if it returns `True`. This makes the check itself the source of
+truth for "already related" — cheaper than an LLM call, and avoids ever
+writing a second, possibly differently-labeled edge for the same
+underlying relationship.
+
+**Alternatives considered**: Deduplicating in `write_relationship()` itself
+(e.g. `MERGE` an undirected relationship) — rejected because Neo4j
+relationships are inherently directional, and losing direction would lose
+information (e.g. "implements" reads differently depending on which item
+is the implementer). Deduplicating after the fact with a periodic cleanup
+job — rejected as unnecessary complexity when the write can simply be
+prevented at judgment time, and it would still cost an LLM call per
+redundant pair either way.
+
+**Verified against real data**: ran `detect_relationships()` against the
+real SQLite/Chroma/Neo4j instances (the LLM call faked, same as the
+integration test suite — local Ollama wasn't reachable in this
+environment). Inserted two genuinely near-duplicate real items, ran
+detection from item A first (wrote an edge to B among its confirmed
+candidates), then ran detection from item B: item A's text was never sent
+to the LLM on the second run, and exactly one edge exists between A and B
+afterward — confirming the skip check works against the real graph and
+real candidate-narrowing query, not just the mocked test fixtures.
+
+**Affects**: `storage/neo4j_store.py`, `pipeline/relationships.py`
+
+---
+
 ## 2026-08-25 — `ChatWindow` decides once, at mount, whether to load session history
 
 **Context**: The sidebar now lists real sessions and lets the user pick
