@@ -2,17 +2,22 @@
  * Session list, "New chat" button, and the Settings link.
  * Per docs/UIUX_Wireframes.docx section 2.1.
  *
- * The session list is intentionally always empty for now — there is no
- * GET /api/sessions endpoint yet (session persistence is a separate,
- * later unit of work), so this honestly shows an empty state rather than
- * fabricating session history.
- *
  * @param {object} props
  * @param {"chat" | "settings"} props.view
+ * @param {Array<{session_id: string, title: string | null, updated_at: string}>} props.sessions
+ * @param {string | null} props.activeSessionId
  * @param {() => void} props.onNewChat
+ * @param {(sessionId: string) => void} props.onSelectSession
  * @param {() => void} props.onOpenSettings
  */
-function Sidebar({ view, onNewChat, onOpenSettings }) {
+function Sidebar({
+  view,
+  sessions,
+  activeSessionId,
+  onNewChat,
+  onSelectSession,
+  onOpenSettings,
+}) {
   return (
     <nav className="sidebar">
       <div className="sidebar-header">
@@ -22,7 +27,22 @@ function Sidebar({ view, onNewChat, onOpenSettings }) {
         + New chat
       </button>
       <div className="session-list">
-        <p className="session-list-empty">No past conversations yet.</p>
+        {sessions.length === 0 ? (
+          <p className="session-list-empty">No past conversations yet.</p>
+        ) : (
+          sessions.map((session) => (
+            <button
+              key={session.session_id}
+              type="button"
+              className={`session-item ${
+                session.session_id === activeSessionId ? "active" : ""
+              }`}
+              onClick={() => onSelectSession(session.session_id)}
+            >
+              {session.title || "Untitled conversation"}
+            </button>
+          ))
+        )}
       </div>
       <button
         type="button"

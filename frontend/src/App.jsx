@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { getSessions } from "./api/client.js";
 import ChatWindow from "./components/ChatWindow.jsx";
 import SettingsPanel from "./components/SettingsPanel.jsx";
 import Sidebar from "./components/Sidebar.jsx";
@@ -13,9 +14,25 @@ import Sidebar from "./components/Sidebar.jsx";
 function App() {
   const [view, setView] = useState("chat");
   const [sessionId, setSessionId] = useState(null);
-  // Bumped on "New chat" to force ChatWindow to remount with fresh state,
-  // since its own message history is local component state.
+  const [sessions, setSessions] = useState([]);
+  // Bumped whenever the "active session" changes (new chat, or a
+  // different session picked from the sidebar) to force ChatWindow to
+  // remount with fresh state, since it decides once, at mount, whether to
+  // load prior history — see ChatWindow's own docstring.
   const [chatKey, setChatKey] = useState(0);
+
+  const refreshSessions = useCallback(() => {
+    getSessions()
+      .then((result) => setSessions(result.sessions))
+      .catch(() => {
+        // Sidebar just keeps its last-known list; not worth surfacing an
+        // error for a background refresh.
+      });
+  }, []);
+
+  useEffect(() => {
+    refreshSessions();
+  }, [refreshSessions]);
 
   function handleNewChat() {
     setSessionId(null);
@@ -23,18 +40,32 @@ function App() {
     setView("chat");
   }
 
+  function handleSelectSession(id) {
+    setSessionId(id);
+    setChatKey((key) => key + 1);
+    setView("chat");
+  }
+
+  function handleTurnCompleted(id) {
+    setSessionId(id);
+    refreshSessions();
+  }
+
   return (
     <div className="app">
       <Sidebar
         view={view}
+        sessions={sessions}
+        activeSessionId={sessionId}
         onNewChat={handleNewChat}
+        onSelectSession={handleSelectSession}
         onOpenSettings={() => setView("settings")}
       />
       {view === "chat" ? (
         <ChatWindow
           key={chatKey}
           sessionId={sessionId}
-          onSessionStarted={setSessionId}
+          onTurnCompleted={handleTurnCompleted}
         />
       ) : (
         <SettingsPanel />

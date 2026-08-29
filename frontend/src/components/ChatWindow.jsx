@@ -1,5 +1,5 @@
-import { useRef, useState } from "react";
-import { postQuery } from "../api/client.js";
+import { useEffect, useRef, useState } from "react";
+import { getSessionHistory, postQuery } from "../api/client.js";
 import MessageBubble from "./MessageBubble.jsx";
 
 /**
@@ -7,18 +7,57 @@ import MessageBubble from "./MessageBubble.jsx";
  * the bottom. Per docs/UIUX_Wireframes.docx section 2 (Screen 1) and
  * section 4 (Interaction Flow).
  *
+ * Remounted (via a `key` change in App.jsx) whenever the user starts a new
+ * chat or picks a different session from the sidebar, so `sessionId` here
+ * is only ever read at mount time to decide whether to load prior history
+ * — it isn't watched for later changes.
+ *
  * @param {object} props
- * @param {string | null} props.sessionId - current session, or null for a
- *   not-yet-started one (the first question in it starts a new session)
- * @param {(sessionId: string) => void} props.onSessionStarted - called
- *   once the first response in a new session comes back, with the
- *   session_id the backend assigned
+ * @param {string | null} props.sessionId - an existing session to load and
+ *   continue, or null to start a new one
+ * @param {(sessionId: string) => void} props.onTurnCompleted - called
+ *   after every successful answer, with the session's id (new or
+ *   existing), so the sidebar can refresh its list/ordering
  */
-function ChatWindow({ sessionId, onSessionStarted }) {
+function ChatWindow({ sessionId: initialSessionId, onTurnCompleted }) {
+  const [sessionId, setSessionId] = useState(initialSessionId);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(!!initialSessionId);
   const nextMessageId = useRef(0);
+
+  useEffect(() => {
+    if (!initialSessionId) {
+      return;
+    }
+    getSessionHistory(initialSessionId)
+      .then((result) => {
+        setMessages(
+          result.messages.map((message) => ({
+            id: nextMessageId.current++,
+            role: message.role,
+            text: message.text,
+            sources: message.sources ?? undefined,
+            status: "done",
+          })),
+        );
+      })
+      .catch(() => {
+        setMessages([
+          {
+            id: nextMessageId.current++,
+            role: "agent",
+            text: "Couldn't load this conversation.",
+            status: "error",
+          },
+        ]);
+      })
+      .finally(() => setIsLoadingHistory(false));
+    // Runs once, at mount, using this instance's initial sessionId only —
+    // see the component docstring above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -44,9 +83,7 @@ function ChatWindow({ sessionId, onSessionStarted }) {
 
     try {
       const result = await postQuery(question, sessionId);
-      if (!sessionId) {
-        onSessionStarted(result.session_id);
-      }
+      setSessionId(result.session_id);
       setMessages((prev) =>
         prev.map((message) =>
           message.id === pendingMessageId
@@ -59,6 +96,7 @@ function ChatWindow({ sessionId, onSessionStarted }) {
             : message,
         ),
       );
+      onTurnCompleted(result.session_id);
     } catch (error) {
       setMessages((prev) =>
         prev.map((message) =>
@@ -79,7 +117,8 @@ function ChatWindow({ sessionId, onSessionStarted }) {
   return (
     <div className="chat-window">
       <div className="message-list">
-        {messages.length === 0 && (
+        {isLoadingHistory && <p className="message-list-empty">Loading…</p>}
+        {!isLoadingHistory && messages.length === 0 && (
           <p className="message-list-empty">
             Ask a question about your notes, emails, commits, calendar, files,
             or browsing history.

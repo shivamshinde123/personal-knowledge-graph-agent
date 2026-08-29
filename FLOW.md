@@ -24,13 +24,13 @@ change to an entry point or call chain.
 > `GET /api/health`, `POST /api/query`, `GET /api/sources/status`,
 > `GET`/`PUT /api/settings`, and `GET /api/sessions`/
 > `GET /api/sessions/{id}` are all implemented (see below), with five
-> error-response handlers registered for every route. The React frontend
-> (`frontend/`) is implemented and functional for the chat window and
-> settings screen — its session sidebar still shows a hardcoded empty
-> state and hasn't been wired to the now-real `GET /api/sessions`
-> endpoints yet. Remaining: that frontend wiring, optionally
-> `POST /api/ingest/trigger`, and the three extractors (Gmail, GitHub,
-> Google Calendar).
+> error-response handlers registered for every route. **Conversation
+> memory is now end-to-end complete**, frontend included: the sidebar
+> lists real sessions and reopening one loads its real history (see
+> below) — verified directly against real, previously-recorded
+> conversation data through the real API. Remaining:
+> optionally `POST /api/ingest/trigger`, and the three extractors (Gmail,
+> GitHub, Google Calendar).
 
 ---
 
@@ -682,20 +682,26 @@ DECISIONS.md, 2026-08-25.
 A Vite + React app — see `frontend/README.md` for setup/dev commands.
 `frontend/src/index.jsx` mounts `App.jsx` into `#root`.
 
-1. `App.jsx` holds `view` (`"chat"` | `"settings"`) and `sessionId` state,
-   and renders `Sidebar.jsx` plus either `ChatWindow.jsx` or
-   `SettingsPanel.jsx` — no router, since the wireframe only needs a
-   "Settings link," not deep-linking (see DECISIONS.md, 2026-08-25)
-2. `Sidebar.jsx` — "New chat" (resets `sessionId`, remounts `ChatWindow`
-   via a key bump) and "Settings" (`onOpenSettings`). The session list
-   always shows "No past conversations yet" — no `GET /api/sessions`
-   endpoint exists yet (see DECISIONS.md, 2026-08-25)
-3. `ChatWindow.jsx` — on submit, appends the user message and a "Thinking…"
-   placeholder immediately, calls `api/client.js::postQuery(question,
-   sessionId)`, then fills the placeholder in with the real answer and
-   `SourceChip.jsx`-rendered sources (or an error state) once it resolves.
-   The first response in a new session reports its `session_id` back up to
-   `App.jsx` via `onSessionStarted`
+1. `App.jsx` holds `view` (`"chat"` | `"settings"`), `sessionId`, and the
+   fetched `sessions` list, and renders `Sidebar.jsx` plus either
+   `ChatWindow.jsx` or `SettingsPanel.jsx` — no router, since the
+   wireframe only needs a "Settings link," not deep-linking (see
+   DECISIONS.md, 2026-08-25). Fetches `getSessions()` on mount and again
+   after every completed turn (`onTurnCompleted`), so the sidebar's list
+   and ordering stay current
+2. `Sidebar.jsx` — "New chat" and clicking a real session both bump
+   `App.jsx`'s `chatKey`, forcing `ChatWindow` to remount (see DECISIONS.md,
+   2026-08-25, for why a remount rather than watching `sessionId` for
+   changes). Renders the real session list from `App.jsx`, or "No past
+   conversations yet" if it's empty
+3. `ChatWindow.jsx` — on mount, if given an existing `sessionId`, calls
+   `api/client.js::getSessionHistory()` once and populates messages from
+   it (see DECISIONS.md, 2026-08-25). On submit, appends the user message
+   and a "Thinking…" placeholder immediately, calls
+   `api/client.js::postQuery(question, sessionId)`, then fills the
+   placeholder in with the real answer and `SourceChip.jsx`-rendered
+   sources (or an error state) once it resolves, and reports the (possibly
+   new) `session_id` up to `App.jsx` via `onTurnCompleted`
 4. `SettingsPanel.jsx` — on mount, calls `api/client.js::getSettings()` and
    `getSourcesStatus()` in parallel; "Save Changes" calls `putSettings()`
    with the current `provider_mode`/`cloud_model` and updates local state
