@@ -134,3 +134,10 @@ class SessionHistoryResponse(BaseModel):
 
     session_id: str
     messages: list[MessageResponse]
+
+
+class IngestTriggerResponse(BaseModel):
+    """``POST /api/ingest/trigger`` response body (202 Accepted)."""
+
+    status: Literal["started"]
+    run_id: str
