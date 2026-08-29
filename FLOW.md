@@ -338,35 +338,52 @@ metadata/chunks/embeddings are already persisted.
   `CLAUDE.md`'s locked-in decisions — see DECISIONS.md, 2026-08-25.
   Otherwise, builds a whole-document query vector by averaging every chunk
   embedding the item already has in Chroma
-  (`storage/chroma_store.py::get_item_embeddings()` →
-  `_mean_embedding()`), not just the first chunk (see DECISIONS.md,
-  2026-08-24, for why: a shared first-chunk boilerplate block would
-  otherwise dominate similarity). Queries Chroma for that vector's nearest
-  neighbors, excluding the item's own chunks and any `browser_history` item
-  (`where: {"$and": [{"item_id": {"$ne": source_item_id}}, {"source_type":
-  {"$ne": "browser_history"}}]}` — so browser history is never a candidate
-  either, see DECISIONS.md, 2026-08-25) and narrowed to the same
-  `project_name` when the item has one classified. Deduplicates matches
-  down to distinct candidate items, then — for each one — first calls
-  `storage/neo4j_store.py::has_any_relationship(driver, source_item_id,
-  candidate.item_id)`, an undirected Cypher match that catches an existing
-  edge in either direction regardless of label, and skips the candidate
-  entirely (no LLM call, no graph write) if one already exists — detection
-  runs per newly-processed item, so without this check the same real-world
-  relationship could get judged and written twice, once from each
-  endpoint's own processing run (see DECISIONS.md, 2026-08-29). Otherwise —
-  using the item's first chunk as representative text for the LLM prompt
-  itself, unchanged — asks `get_provider("relationship").generate_relationship()`
-  to confirm or reject each one. The prompt is deliberately biased toward "unrelated"
-  (most vector-narrowed candidates aren't actually related) and requires a
-  specific, describable connection rather than shared topic/vocabulary — see
-  DECISIONS.md, 2026-08-24. A confirmed judgment whose `confidence` is below
-  `config.yaml`'s `retrieval.relationship_confidence_threshold` (default
-  `0.6`) is discarded, same as an unconfirmed one (see DECISIONS.md,
-  2026-08-24 — this is a partial fix: verified against real data to catch
-  some but not all false positives, since a cheap model can still be
-  confidently wrong on cases with literal shared boilerplate text). A
-  confirmed-and-kept candidate is written via
+  (`storage/chroma_store.py::get_item_chunk_vectors()`, keeping each
+  chunk's text alongside its embedding, → `_mean_embedding()` on the
+  embeddings), not just the first chunk (see DECISIONS.md, 2026-08-24, for
+  why: a shared first-chunk boilerplate block would otherwise dominate
+  similarity). Queries Chroma for that vector's nearest neighbors,
+  excluding the item's own chunks and any `browser_history` item (`where:
+  {"$and": [{"item_id": {"$ne": source_item_id}}, {"source_type": {"$ne":
+  "browser_history"}}]}` — so browser history is never a candidate either,
+  see DECISIONS.md, 2026-08-25) and narrowed to the same `project_name`
+  when the item has one classified. Deduplicates matches down to distinct
+  candidate items, then — for each one — first checks the candidate's
+  Chroma-returned `distance` against `config.yaml`'s
+  `retrieval.relationship_candidate_max_distance` (default `0.6`, cosine
+  distance; `null` disables the check) and skips it entirely, before any
+  Neo4j or LLM call, if it's farther than that — narrowing always returns
+  its top-K nearest neighbors regardless of how weak the match is, so this
+  catches the "least-unrelated item available" case (see DECISIONS.md,
+  2026-08-29). Then calls `storage/neo4j_store.py::has_any_relationship(
+  driver, source_item_id, candidate.item_id)`, an undirected Cypher match
+  that catches an existing edge in either direction regardless of label,
+  and skips the candidate (no LLM call, no graph write) if one already
+  exists — detection runs per newly-processed item, so without this check
+  the same real-world relationship could get judged and written twice,
+  once from each endpoint's own processing run (see DECISIONS.md,
+  2026-08-29). Otherwise, picks representative text for the LLM prompt:
+  the candidate side uses `candidate.document` (Chroma's own search result
+  — already the candidate's actual matching chunk, since narrowing queried
+  with the source's pooled embedding); the source side computes the
+  candidate's own whole-document embedding and picks whichever of the
+  source's chunks is closest to it by cosine similarity
+  (`_most_similar_chunk_text()`) — a different chunk per candidate, not a
+  fixed one (see DECISIONS.md, 2026-08-29). Calls
+  `get_provider("relationship").generate_relationship()` to confirm or
+  reject. The prompt is deliberately biased toward "unrelated" (most
+  vector-narrowed candidates aren't actually related), requires a
+  specific, describable connection rather than shared topic/vocabulary,
+  and instructs the model to name and discount any text shared verbatim
+  between the two candidates before judging, rather than treating shared
+  boilerplate as relationship evidence — verified against the real
+  configured default model (`claude-sonnet-4`) to fix a real false
+  positive this way; parsing tolerates a reasoning preamble the model
+  reliably produces as a result (`base._extract_json_object()`) — see
+  DECISIONS.md, 2026-08-24 and 2026-08-29. A confirmed judgment whose
+  `confidence` is below `retrieval.relationship_confidence_threshold`
+  (default `0.6`) is discarded, same as an unconfirmed one (see
+  DECISIONS.md, 2026-08-24). A confirmed-and-kept candidate is written via
   `storage/neo4j_store.py::write_relationship()`, using SQLite lookups
   (`get_item()`) to fill in `title`/`url` on both graph nodes — data
   Chroma's own metadata doesn't carry, despite `Component_Map.docx` not

@@ -160,6 +160,7 @@ def set_candidate_count(monkeypatch):
                 retrieval=SimpleNamespace(
                     relationship_candidate_count=5,
                     relationship_confidence_threshold=0.6,
+                    relationship_candidate_max_distance=None,
                 )
             )
         ),
@@ -420,6 +421,7 @@ class TestWholeDocumentNarrowing:
                     retrieval=SimpleNamespace(
                         relationship_candidate_count=1,
                         relationship_confidence_threshold=0.6,
+                        relationship_candidate_max_distance=None,
                     )
                 )
             ),
@@ -532,6 +534,162 @@ class TestSkipsAlreadyRelatedCandidates:
         related = get_related_items(driver, source_id)
         assert len(related) == 1
         assert related[0].relationship.label == "implements"
+
+
+class TestSourceChunkSelection:
+    """The chunk of the *source* item shown to the LLM is per-candidate.
+
+    Not always chunk 0 — picked by cosine similarity to each candidate's
+    whole-document embedding. See DECISIONS.md, 2026-08-29.
+    """
+
+    def test_the_source_chunk_relevant_to_this_candidate_is_used_not_chunk_zero(
+        self, conn, driver, collection, monkeypatch
+    ):
+        source_id = ingest_multi(
+            conn,
+            collection,
+            ref="a",
+            texts=[
+                "Personal Knowledge Graph Agent — internal notes and misc "
+                "reminders unrelated to any particular subsystem.",
+                "The storage layer uses SQLite, Chroma, and Neo4j for local "
+                "persistence of ingested items.",
+            ],
+        )
+        ingest(
+            conn,
+            collection,
+            ref="b",
+            text="SQLite, Chroma, and Neo4j together form the storage layer "
+            "that persists all ingested items locally.",
+        )
+        provider = FakeProvider(
+            default=RelationshipJudgment(label="discussed_in", confidence=0.9)
+        )
+        monkeypatch.setattr(
+            "pipeline.relationships.get_provider", lambda task: provider
+        )
+
+        detect_relationships(conn, driver, collection, source_id)
+
+        assert len(provider.calls) == 1
+        source_text_shown_to_llm = provider.calls[0][0]
+        assert "storage layer" in source_text_shown_to_llm
+        assert "internal notes" not in source_text_shown_to_llm
+
+
+class TestCandidateMaxDistance:
+    """Candidates too far from the source, per the configured cutoff.
+
+    Filtered out before ever reaching the LLM. See DECISIONS.md, 2026-08-29.
+    """
+
+    def test_a_candidate_farther_than_the_threshold_is_never_judged(
+        self, conn, driver, collection, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "pipeline.relationships.get_settings",
+            lambda: SimpleNamespace(
+                config=SimpleNamespace(
+                    retrieval=SimpleNamespace(
+                        relationship_candidate_count=5,
+                        relationship_confidence_threshold=0.6,
+                        relationship_candidate_max_distance=0.05,
+                    )
+                )
+            ),
+        )
+        source_id = ingest(
+            conn,
+            collection,
+            ref="a",
+            text="The storage layer uses SQLite, Chroma, and Neo4j.",
+        )
+        ingest(
+            conn,
+            collection,
+            ref="b",
+            text="A traditional Italian pasta recipe needs fresh tomatoes, "
+            "basil, garlic, and olive oil.",
+        )
+        provider = FakeProvider(
+            default=RelationshipJudgment(label="discussed_in", confidence=0.9)
+        )
+        monkeypatch.setattr(
+            "pipeline.relationships.get_provider", lambda task: provider
+        )
+
+        result = detect_relationships(conn, driver, collection, source_id)
+
+        assert result == []
+        assert provider.calls == []
+
+    def test_a_candidate_within_the_threshold_is_still_judged(
+        self, conn, driver, collection, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "pipeline.relationships.get_settings",
+            lambda: SimpleNamespace(
+                config=SimpleNamespace(
+                    retrieval=SimpleNamespace(
+                        relationship_candidate_count=5,
+                        relationship_confidence_threshold=0.6,
+                        relationship_candidate_max_distance=2.0,
+                    )
+                )
+            ),
+        )
+        source_id = ingest(
+            conn,
+            collection,
+            ref="a",
+            text="The storage layer uses SQLite, Chroma, and Neo4j.",
+        )
+        candidate_id = ingest(
+            conn,
+            collection,
+            ref="b",
+            text="SQLite, Chroma, and Neo4j together form the storage layer.",
+        )
+        provider = FakeProvider(
+            default=RelationshipJudgment(label="discussed_in", confidence=0.9)
+        )
+        monkeypatch.setattr(
+            "pipeline.relationships.get_provider", lambda task: provider
+        )
+
+        result = detect_relationships(conn, driver, collection, source_id)
+
+        assert result == [(candidate_id, provider._default)]
+
+    def test_a_null_threshold_disables_the_filter(
+        self, conn, driver, collection, monkeypatch
+    ):
+        # The autouse set_candidate_count fixture already sets
+        # max_distance=None; confirm a genuinely distant pair still gets
+        # judged (not silently skipped) when the filter is off.
+        source_id = ingest(
+            conn,
+            collection,
+            ref="a",
+            text="The storage layer uses SQLite, Chroma, and Neo4j.",
+        )
+        ingest(
+            conn,
+            collection,
+            ref="b",
+            text="A traditional Italian pasta recipe needs fresh tomatoes, "
+            "basil, garlic, and olive oil.",
+        )
+        provider = FakeProvider(default=None)
+        monkeypatch.setattr(
+            "pipeline.relationships.get_provider", lambda task: provider
+        )
+
+        detect_relationships(conn, driver, collection, source_id)
+
+        assert len(provider.calls) == 1
 
 
 class TestMeanEmbedding:
