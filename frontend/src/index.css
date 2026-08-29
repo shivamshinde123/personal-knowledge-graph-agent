@@ -167,6 +167,10 @@ a {
   color: var(--accent);
 }
 
+.settings-link-icon {
+  flex-shrink: 0;
+}
+
 /* ---- Chat window ---- */
 
 .chat-window {
@@ -210,6 +214,7 @@ a {
   border-radius: 14px;
   line-height: 1.5;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .message-bubble.user {
