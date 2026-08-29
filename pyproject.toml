@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "chromadb>=1.5.9",
+    "fastapi>=0.141.1",
     "langchain-ollama>=1.1.0",
     "langchain-openai>=1.6.0",
     "langgraph>=1.2.11",
@@ -19,6 +20,7 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "pyyaml>=6.0.3",
     "sentence-transformers>=6.0.0",
+    "uvicorn[standard]>=0.52.3",
 ]
 
 [tool.black]
@@ -54,6 +56,7 @@ addopts = "-q"
 [dependency-groups]
 dev = [
     "black>=26.5.1",
+    "httpx>=0.28.1",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
     "ruff>=0.16.3",
