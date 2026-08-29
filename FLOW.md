@@ -8,12 +8,13 @@ change to an entry point or call chain.
 > provider layer, the entire pipeline layer (`filters`, `chunking`,
 > `metadata`, `embeddings`, `relationships`), `scheduler/daily_batch.py`,
 > and three extractors (local files, Notion, browser history) are
-> implemented and merged to `main`. The agent layer is starting:
-> `agent/router.py` is implemented (see below); the search nodes, graph
-> traversal, merger, synthesizer, and LangGraph wiring in `agent/graph.py`
-> are next, alongside the remaining three extractors (Gmail, GitHub, Google
-> Calendar) and the API/frontend layers. The `POST /api/query` entry point
-> below is still documented as designed in `docs/` and marked
+> implemented and merged to `main`. The agent layer is under way:
+> `agent/router.py` and `agent/search_nodes.py` are implemented (see
+> below); graph traversal, the merger, the synthesizer, and LangGraph
+> wiring in `agent/graph.py` are next, alongside the remaining three
+> extractors (Gmail, GitHub, Google Calendar) and the API/frontend layers.
+> The `POST /api/query` entry point below is still documented as designed
+> in `docs/` and marked
 > _(not yet implemented)_ until `agent/graph.py` and `api/` exist.
 
 ---
@@ -387,6 +388,27 @@ DECISIONS.md, 2026-08-25.
   `keyword_search` (always `True`), and `graph_traversal` (`True` only when
   the question's phrasing implies relationships between items — a fixed
   list of phrases like "how does X relate to Y", "what led to X").
+
+---
+
+## Shared: search nodes (`agent/search_nodes.py`)
+
+Not entry points themselves — will be called by `agent/graph.py::run()`
+once it exists, for whichever nodes `agent/router.py::route()` selects.
+Both return `list[SearchHit]` (`item_id`, 1-based `rank` within that
+node's own results), deduplicated so multiple matching chunks of the same
+item count as one hit.
+
+- `vector_search(collection, question)` — embeds the question via
+  `pipeline/embeddings.py::embed_query()`, then
+  `storage/chroma_store.py::query()` for the nearest
+  `config.yaml`'s `retrieval.top_k_vector` chunks.
+- `keyword_search_node(conn, question)` — converts the question into a
+  safe FTS5 `MATCH` expression (`_to_fts_query()`: strip stopwords,
+  double-quote each remaining term, join with `OR` — see DECISIONS.md,
+  2026-08-25) and calls `storage/sqlite_store.py::keyword_search()` for
+  the top `config.yaml`'s `retrieval.top_k_keyword` chunks. A question with
+  no significant terms returns `[]` without querying at all.
 
 ---
 
