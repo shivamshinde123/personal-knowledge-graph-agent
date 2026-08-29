@@ -8,6 +8,34 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-25 — Answer Synthesizer caps context at `retrieval.top_k_vector`, with a no-LLM-call fallback
+
+**Context**: `agent/merger.py::merge()` can return many ranked items (up
+to the sum of whatever vector/keyword/graph-traversal contributed), but
+neither `Technical_Design_Document.docx` nor `config.yaml` specifies how
+many of those the synthesizer should actually pull full text for and pass
+to the LLM as context — passing all of them would be expensive, slow, and
+likely to dilute the answer with marginally-relevant material.
+
+**Decision**: `agent/synthesizer.py::synthesize()` takes only the top
+`top_k` merged results (default `config.yaml`'s `retrieval.top_k_vector`)
+— reusing an existing config value rather than introducing a new,
+undocumented knob with no obvious default of its own. Separately, if no
+merged result yields usable context (empty input, or every item was
+deleted from SQLite / has no chunks), the function returns a fixed
+"nothing found" answer without calling the LLM at all — there's nothing
+meaningful to ground an answer in, so a real API call would just be wasted
+cost and latency for a response the code can already determine in advance.
+
+**Alternatives considered**: A dedicated `retrieval.top_k_synthesis` config
+field — deferred; reusing `top_k_vector` is a reasonable default for now,
+and a dedicated field can be added later if real usage shows it needs to
+differ.
+
+**Affects**: `agent/synthesizer.py`
+
+---
+
 ## 2026-08-25 — Result Merger uses the standard RRF constant k=60
 
 **Context**: `Technical_Design_Document.docx` section 6 names Reciprocal

@@ -8,13 +8,13 @@ change to an entry point or call chain.
 > provider layer, the entire pipeline layer (`filters`, `chunking`,
 > `metadata`, `embeddings`, `relationships`), `scheduler/daily_batch.py`,
 > and three extractors (local files, Notion, browser history) are
-> implemented and merged to `main`. The agent layer is under way:
+> implemented and merged to `main`. The agent layer is nearly complete:
 > `agent/router.py`, `agent/search_nodes.py`, `agent/graph_traversal.py`,
-> and `agent/merger.py` are implemented (see below); the synthesizer and
-> LangGraph wiring in `agent/graph.py` are next, alongside the remaining
-> three extractors (Gmail, GitHub, Google Calendar) and the API/frontend
-> layers. The `POST /api/query` entry point below is still documented as
-> designed in `docs/` and marked
+> `agent/merger.py`, and `agent/synthesizer.py` are implemented (see
+> below); only the LangGraph wiring in `agent/graph.py` is left, alongside
+> the remaining three extractors (Gmail, GitHub, Google Calendar) and the
+> API/frontend layers. The `POST /api/query` entry point below is still
+> documented as designed in `docs/` and marked
 > _(not yet implemented)_ until `agent/graph.py` and `api/` exist.
 
 ---
@@ -441,6 +441,27 @@ external calls, per `Component_Map.docx`.
   then sorted highest score first. An item appearing in more lists, or
   ranked higher within a list, scores higher. A node that didn't run simply
   contributes an empty list (or is omitted).
+
+---
+
+## Shared: answer synthesizer (`agent/synthesizer.py`)
+
+Not an entry point itself — will be called by `agent/graph.py::run()` once
+it exists, as the final step before returning a response. Calls
+`ProviderInterface` and `SQLiteStore`, per `Component_Map.docx`.
+
+- `synthesize(conn, question, merged_results, *, top_k=None) ->
+  SynthesizedAnswer` — takes the top `top_k` (default `config.yaml`'s
+  `retrieval.top_k_vector` — see DECISIONS.md, 2026-08-25) merged results,
+  fetches each item's full chunk text via `get_item()`/
+  `get_chunks_for_item()`, and builds one `ContextChunk` per item (multiple
+  chunks joined into one text block). A merged result whose item no longer
+  exists, or has no chunks, is skipped, not fatal. If no result yields
+  usable context, returns a fixed "nothing found" answer without calling
+  the LLM at all. Otherwise calls
+  `get_provider("answer").generate_answer(question, context)` and returns
+  the answer alongside an ordered `sources` list — index `i` matches the
+  `[i + 1]` citation marker the provider is instructed to use.
 
 ---
 
