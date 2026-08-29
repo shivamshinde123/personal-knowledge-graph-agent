@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from api.routes import health, query, settings, sources
@@ -52,6 +53,19 @@ def create_app(*, lifespan_fn=lifespan) -> FastAPI:
             connections — see ``tests/test_api/conftest.py``.
     """
     app = FastAPI(title="Personal Knowledge Graph Agent", lifespan=lifespan_fn)
+    # The React dev server (frontend/, Vite) runs on a different port than
+    # this API, so the browser treats them as different origins even though
+    # both are localhost — CORS must be enabled for the frontend's fetch
+    # calls (frontend/src/api/client.js) to work at all. Restricted to
+    # localhost/127.0.0.1 on any port, matching "local-only, single-user"
+    # (docs/System_Architecture_Document.docx section 6.2) rather than a
+    # wildcard origin.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.include_router(health.router, prefix="/api")
     app.include_router(query.router, prefix="/api")
     app.include_router(sources.router, prefix="/api")
