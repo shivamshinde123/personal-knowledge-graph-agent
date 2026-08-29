@@ -17,10 +17,14 @@ change to an entry point or call chain.
 > conversation memory: `api/main.py`, `GET /api/health`, `POST /api/query`,
 > `GET /api/sources/status`, and `GET`/`PUT /api/settings` are all
 > implemented (see below), with five error-response handlers registered
-> for every route. Remaining: session persistence and `GET /api/sessions`/
+> for every route. The React frontend (`frontend/`) is implemented and
+> functional for everything the backend currently supports: the chat
+> window and the settings screen (see below) — its session sidebar is an
+> honest empty state, not fake data, pending real session persistence.
+> Remaining: session persistence and `GET /api/sessions`/
 > `GET /api/sessions/{id}` (part of the conversation-memory phase),
-> optionally `POST /api/ingest/trigger`, the three extractors (Gmail,
-> GitHub, Google Calendar), and the React frontend.
+> optionally `POST /api/ingest/trigger`, and the three extractors (Gmail,
+> GitHub, Google Calendar).
 
 ---
 
@@ -542,13 +546,18 @@ means adding a route module under `api/routes/`, registering it in
 `create_app()`, and defining its request/response shape in
 `api/schemas.py`.
 
-`create_app()` also registers four exception handlers
+`create_app()` also registers five exception handlers
 (`_register_exception_handlers()`), applying to every route: validation
 errors → 422, `ProviderError` → 502, `VectorStoreError`/`GraphStoreError`/
-`StorageError` → 500, anything else → 500 — all shaped as
-`{"error": str, "detail": str}` per `docs/API_Specification.docx` section 2.
-Route handlers don't need their own try/except for these — see
+`StorageError` → 500, `ConfigError` → 500, anything else → 500 — all shaped
+as `{"error": str, "detail": str}` per `docs/API_Specification.docx`
+section 2. Route handlers don't need their own try/except for these — see
 DECISIONS.md, 2026-08-25.
+
+`create_app()` also adds `CORSMiddleware`, allowing any `localhost`/
+`127.0.0.1` origin on any port — needed for `frontend/`'s Vite dev server
+(a different port/origin) to call this API at all. See DECISIONS.md,
+2026-08-25.
 
 ---
 
@@ -614,3 +623,35 @@ DECISIONS.md, 2026-08-25.
 3. Returns `{"status": "updated", "provider_mode", "local_model",
    "cloud_model"}` per `docs/API_Specification.docx` section 3.7, reflecting
    the freshly written-and-reread configuration
+
+---
+
+## Entry point: `frontend/` (`npm run dev`, or `index.html` in production)
+
+A Vite + React app — see `frontend/README.md` for setup/dev commands.
+`frontend/src/index.jsx` mounts `App.jsx` into `#root`.
+
+1. `App.jsx` holds `view` (`"chat"` | `"settings"`) and `sessionId` state,
+   and renders `Sidebar.jsx` plus either `ChatWindow.jsx` or
+   `SettingsPanel.jsx` — no router, since the wireframe only needs a
+   "Settings link," not deep-linking (see DECISIONS.md, 2026-08-25)
+2. `Sidebar.jsx` — "New chat" (resets `sessionId`, remounts `ChatWindow`
+   via a key bump) and "Settings" (`onOpenSettings`). The session list
+   always shows "No past conversations yet" — no `GET /api/sessions`
+   endpoint exists yet (see DECISIONS.md, 2026-08-25)
+3. `ChatWindow.jsx` — on submit, appends the user message and a "Thinking…"
+   placeholder immediately, calls `api/client.js::postQuery(question,
+   sessionId)`, then fills the placeholder in with the real answer and
+   `SourceChip.jsx`-rendered sources (or an error state) once it resolves.
+   The first response in a new session reports its `session_id` back up to
+   `App.jsx` via `onSessionStarted`
+4. `SettingsPanel.jsx` — on mount, calls `api/client.js::getSettings()` and
+   `getSourcesStatus()` in parallel; "Save Changes" calls `putSettings()`
+   with the current `provider_mode`/`cloud_model` and updates local state
+   from the response
+5. `api/client.js` is the only module making network calls (per
+   `docs/Coding_Conventions.docx` section 3) — every function maps
+   directly to one `docs/API_Specification.docx` endpoint, talking to
+   `http://127.0.0.1:8080/api` (not `localhost` — see DECISIONS.md,
+   2026-08-25) with CORS enabled on the backend side for the dev server's
+   own origin (see DECISIONS.md, 2026-08-25)

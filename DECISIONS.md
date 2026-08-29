@@ -8,6 +8,77 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-25 — Frontend scaffolded with Vite; default `oxlint` replaced with ESLint per `Coding_Conventions.docx`
+
+**Context**: `Technical_Design_Document.docx` section 9.2 already decided
+on a React frontend over plain HTML/JS. `Coding_Conventions.docx` section 3
+specifies "linting via ESLint with the standard React hooks rule set,"
+but the current `npm create vite@latest -- --template react` scaffold
+defaults to `oxlint`, not ESLint.
+
+**Decision**: Scaffolded via Vite (fast, standard, matches "fastest to
+build" from the design doc's reasoning for choosing React), then swapped
+`oxlint` for `eslint` + `eslint-plugin-react-hooks` +
+`eslint-plugin-react-refresh`, and added `prettier` (also required by the
+conventions doc, absent from the default scaffold). Component styling uses
+one shared stylesheet (`src/index.css`) rather than CSS modules — the
+conventions doc explicitly allows either, and a single stylesheet is
+simpler for an app this size. Two screens (chat, settings) are switched
+via local `useState`, not a router — the wireframe only describes a
+"Settings link," no deep-linking requirement, so a router would be
+unused complexity.
+
+**Known, deliberate gap**: the session sidebar always shows "No past
+conversations yet" — there's no `GET /api/sessions` endpoint yet (needs
+real session persistence, the conversation-memory phase). Built this way
+honestly rather than faking session data, per the same reasoning the
+`/api/sessions` endpoints themselves were deferred earlier this session.
+
+**Affects**: `frontend/` (new)
+
+---
+
+## 2026-08-25 — Frontend API client uses `127.0.0.1`, not `localhost`
+
+**Context**: Verified directly against this real dev machine:
+`http://localhost:8080` didn't reach the real FastAPI backend at all — an
+unrelated WSL/Docker port-forward was already listening on `[::1]:8080`
+(IPv6), and this machine's DNS resolution tried `::1` before `127.0.0.1`
+for the hostname `localhost`, so requests silently went to the wrong
+service and got a nonsensical response instead of a connection error that
+would have been obvious immediately.
+
+**Decision**: `frontend/src/api/client.js`'s `API_BASE_URL` uses
+`http://127.0.0.1:8080/api` explicitly rather than `localhost`, removing
+the ambiguity entirely. `api/main.py`'s CORS `allow_origin_regex` still
+accepts both `localhost` and `127.0.0.1` origins (the Vite dev server
+itself could still come up on either), since the fix only needed to be on
+the *request target* side, not the *origin* side.
+
+**Affects**: `frontend/src/api/client.js`
+
+---
+
+## 2026-08-25 — CORS enabled for `localhost`/`127.0.0.1` origins on any port
+
+**Context**: The React dev server (Vite) runs on its own port (5173 by
+default), a different origin from the FastAPI backend (8080) even though
+both are local — the browser blocks `fetch()` calls across origins unless
+the server opts in via CORS headers. `System_Architecture_Document.docx`
+section 6.2 says frontend/backend "communicate only over localhost" but
+doesn't address the browser's same-origin policy, since that's an
+implementation detail below the architecture doc's level.
+
+**Decision**: `api/main.py` adds `CORSMiddleware` with
+`allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+"` — any port, so
+Vite's dev server still works if its default port is already taken and it
+picks a different one — rather than a wildcard origin, matching the
+project's local-only, single-user framing.
+
+**Affects**: `api/main.py`
+
+---
+
 ## 2026-08-25 — `PUT /api/settings` writes `config.yaml` with `ruamel.yaml`'s round-trip mode, not plain PyYAML
 
 **Context**: `config/settings.py::load_config()` already reads `config.yaml`
