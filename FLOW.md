@@ -424,9 +424,14 @@ test doubles/temp resources instead.
       this is what actually uses `config.yaml`'s
       `ingestion.batch_metadata_group_size` grouping (see DECISIONS.md,
       2026-08-24)
-   c. Each `(item, metadata)` pair → `_process_item()`:
+   c. Each `(item, metadata)` pair → `_process_item()`, returning a
+      `_ProcessedItem(item_id, was_update)`:
       - `storage/sqlite_store.py::insert_item()` — combines the item's
-        extracted fields with its LLM metadata
+        extracted fields with its LLM metadata. `was_update` is `True`
+        when this updated a pre-existing row (a source item edited since
+        its last ingestion) rather than inserting a new one — read off
+        `insert_item()`'s return value versus the freshly generated id
+        passed in, no extra query needed (see DECISIONS.md, 2026-08-29)
       - `pipeline/chunking.py::chunk_text()` → `pipeline/embeddings.py::
         embed_chunks()` → vectors stored in Chroma, SQLite-ready `Chunk`s
         returned → `storage/sqlite_store.py::replace_chunks()`
@@ -437,11 +442,19 @@ test doubles/temp resources instead.
       **Branch point**: a single item's processing failure is caught,
       logged, and recorded in `errors`; the rest of that source's items
       still get processed.
-3. After every source is processed: for each successfully-processed item's
-   id, `pipeline/relationships.py::detect_relationships()` runs (its own
+3. After every source is processed, before relationship detection: for
+   every item that was an *update* (not a new insert), calls
+   `storage/neo4j_store.py::delete_relationships_for_item()` — clears its
+   existing edges (node kept) so relationship detection starts clean
+   rather than `has_any_relationship()` skipping a candidate whose edge
+   was judged against content that's since changed (see DECISIONS.md,
+   2026-08-29). A failure here is caught, logged, and recorded in `errors`
+   per item, same resilience pattern as the rest of the batch.
+4. Then, for every successfully-processed item's id (new or updated),
+   `pipeline/relationships.py::detect_relationships()` runs (its own
    internal per-candidate resilience is backed by a top-level catch here
    too, recorded in `errors` on failure)
-4. `status` is computed from `errors`/`items_processed`
+5. `status` is computed from `errors`/`items_processed`
    (`"success"`/`"partial_failure"`/`"failed"` — see DECISIONS.md,
    2026-08-24) and written via `complete_ingestion_run()`
 

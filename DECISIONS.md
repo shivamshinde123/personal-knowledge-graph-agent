@@ -8,6 +8,20 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-29 — Clear an edited item's relationships before re-detecting them
+
+**Context**: `has_any_relationship()` (added for the bidirectional-duplicate-relationships fix, see below) skips re-judging a candidate if any edge already connects it to the source, in either direction — with no concept of *when* that edge was judged or whether the content behind it has since changed. When an already-related item is edited and re-ingested (`insert_item()`'s upsert updates the existing row, `replace_chunks()` swaps in new chunks/embeddings), `detect_relationships()` runs again — but for any candidate it was already related to, the skip check short-circuits before ever re-judging the pair against the new content. A relationship confirmed against content that's since been completely rewritten stays in the graph indefinitely, never revisited (GitHub issue #43).
+
+**Decision**: `scheduler/daily_batch.py::_process_item()` now returns whether `insert_item()` updated a pre-existing row rather than inserting a new one — free to compute, since the upsert already keeps an existing row's original id, so comparing the returned id to the freshly generated one passed in is enough (no extra query). `_run()` tracks these as `updated_item_ids` and, before the relationship-detection loop, calls a new `storage/neo4j_store.py::delete_relationships_for_item()` for each one — an edges-only delete (unlike `delete_item()`, the node and its properties are left in place) — so re-detection starts clean and `has_any_relationship()` only ever short-circuits relationships already judged against the content currently in the graph.
+
+**Alternatives considered**: Tracking a content hash or timestamp per edge and comparing it against the item's current content on each check — rejected as more moving parts (schema change on the edge, hash computation, staleness-comparison logic) for the same outcome a blunt "clear and re-judge" achieves more simply. The known cost — an edit re-pays the LLM judgment cost for that item's relationships rather than skipping them — is the correct trade-off here: a document that changes should have its relationships re-verified, not left stale.
+
+**Verified against real data**: real SQLite/Chroma/Neo4j and the real embedding model (LLM call faked). A real item was related to another via a genuine confirmed judgment; its content was then replaced with something unrelated (simulating an edit); `delete_relationships_for_item()` correctly removed all of its edges (not just the one under test); re-running detection against the new content, with the LLM correctly saying "not related," left it with zero relationships rather than the stale one persisting. Also verified via `scheduler/daily_batch.py::_run()` integration tests: an edited item that becomes genuinely unrelated loses its stale edge; an unedited item re-processed in the same batch (every item is reprocessed when `since` doesn't filter anything out) keeps its still-valid relationship, since re-detection re-confirms it rather than just failing to delete it.
+
+**Affects**: `storage/neo4j_store.py`, `scheduler/daily_batch.py`
+
+---
+
 ## 2026-08-29 — Per-candidate source chunk selection, and a distance cutoff before LLM judgment
 
 **Context**: Two remaining weak spots in relationship detection, raised in discussion after the boilerplate-parsing fix above. First: the LLM confirmation call always showed the *source* item's first chunk (`chunks[0].text`) as its representative text, regardless of which candidate was being judged — arbitrary in the same way the pre-2026-08-24 narrowing query was before it switched to a pooled whole-document embedding, just one stage later in the pipeline. Second: Chroma's narrowing search always returns its top-K nearest neighbors, even when none of them are genuinely close — a document with no real matches anywhere in the corpus still gets `relationship_candidate_count` arbitrary candidates judged by the LLM, each one a chance for a spurious confirmation.
