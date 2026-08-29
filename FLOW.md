@@ -9,12 +9,12 @@ change to an entry point or call chain.
 > `metadata`, `embeddings`, `relationships`), `scheduler/daily_batch.py`,
 > and three extractors (local files, Notion, browser history) are
 > implemented and merged to `main`. The agent layer is under way:
-> `agent/router.py` and `agent/search_nodes.py` are implemented (see
-> below); graph traversal, the merger, the synthesizer, and LangGraph
-> wiring in `agent/graph.py` are next, alongside the remaining three
-> extractors (Gmail, GitHub, Google Calendar) and the API/frontend layers.
-> The `POST /api/query` entry point below is still documented as designed
-> in `docs/` and marked
+> `agent/router.py`, `agent/search_nodes.py`, and
+> `agent/graph_traversal.py` are implemented (see below); the merger, the
+> synthesizer, and LangGraph wiring in `agent/graph.py` are next, alongside
+> the remaining three extractors (Gmail, GitHub, Google Calendar) and the
+> API/frontend layers. The `POST /api/query` entry point below is still
+> documented as designed in `docs/` and marked
 > _(not yet implemented)_ until `agent/graph.py` and `api/` exist.
 
 ---
@@ -409,6 +409,23 @@ item count as one hit.
   2026-08-25) and calls `storage/sqlite_store.py::keyword_search()` for
   the top `config.yaml`'s `retrieval.top_k_keyword` chunks. A question with
   no significant terms returns `[]` without querying at all.
+
+---
+
+## Shared: graph traversal node (`agent/graph_traversal.py`)
+
+Not an entry point itself — will be called by `agent/graph.py::run()` once
+it exists, only when `agent/router.py::route()` sets `graph_traversal =
+True`. Runs alongside, never instead of, the search nodes above — it has
+no independent starting point into the graph (see DECISIONS.md,
+2026-08-25).
+
+- `graph_traversal(driver, seed_hits) -> list[SearchHit]` — for each seed
+  hit (from vector/keyword search), fetches its one-hop neighbors via
+  `storage/neo4j_store.py::get_related_items()`, excludes anything already
+  in the seed set, and ranks the rest by how many distinct seeds connect to
+  them (ties broken by the best seed rank that reached them). A seed whose
+  lookup fails is logged and skipped, not fatal.
 
 ---
 
