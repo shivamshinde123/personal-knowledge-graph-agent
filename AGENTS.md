@@ -89,7 +89,7 @@ This project uses [uv](https://docs.astral.sh/uv/) as the sole Python package ma
 - **Initial setup**: `uv sync` — creates the virtual environment and installs exact locked dependencies in one step.
 - **Adding a dependency**: `uv add <package>` (or `uv add --dev <package>` for dev-only tools like `pytest`, `black`, `ruff`) — never hand-edit dependency versions into `pyproject.toml` without running `uv add`/`uv lock` afterward, so `uv.lock` stays in sync.
 - **Removing a dependency**: `uv remove <package>`.
-- **Running project code**: `uv run <command>` (e.g. `uv run pytest`, `uv run python scheduler/daily_batch.py`) rather than activating the venv manually — this guarantees the locked environment is used.
+- **Running project code**: `uv run <command>` (e.g. `uv run pytest`, `uv run python -m scheduler.daily_batch`) rather than activating the venv manually — this guarantees the locked environment is used. Use module invocation (`-m`) for scripts under a package directory, not a raw file path — `uv run python scheduler/daily_batch.py` fails with `ModuleNotFoundError` because it only puts the script's own directory on `sys.path`, not the project root that its absolute imports need.
 - **Upgrading dependencies**: `uv lock --upgrade` (all) or `uv lock --upgrade-package <package>` (single), reviewed and committed deliberately, not as a side effect of an unrelated change.
 - `uv.lock` is committed to the repository; the virtual environment directory (`.venv/`) is not.
 
