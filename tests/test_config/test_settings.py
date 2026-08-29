@@ -14,6 +14,7 @@ from config.settings import (
     get_settings,
     load_config,
     reload_settings,
+    update_llm_config,
 )
 
 
@@ -193,6 +194,106 @@ class TestPathsAreAnchoredToProjectRoot:
         once = anchor_path(Path("data/pkg.db"))
 
         assert anchor_path(once) == once
+
+
+_SAMPLE_CONFIG = """\
+# Non-secret configuration for the Personal Knowledge Graph Agent.
+# Reference: docs/Environment_Config_Reference.docx section 4.
+
+llm:
+  provider_mode: mixed # fully_local | fully_cloud | mixed
+  local_model: llama3:8b # used when provider_mode is fully_local or mixed
+  cloud_model: anthropic/claude-sonnet-4 # used for cloud-routed tasks
+
+ingestion:
+  schedule: "0 23 * * *" # cron expression; default 11 PM daily
+  batch_metadata_group_size: 10
+
+filters:
+  min_content_length: 20
+  browser_history:
+    min_visit_count: 2
+    domain_blocklist:
+      - google.com/search
+      - facebook.com
+
+chunking:
+  target_chunk_size_tokens: 400
+  chunk_overlap_tokens: 40
+
+retrieval:
+  top_k_vector: 8
+  top_k_keyword: 8
+  relationship_candidate_count: 10
+  relationship_confidence_threshold: 0.6
+
+embedding:
+  model: sentence-transformers/all-MiniLM-L6-v2
+"""
+
+
+class TestUpdateLlmConfig:
+    def test_updates_only_the_given_fields(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(_SAMPLE_CONFIG, encoding="utf-8")
+
+        result = update_llm_config(provider_mode="fully_cloud", path=config_path)
+
+        assert result.llm.provider_mode == "fully_cloud"
+        assert result.llm.cloud_model == "anthropic/claude-sonnet-4"
+        assert result.llm.local_model == "llama3:8b"
+
+    def test_updates_multiple_fields_at_once(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(_SAMPLE_CONFIG, encoding="utf-8")
+
+        result = update_llm_config(
+            provider_mode="fully_cloud", cloud_model="openai/gpt-4o", path=config_path
+        )
+
+        assert result.llm.provider_mode == "fully_cloud"
+        assert result.llm.cloud_model == "openai/gpt-4o"
+
+    def test_the_written_file_is_actually_updated(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(_SAMPLE_CONFIG, encoding="utf-8")
+
+        update_llm_config(cloud_model="openai/gpt-4o", path=config_path)
+
+        assert "openai/gpt-4o" in config_path.read_text(encoding="utf-8")
+
+    def test_comments_and_other_sections_are_preserved(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(_SAMPLE_CONFIG, encoding="utf-8")
+
+        update_llm_config(provider_mode="fully_cloud", path=config_path)
+
+        written = config_path.read_text(encoding="utf-8")
+        assert "# fully_local | fully_cloud | mixed" in written
+        assert '"0 23 * * *"' in written
+        assert "domain_blocklist:" in written
+        assert "google.com/search" in written
+
+    def test_invalid_provider_mode_raises_and_does_not_write(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(_SAMPLE_CONFIG, encoding="utf-8")
+        original = config_path.read_text(encoding="utf-8")
+
+        with pytest.raises(ConfigError):
+            update_llm_config(provider_mode="not_a_real_mode", path=config_path)
+
+        assert config_path.read_text(encoding="utf-8") == original
+
+    def test_a_non_default_path_does_not_touch_the_global_settings_cache(
+        self, tmp_path
+    ):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(_SAMPLE_CONFIG, encoding="utf-8")
+        before = get_settings()
+
+        update_llm_config(provider_mode="fully_cloud", path=config_path)
+
+        assert get_settings() is before
 
 
 class TestGetSettings:

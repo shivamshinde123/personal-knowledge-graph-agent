@@ -12,6 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from config.settings import ProviderMode
+
 ServiceStatus = Literal["ok", "error"]
 
 
@@ -77,3 +79,28 @@ class SourcesStatusResponse(BaseModel):
 
     last_run: LastRunResponse | None
     sources: list[SourceStatusResponse]
+
+
+class SettingsResponse(BaseModel):
+    """``GET /api/settings`` response body."""
+
+    provider_mode: ProviderMode
+    local_model: str
+    cloud_model: str
+
+
+class SettingsUpdateRequest(BaseModel):
+    """``PUT /api/settings`` request body — every field is optional (partial update)."""
+
+    provider_mode: ProviderMode | None = None
+    local_model: str | None = None
+    cloud_model: str | None = None
+
+
+class SettingsUpdateResponse(BaseModel):
+    """``PUT /api/settings`` response body."""
+
+    status: Literal["updated"]
+    provider_mode: ProviderMode
+    local_model: str
+    cloud_model: str

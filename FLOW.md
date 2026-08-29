@@ -13,13 +13,14 @@ change to an entry point or call chain.
 > `agent/merger.py`, `agent/synthesizer.py`, and the LangGraph wiring in
 > `agent/graph.py` are all implemented (see below). `agent/graph.py::run()`
 > does not yet implement multi-turn conversation memory — see DECISIONS.md,
-> 2026-08-25. The API layer is under way: `api/main.py`,
-> `GET /api/health`, `POST /api/query`, and `GET /api/sources/status` are
-> implemented (see below), with the four error-response handlers
-> registered for every route. Remaining: the settings endpoints (and
-> optionally `POST /api/ingest/trigger`), session persistence (part of the
-> conversation-memory phase), the three extractors (Gmail, GitHub, Google
-> Calendar), and the React frontend.
+> 2026-08-25. The API layer is essentially complete for what doesn't need
+> conversation memory: `api/main.py`, `GET /api/health`, `POST /api/query`,
+> `GET /api/sources/status`, and `GET`/`PUT /api/settings` are all
+> implemented (see below), with five error-response handlers registered
+> for every route. Remaining: session persistence and `GET /api/sessions`/
+> `GET /api/sessions/{id}` (part of the conversation-memory phase),
+> optionally `POST /api/ingest/trigger`, the three extractors (Gmail,
+> GitHub, Google Calendar), and the React frontend.
 
 ---
 
@@ -32,8 +33,19 @@ Every entry point resolves configuration the same way, on first use:
 3. → `load_config()` reads and validates `config/config.yaml`
 4. Returns `Settings(env=..., config=...)`
 
-`reload_settings()` clears the cache and re-reads both sources; it is the
-mechanism `PUT /api/settings` uses to apply a provider change without a restart.
+`reload_settings()` clears the cache and re-reads both sources.
+
+`update_llm_config(*, provider_mode=None, local_model=None, cloud_model=None,
+path=DEFAULT_CONFIG_PATH)` — used by `PUT /api/settings` (see below) to
+apply a provider change without a restart. Loads `config.yaml` with
+`ruamel.yaml`'s round-trip mode (not plain PyYAML — see DECISIONS.md,
+2026-08-25, for why: comments/quotes/list formatting must survive a write),
+updates only the given `llm` fields, validates via
+`LLMConfig.model_validate()` *before* writing anything to disk, then writes
+back and returns the freshly re-read config. Only invalidates the
+process-wide `get_settings()` cache when `path` is the real default file —
+a caller using a different path (tests) gets that file's own config back
+without touching the global cache.
 
 ---
 
@@ -577,3 +589,28 @@ DECISIONS.md, 2026-08-25.
 3. Returns `{"last_run": {...} | null, "sources": [...]}` per
    `docs/API_Specification.docx` section 3.3 — `last_run` is `null` and
    every source reports 0 items/`"ok"` if the batch has never run
+
+---
+
+## Entry point: `GET /api/settings` (`api/routes/settings.py`)
+
+1. `config/settings.py::get_settings().config.llm` read directly — no
+   `agent/` intermediary, since `config` isn't `storage`/`providers` (see
+   DECISIONS.md, 2026-08-25)
+2. Returns `{"provider_mode", "local_model", "cloud_model"}` per
+   `docs/API_Specification.docx` section 3.6
+
+---
+
+## Entry point: `PUT /api/settings` (`api/routes/settings.py`)
+
+1. Request body validated against `api/schemas.py::SettingsUpdateRequest`
+   (all fields optional — a partial update) — an invalid `provider_mode`
+   value is a 422 via the shared validation-error handler
+2. `config/settings.py::update_llm_config()` called with whichever fields
+   were given (see "Shared: configuration loading" above for its own
+   steps) — a `ConfigError` (bad resulting config, or a file I/O failure)
+   is caught by `api/main.py`'s shared handler, mapped to 500
+3. Returns `{"status": "updated", "provider_mode", "local_model",
+   "cloud_model"}` per `docs/API_Specification.docx` section 3.7, reflecting
+   the freshly written-and-reread configuration

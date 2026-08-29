@@ -21,8 +21,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from ruamel.yaml import YAML
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = PROJECT_ROOT / "config"
@@ -247,6 +248,86 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
     if not isinstance(raw, dict):
         raise ConfigError(f"Expected a mapping at the top level of {path}")
     return AppConfig.model_validate(raw)
+
+
+def update_llm_config(
+    *,
+    provider_mode: ProviderMode | None = None,
+    local_model: str | None = None,
+    cloud_model: str | None = None,
+    path: Path = DEFAULT_CONFIG_PATH,
+) -> AppConfig:
+    """Update ``config.yaml``'s ``llm`` section on disk, in place.
+
+    Used by ``PUT /api/settings``. Only the given fields are changed; the
+    rest of the file — including every comment and the ``llm`` block's own
+    unset fields — is left untouched, via ``ruamel.yaml``'s round-trip
+    mode rather than a plain re-serialize (which would silently strip
+    every comment in the file, including the ones documenting each
+    setting's valid values — see ``DECISIONS.md``).
+
+    Args:
+        provider_mode: New provider mode, or ``None`` to leave unchanged.
+        local_model: New local model tag, or ``None`` to leave unchanged.
+        cloud_model: New cloud model id, or ``None`` to leave unchanged.
+        path: Path to the YAML configuration file. Defaults to the real
+            configuration file; passing a different path (tests) writes
+            there instead and leaves the process-wide ``get_settings()``
+            cache untouched.
+
+    Returns:
+        The freshly reloaded configuration, reflecting the write. Read
+        back from ``path`` itself, not assumed from the in-memory update,
+        so this also confirms the write actually parses correctly.
+
+    Raises:
+        ConfigError: If the file can't be read/parsed, or the resulting
+            ``llm`` section fails validation — checked *before* anything is
+            written to disk, so a bad update never corrupts the file.
+    """
+    yaml_rt = YAML()
+    yaml_rt.preserve_quotes = True
+    yaml_rt.indent(mapping=2, sequence=4, offset=2)
+    try:
+        with path.open(encoding="utf-8") as f:
+            data = yaml_rt.load(f)
+    except OSError as exc:
+        raise ConfigError(f"Could not read {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ConfigError(f"Expected a mapping at the top level of {path}")
+
+    llm_section = data.get("llm") or {}
+    updated = dict(llm_section)
+    if provider_mode is not None:
+        updated["provider_mode"] = provider_mode
+    if local_model is not None:
+        updated["local_model"] = local_model
+    if cloud_model is not None:
+        updated["cloud_model"] = cloud_model
+
+    try:
+        LLMConfig.model_validate(updated)
+    except ValidationError as exc:
+        raise ConfigError(f"Invalid LLM configuration: {exc}") from exc
+
+    for key, value in updated.items():
+        llm_section[key] = value
+    data["llm"] = llm_section
+
+    try:
+        with path.open("w", encoding="utf-8") as f:
+            yaml_rt.dump(data, f)
+    except OSError as exc:
+        raise ConfigError(f"Could not write {path}: {exc}") from exc
+
+    # reload_settings()/get_settings() are cached against DEFAULT_CONFIG_PATH
+    # specifically. Only invalidate that global cache when this write
+    # actually targeted it — a caller using a non-default `path` (tests)
+    # gets that file's own freshly parsed config back, without silently
+    # refreshing the process-wide cache from an unrelated file.
+    if path == DEFAULT_CONFIG_PATH:
+        return reload_settings().config
+    return load_config(path)
 
 
 @lru_cache(maxsize=1)
