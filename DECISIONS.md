@@ -8,6 +8,94 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-25 — FastAPI resources live on `app.state`, tests inject a no-op lifespan
+
+**Context**: `api/main.py` needs to hold a long-lived SQLite connection,
+Chroma collection, and Neo4j driver for the whole app process, opened once
+at startup rather than per-request (matching `scheduler/daily_batch.py`'s
+`main()`/`_run()` split). Tests need to exercise real routes via FastAPI's
+`TestClient` without ever triggering the real, settings-derived
+connections — the same "don't silently touch real resources in tests"
+lesson from `scheduler/daily_batch.py`'s `_EXTRACTORS` test-isolation bug
+(DECISIONS.md, 2026-08-24) applies here just as much.
+
+**Decision**: `create_app(*, lifespan_fn=lifespan)` takes the lifespan
+context manager as a parameter, defaulting to the real one. Tests pass a
+no-op lifespan and set `app.state.conn`/`collection`/`driver` directly to
+test doubles before making requests. Route handlers read resources from
+`request.app.state` rather than via FastAPI's `Depends()`-based dependency
+injection — simpler here since nothing needs `dependency_overrides`, and
+route modules never need to import anything back from `api/main.py` (no
+circular-import concerns to design around either).
+
+**Alternatives considered**: `Depends()`-based dependency functions with
+`app.dependency_overrides` in tests — rejected as more machinery than this
+app needs; `app.state` plus an injectable lifespan achieves the same test
+isolation more simply.
+
+**Affects**: `api/main.py`, `tests/test_api/conftest.py`
+
+---
+
+## 2026-08-25 — SQLite connections open with `check_same_thread=False`
+
+**Context**: `api/main.py` opens one SQLite connection at startup and
+holds it in `app.state` for the app's lifetime — necessary because
+`agent/graph.py::run()`'s signature takes an already-open `conn` (matching
+`scheduler/daily_batch.py`'s established `_run(conn, collection, driver)`
+pattern). FastAPI runs synchronous route handlers in a threadpool, though,
+so the thread handling a given request is never the thread that opened the
+connection during lifespan startup. `sqlite3.connect()` defaults to
+`check_same_thread=True`, which raises `sqlite3.ProgrammingError` the
+moment a connection is used from any thread other than the one that
+created it — this was caught immediately by a real API test failure, not
+theoretically.
+
+**Decision**: `storage/sqlite_store.py::connect()` now passes
+`check_same_thread=False`. This is a narrowly scoped fix: it lifts
+sqlite3's same-*thread* restriction but adds no locking of its own, so
+genuinely concurrent access from multiple threads at the same instant is
+still the caller's responsibility to serialize. Accepted as reasonable for
+this project's actual scale — a single-user, localhost-only chat interface
+realistically sees one in-flight query at a time, not concurrent write
+contention.
+
+**Alternatives considered**: Opening a fresh SQLite connection per request
+instead of sharing one — rejected as unnecessary overhead (a fresh
+connection re-runs schema initialization every request) for a project
+whose actual concurrency profile doesn't need it; worth revisiting if this
+project ever needed genuine concurrent-request support. Adding a
+`threading.Lock()` around every SQLite call — rejected as unneeded
+complexity for the same reason.
+
+**Affects**: `storage/sqlite_store.py`
+
+---
+
+## 2026-08-25 — Health check lives in `agent/health.py`, not `api/routes/health.py`
+
+**Context**: `api/__init__.py`'s own docstring states the API layer
+"depends only on the agent's public entrypoint, never reaching into
+`storage` or `providers` directly," but a meaningful health check has to
+individually probe SQLite, Chroma, Neo4j, and the configured LLM provider
+— all storage/provider-layer concerns.
+
+**Decision**: The actual check logic (`check_health()`) lives in a new
+`agent/health.py`, since `agent/__init__.py`'s docstring is the layer
+explicitly allowed to depend on `storage`/`providers`. `api/routes/health.py`
+does nothing but call it and shape the response — it never imports from
+`storage`/`providers` itself, preserving the stated layering rule.
+`agent/health.py` isn't in `File_Folder_Structure.docx`'s documented file
+list, but is a minimal, narrowly-scoped extension consistent with the
+existing `agent/` package boundary. The `llm_provider` check only confirms
+the configured provider can be *constructed* (catches a missing API key,
+the most common misconfiguration) — it never makes a real LLM API call,
+which would add real cost/latency to every health check.
+
+**Affects**: `agent/health.py`, `api/routes/health.py`
+
+---
+
 ## 2026-08-25 — Agent graph uses a linear StateGraph with internal short-circuiting, not conditional-edge fan-out
 
 **Context**: `agent/router.py::route()` decides which of vector search,

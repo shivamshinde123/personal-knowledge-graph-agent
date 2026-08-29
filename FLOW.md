@@ -13,10 +13,11 @@ change to an entry point or call chain.
 > `agent/merger.py`, `agent/synthesizer.py`, and the LangGraph wiring in
 > `agent/graph.py` are all implemented (see below). `agent/graph.py::run()`
 > does not yet implement multi-turn conversation memory — see DECISIONS.md,
-> 2026-08-25. Remaining: the three extractors (Gmail, GitHub, Google
-> Calendar) and the API/frontend layers — `POST /api/query` below is still
-> documented as designed in `docs/` and marked _(not yet implemented)_
-> until `api/` itself exists to call `agent/graph.py::run()`.
+> 2026-08-25. The API layer is starting: `api/main.py` and
+> `GET /api/health` are implemented (see below). Remaining: the query,
+> sources, and settings endpoints, session persistence (part of the
+> conversation-memory phase), the three extractors (Gmail, GitHub, Google
+> Calendar), and the React frontend.
 
 ---
 
@@ -500,19 +501,47 @@ as one fixed, linear sequence of nodes:
 
 ---
 
-## Entry point: `POST /api/query` (`api/routes/query.py`) — _(not yet implemented)_
+## Entry point: `api/main.py` startup (`create_app()`)
 
-1. Request validated against `api/schemas.py`
-2. `agent/graph.py::run()` invoked (see above for its own internal steps)
-3. Response serialized per `docs/API_Specification.docx` and returned
+Run via `uv run uvicorn api.main:app`. `create_app(*, lifespan_fn=lifespan)`
+builds the FastAPI app and registers every route module from
+`api/routes/`; the module-level `app = create_app()` is what `uvicorn`
+actually serves.
+
+1. On startup, the `lifespan` context manager opens one SQLite connection
+   (`storage/sqlite_store.py::connect()`), one Chroma collection
+   (`storage/chroma_store.py::get_collection()`), and one Neo4j driver
+   (`storage/neo4j_store.py::get_driver()`), and stores them on
+   `app.state.conn`/`collection`/`driver` for the process's lifetime —
+   route handlers read them from `request.app.state` rather than via
+   `Depends()` (see DECISIONS.md, 2026-08-25)
+2. On shutdown, the driver and connection are closed
+3. Tests substitute a no-op `lifespan_fn` and set `app.state` directly to
+   test doubles (`tests/test_api/conftest.py`), so a test run never opens
+   the real, settings-derived connections
+
+Per `docs/File_Folder_Structure.docx` section 4, adding a new API endpoint
+means adding a route module under `api/routes/`, registering it in
+`create_app()`, and defining its request/response shape in
+`api/schemas.py`.
 
 ---
 
-## Entry point: `api/main.py` startup — _(not yet implemented)_
+## Entry point: `GET /api/health` (`api/routes/health.py`)
 
-1. FastAPI app created; `get_settings()` resolves configuration
-2. Storage clients opened once and held for the process lifetime
-   (`storage/*_store.py`)
-3. Route modules from `api/routes/` registered
-4. Agent graph compiled once at startup (`agent/graph.py`) rather than per
-   request
+1. Reads `conn`/`collection`/`driver` from `request.app.state`
+2. `agent/health.py::check_health()` probes each — see DECISIONS.md,
+   2026-08-25, for why this logic lives in `agent/` rather than the route
+   module itself (the API layer never imports `storage`/`providers`
+   directly)
+3. Returns `{"status": "ok" | "degraded", "services": {...}}` per
+   `docs/API_Specification.docx` section 3.2
+
+---
+
+## Entry point: `POST /api/query` (`api/routes/query.py`) — _(not yet implemented)_
+
+1. Request validated against `api/schemas.py`
+2. `agent/graph.py::run()` invoked, reading `conn`/`collection`/`driver`
+   from `request.app.state` (see above for `run()`'s own internal steps)
+3. Response serialized per `docs/API_Specification.docx` and returned

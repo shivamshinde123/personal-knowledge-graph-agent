@@ -202,7 +202,13 @@ def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
 
     Returns:
         An open connection with ``row_factory`` set to ``sqlite3.Row`` and
-        foreign key enforcement turned on.
+        foreign key enforcement turned on. Opened with
+        ``check_same_thread=False`` since ``api/main.py`` holds one
+        connection for the app's lifetime and FastAPI runs sync route
+        handlers in a threadpool — see DECISIONS.md. Callers doing their
+        own multi-threaded concurrent access are responsible for
+        serializing writes themselves; this only lifts sqlite3's
+        same-thread restriction, it doesn't add locking.
 
     Raises:
         StorageError: If the connection or schema initialization fails.
@@ -213,7 +219,7 @@ def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
     try:
         if target != ":memory:":
             Path(target).parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(target)
+        conn = sqlite3.connect(target, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.executescript(_SCHEMA)
