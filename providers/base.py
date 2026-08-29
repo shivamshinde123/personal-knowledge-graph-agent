@@ -36,7 +36,7 @@ from config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
-Task = Literal["metadata", "relationship", "answer"]
+Task = Literal["metadata", "relationship", "answer", "condense"]
 
 _MAX_RETRIES = 3
 _BASE_DELAY_SECONDS = 1.0
@@ -143,6 +143,33 @@ class ProviderInterface(ABC):
 
         Returns:
             The generated answer text.
+
+        Raises:
+            ProviderError: If the call fails after retries are exhausted.
+        """
+
+    @abstractmethod
+    def generate_search_query(
+        self, question: str, history: Sequence[ConversationTurn]
+    ) -> str:
+        """Rewrite a follow-up question into a standalone search query.
+
+        Retrieval (the Query Router and the search nodes) only ever sees
+        the current question's raw text, so a vague follow-up like "why was
+        the second one chosen?" has no topical keywords of its own to
+        retrieve on. This resolves references like "it", "that", or "the
+        second one" against the prior conversation, producing a
+        self-contained query for retrieval to run instead — the original
+        ``question`` is still what's shown to the user and passed to
+        :meth:`generate_answer`. See ``DECISIONS.md``.
+
+        Args:
+            question: The user's natural language question.
+            history: Prior turns in this conversation, oldest first. Never
+                called with empty history — see ``agent/graph.py``.
+
+        Returns:
+            A standalone rewrite of ``question``, suitable for retrieval.
 
         Raises:
             ProviderError: If the call fails after retries are exhausted.
@@ -283,6 +310,20 @@ def _build_answer_prompt(
     )
 
 
+def _build_condense_prompt(question: str, history: Sequence[ConversationTurn]) -> str:
+    transcript = "\n".join(f"{turn.role.capitalize()}: {turn.text}" for turn in history)
+    return (
+        "Rewrite the follow-up question below as a standalone search query, "
+        "using the prior conversation to resolve references like 'it', "
+        "'that', or 'the second one' into the specific thing(s) they refer "
+        "to. Keep it a single question or phrase capturing what the "
+        "follow-up is actually asking about. Respond with ONLY the "
+        "rewritten query text — no quotes, no explanation, no other "
+        "text.\n\n"
+        f"Prior conversation:\n{transcript}\n\nFollow-up question: {question}"
+    )
+
+
 class LangChainProvider(ProviderInterface):
     """A provider backed by any LangChain chat model.
 
@@ -340,6 +381,21 @@ class LangChainProvider(ProviderInterface):
 
         return _retry_with_backoff(call, provider_name=self._provider_name)
 
+    def generate_search_query(
+        self, question: str, history: Sequence[ConversationTurn]
+    ) -> str:
+        """See :meth:`ProviderInterface.generate_search_query`."""
+        prompt = _build_condense_prompt(question, history)
+
+        def call() -> str:
+            response = self._chat_model.invoke(prompt)
+            rewritten = str(response.content).strip()
+            if not rewritten:
+                raise ValueError("Condensed query response was empty")
+            return rewritten
+
+        return _retry_with_backoff(call, provider_name=self._provider_name)
+
 
 def get_provider(task: Task) -> ProviderInterface:
     """Select the configured provider for a given task.
@@ -350,7 +406,11 @@ def get_provider(task: Task) -> ProviderInterface:
     - ``fully_cloud``: every task runs through OpenRouter.
     - ``mixed``: the low-frequency, quality-sensitive ``"answer"`` task runs
       through OpenRouter; the cheaper, high-frequency ``"metadata"`` and
-      ``"relationship"`` ingestion tasks run through Ollama.
+      ``"relationship"`` ingestion tasks run through Ollama, as does
+      ``"condense"`` — it runs on every follow-up question, and a rough
+      rewrite that still improves retrieval over the raw follow-up is good
+      enough; the final answer is what actually needs the better model.
+      See ``DECISIONS.md``.
 
     Args:
         task: Which kind of call the returned provider will be used for.

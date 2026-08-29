@@ -15,6 +15,7 @@ import pytest
 
 from agent.graph import run
 from pipeline.embeddings import embed_chunks
+from providers.base import ProviderError
 from storage.chroma_store import get_collection
 from storage.neo4j_store import (
     ItemNode,
@@ -102,6 +103,22 @@ class FakeProvider:
     def generate_answer(self, question, context, history=()):
         self.calls.append((question, list(context), tuple(history)))
         return self._answer
+
+
+class FakeCondenseProvider:
+    """A fake ProviderInterface returning a fixed rewritten search query."""
+
+    def __init__(self, search_query=None, error=None):
+        """Return ``search_query`` (or raise ``error``) for every call."""
+        self._search_query = search_query
+        self._error = error
+        self.calls: list[tuple[str, tuple]] = []
+
+    def generate_search_query(self, question, history):
+        self.calls.append((question, tuple(history)))
+        if self._error is not None:
+            raise self._error
+        return self._search_query
 
 
 def ingest(conn, collection, *, item_id, title, text, source_type="notion"):
@@ -231,6 +248,89 @@ class TestRun:
         )
 
         assert result.session_id == "sess-123"
+
+
+class TestFollowUpQueryCondensing:
+    def test_a_fresh_session_never_calls_the_condense_provider(
+        self, conn, collection, driver, monkeypatch
+    ):
+        condense_provider = FakeCondenseProvider()
+        monkeypatch.setattr("agent.graph.get_provider", lambda task: condense_provider)
+        monkeypatch.setattr(
+            "agent.synthesizer.get_provider", lambda task: FakeProvider()
+        )
+
+        run(conn, collection, driver, "What did I work on yesterday?")
+
+        assert condense_provider.calls == []
+
+    def test_a_follow_up_retrieves_using_the_condensed_query_not_the_raw_one(
+        self, conn, collection, driver, monkeypatch
+    ):
+        ingest(
+            conn,
+            collection,
+            item_id="item-storage",
+            title="Storage design",
+            text="The storage layer uses SQLite, Chroma, and Neo4j together.",
+        )
+        answer_provider = FakeProvider()
+        monkeypatch.setattr(
+            "agent.synthesizer.get_provider", lambda task: answer_provider
+        )
+        run(
+            conn,
+            collection,
+            driver,
+            "What database technologies does the storage layer use?",
+            "sess-1",
+        )
+
+        # The raw follow-up shares no vocabulary with the ingested item —
+        # only the condensed rewrite does, so this only passes if retrieval
+        # actually used the condensed query.
+        condense_provider = FakeCondenseProvider(
+            search_query="What storage technologies does the system use?"
+        )
+        monkeypatch.setattr("agent.graph.get_provider", lambda task: condense_provider)
+
+        result = run(conn, collection, driver, "Tell me more about that", "sess-1")
+
+        assert len(condense_provider.calls) == 1
+        question, history = condense_provider.calls[0]
+        assert question == "Tell me more about that"
+        assert len(history) == 2
+        assert any(s.item_id == "item-storage" for s in result.sources)
+
+    def test_condensing_failure_falls_back_to_the_raw_question(
+        self, conn, collection, driver, monkeypatch
+    ):
+        ingest(
+            conn,
+            collection,
+            item_id="item-storage",
+            title="Storage design",
+            text="What database technologies does the storage layer use SQLite?",
+        )
+        answer_provider = FakeProvider()
+        monkeypatch.setattr(
+            "agent.synthesizer.get_provider", lambda task: answer_provider
+        )
+        run(
+            conn,
+            collection,
+            driver,
+            "What database technologies does the storage layer use?",
+            "sess-1",
+        )
+
+        condense_provider = FakeCondenseProvider(error=ProviderError("boom"))
+        monkeypatch.setattr("agent.graph.get_provider", lambda task: condense_provider)
+
+        # Should not raise — falls back to retrieving on the raw question.
+        result = run(conn, collection, driver, "Tell me more about that", "sess-1")
+
+        assert result.answer
 
 
 class TestConversationMemory:

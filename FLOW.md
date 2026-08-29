@@ -173,11 +173,13 @@ abstraction" ground rule). Callers never import `local_provider.py` or
 only `providers/base.py`'s `get_provider()` and its return type,
 `ProviderInterface`.
 
-1. `get_provider(task)` — `task` is `"metadata"`, `"relationship"`, or
-   `"answer"`; reads `settings.config.llm.provider_mode` and returns
-   `create_local_provider()` (Ollama), `create_openrouter_provider()`
-   (OpenRouter), or, under `mixed`, routes `"answer"` to OpenRouter and the
-   two cheaper ingestion tasks to Ollama (see DECISIONS.md, 2026-08-24)
+1. `get_provider(task)` — `task` is `"metadata"`, `"relationship"`,
+   `"condense"`, or `"answer"`; reads `settings.config.llm.provider_mode`
+   and returns `create_local_provider()` (Ollama),
+   `create_openrouter_provider()` (OpenRouter), or, under `mixed`, routes
+   `"answer"` to OpenRouter and the three cheaper, higher-frequency tasks
+   (`"metadata"`, `"relationship"`, `"condense"`) to Ollama (see
+   DECISIONS.md, 2026-08-24 and 2026-08-29)
 2. Both concrete providers construct a `LangChainProvider` around a
    LangChain chat model (`ChatOllama` / `ChatOpenAI`) — this is where every
    provider call's prompt building, JSON response parsing, and
@@ -205,6 +207,10 @@ only `providers/base.py`'s `get_provider()` and its return type,
    its own labeled prompt section, explicitly *not* citable — only for
    resolving follow-up references like "the second one" (see DECISIONS.md,
    2026-08-25)
+6. `provider.generate_search_query(question, history)` — called by
+   `agent/graph.py`'s `condense_query` node, only when `history` is
+   non-empty, to rewrite a follow-up into a standalone retrieval query
+   (see DECISIONS.md, 2026-08-29)
 
 ---
 
@@ -527,29 +533,39 @@ directly (see `tests/test_agent/test_graph.py`).
    2026-08-25.
 2. Builds a fresh LangGraph `StateGraph` per call (`_build_graph()`,
    closures over this call's `conn`/`collection`/`driver` — see
-   DECISIONS.md, 2026-08-25) and invokes it, with `history` in the initial
-   state, as one fixed, linear sequence of nodes:
+   DECISIONS.md, 2026-08-25) and invokes it, with `history` (and
+   `search_query` initialized to the raw `question`) in the initial state,
+   as one fixed, linear sequence of nodes:
 
-   a. `router` — `agent/router.py::route(question)` → the `RouteDecision`
-      stored in state for every downstream node to check
+   a. `condense_query` — if `history` is non-empty, calls
+      `get_provider("condense").generate_search_query(question, history)`
+      and overwrites `search_query` in state with the rewrite; a no-op
+      (state unchanged) for a fresh session, or if the call raises
+      `ProviderError` (logged and swallowed — see DECISIONS.md, 2026-08-29)
+   b. `router` — `agent/router.py::route(search_query)` → the
+      `RouteDecision` stored in state for every downstream node to check
 
       **Branch point**: this is the agent's main branch. A quoted phrase
       or a "from"/"by" filter skips vector search; relationship-implying
       phrasing (e.g. "how does X relate to Y") enables graph traversal;
-      keyword search always runs.
-   b. `vector_search` — `agent/search_nodes.py::vector_search()` if
-      `decision.vector_search`, else contributes `[]`
-   c. `keyword_search` — `agent/search_nodes.py::keyword_search_node()` if
-      `decision.keyword_search` (always, currently), else `[]`
-   d. `graph_traversal` — `agent/graph_traversal.py::graph_traversal()`,
+      keyword search always runs. Runs on `search_query`, not the raw
+      `question`, so a condensed follow-up routes the same way an
+      equivalent first-turn question would.
+   c. `vector_search` — `agent/search_nodes.py::vector_search()` against
+      `search_query` if `decision.vector_search`, else contributes `[]`
+   d. `keyword_search` — `agent/search_nodes.py::keyword_search_node()`
+      against `search_query` if `decision.keyword_search` (always,
+      currently), else `[]`
+   e. `graph_traversal` — `agent/graph_traversal.py::graph_traversal()`,
       seeded from the combined vector + keyword hits, if
       `decision.graph_traversal`, else `[]`
-   e. `merge` — `agent/merger.py::merge()` — Reciprocal Rank Fusion across
+   f. `merge` — `agent/merger.py::merge()` — Reciprocal Rank Fusion across
       whichever of the three hit lists are non-empty
-   f. `synthesize` — `agent/synthesizer.py::synthesize()` — fetches full
+   g. `synthesize` — `agent/synthesizer.py::synthesize()` — fetches full
       text for the top results from SQLite, calls
-      `get_provider("answer").generate_answer(question, context, history)`,
-      returns a cited answer
+      `get_provider("answer").generate_answer(question, context, history)`
+      using the original `question` (not `search_query`), returns a cited
+      answer
 3. After the graph returns, calls
    `storage/sqlite_store.py::record_conversation_turn()` with the resolved
    session id, the question, the final answer, and its sources — this
