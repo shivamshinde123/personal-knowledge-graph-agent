@@ -198,7 +198,13 @@ only `providers/base.py`'s `get_provider()` and its return type,
    outside that set is treated as malformed and retried, same as invalid
    JSON — see DECISIONS.md, 2026-08-24, for why free-form labels were
    dropped after a real ingestion run showed them fragmenting into 16
-   near-duplicate variants
+   near-duplicate variants. The prompt instructs the model to name any
+   verbatim-shared boilerplate before judging and to not treat it as
+   relationship evidence on its own; parsing accordingly tolerates a
+   reasoning preamble before the JSON (`base._extract_json_object()`
+   scans for the last brace-balanced object containing a `related` key)
+   rather than requiring the whole response to be pure JSON — see
+   DECISIONS.md, 2026-08-29
 5. `provider.generate_answer(question, context, history=())` — called by
    `agent/synthesizer.py::synthesize()`; the response cites `context`
    positionally (`[1]`, `[2]`, …), which the synthesizer resolves against

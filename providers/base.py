@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
@@ -247,6 +248,18 @@ def _build_relationship_prompt(source_text: str, candidate_text: str) -> str:
         "this way are NOT actually related. Default to unrelated unless "
         "you can point to a specific, concrete connection between what "
         "Text 2 actually says and what Text 1 actually says.\n\n"
+        "Before judging, first identify any sentence, header, or phrase "
+        "that appears verbatim (or near-verbatim) in both texts — shared "
+        "boilerplate like a title block, a footer, or a templated line "
+        "(e.g. both texts happening to contain the same 'Companion "
+        "document to: <X>' line) is NOT evidence of a relationship between "
+        "Text 1 and Text 2 themselves, even if that shared line names a "
+        "companion or reference — it only counts if the line specifically "
+        "names Text 1 or Text 2 as the OTHER text's companion/reference, "
+        "not some third document, and the line is not identical, "
+        "boilerplate-style text repeated across otherwise-unrelated items. "
+        "Base your judgment only on what is unique to each text once any "
+        "such shared boilerplate is set aside.\n\n"
         "If related, choose exactly one label:\n"
         '- "implements": Text 2 is a concrete realization of something '
         "specifically planned or designed in Text 1 (or vice versa).\n"
@@ -267,8 +280,40 @@ def _build_relationship_prompt(source_text: str, candidate_text: str) -> str:
     )
 
 
+_FLAT_JSON_OBJECT = re.compile(r"\{[^{}]*\}")
+
+
+def _extract_json_object(raw: str) -> str:
+    """Pull a flat JSON object out of a response that may reason before it.
+
+    The relationship prompt now asks the model to first name any shared
+    boilerplate before judging (see DECISIONS.md), and models reliably
+    comply by explaining their reasoning ahead of the JSON rather than
+    emitting ONLY JSON as instructed — so the raw response is no longer
+    reliably pure JSON on its own. Scans for every brace-balanced `{...}`
+    substring and returns the last one that's valid JSON containing a
+    `related` key, since the judgment is always the final thing emitted.
+    Falls back to returning ``raw`` unchanged if nothing matches, so the
+    caller's own ``json.loads`` still raises a clear, familiar error.
+
+    Args:
+        raw: The model's raw response text.
+
+    Returns:
+        The extracted JSON object substring, or ``raw`` if none was found.
+    """
+    for candidate in reversed(_FLAT_JSON_OBJECT.findall(raw)):
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict) and "related" in parsed:
+            return candidate
+    return raw
+
+
 def _parse_relationship_response(raw: str) -> RelationshipJudgment | None:
-    parsed = json.loads(raw)
+    parsed = json.loads(_extract_json_object(raw))
     if not isinstance(parsed, dict) or "related" not in parsed:
         raise ValueError(f"Expected a JSON object with 'related', got: {raw!r}")
     if not parsed["related"]:

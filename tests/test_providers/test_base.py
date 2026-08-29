@@ -126,6 +126,50 @@ class TestGenerateRelationship:
         for label in ("implements", "discussed_in", "planned_in", "companion_to"):
             assert label in prompt
 
+    def test_a_reasoning_preamble_before_the_json_is_still_parsed(self):
+        """Regression coverage for a real false positive on claude-sonnet-4.
+
+        Verified against the real model: asking it to first name any
+        shared boilerplate before judging (see DECISIONS.md, 2026-08-29)
+        reliably makes it explain its reasoning ahead of the JSON, despite
+        the prompt's "ONLY JSON" instruction — so parsing must tolerate a
+        preamble, not just a bare JSON object.
+        """
+        chat_model = FakeChatModel(
+            [
+                "Looking at both texts, I can identify shared boilerplate: "
+                '"Companion document to: X". Setting that aside, the '
+                "content is unrelated.\n\n"
+                '{"related": false}'
+            ]
+        )
+        provider = LangChainProvider(chat_model, provider_name="test")
+
+        assert provider.generate_relationship("a", "b") is None
+
+    def test_a_reasoning_preamble_before_a_confirmed_judgment_is_parsed(self):
+        chat_model = FakeChatModel(
+            [
+                "The shared boilerplate line names Text 2 specifically, so "
+                "this is a genuine companion pairing.\n\n"
+                '{"related": true, "label": "companion_to", "confidence": 0.9}'
+            ]
+        )
+        provider = LangChainProvider(chat_model, provider_name="test")
+
+        judgment = provider.generate_relationship("a", "b")
+
+        assert judgment.label == "companion_to"
+        assert judgment.confidence == 0.9
+
+    def test_prompt_instructs_setting_aside_shared_boilerplate(self):
+        chat_model = FakeChatModel(['{"related": false}'])
+        provider = LangChainProvider(chat_model, provider_name="test")
+
+        provider.generate_relationship("a", "b")
+
+        assert "boilerplate" in chat_model.prompts[0]
+
 
 class TestGenerateAnswer:
     def test_returns_the_raw_response_text(self):
