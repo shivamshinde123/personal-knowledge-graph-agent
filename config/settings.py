@@ -66,6 +66,7 @@ class LLMConfig(BaseModel):
     provider_mode: ProviderMode = "mixed"
     local_model: str = "llama3:8b"
     cloud_model: str = "anthropic/claude-sonnet-4"
+    cloud_max_tokens: int = 4096
 
 
 class IngestionConfig(BaseModel):

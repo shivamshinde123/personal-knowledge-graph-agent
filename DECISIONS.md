@@ -8,6 +8,20 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-29 — `openrouter_provider.py` caps `max_tokens` explicitly
+
+**Context**: `providers/openrouter_provider.py::create_openrouter_provider()`'s `ChatOpenAI` construction set no `max_tokens`, defaulting to the routed model's own maximum (64000 for `anthropic/claude-sonnet-4`) — first hit as a real diagnostic-script failure during the boilerplate-fix work (see this file's "Relationship prompt neutralizes shared boilerplate" entry), then again for real while verifying the new LangSmith eval layer end to end: a real answer-synthesis call failed with an OpenRouter 402 because the account's remaining credit balance couldn't cover a 64000-token request. Tracked as GitHub issue #44.
+
+**Decision**: Added `llm.cloud_max_tokens` to `config.yaml`/`config/settings.py::LLMConfig` (default `4096`) and pass it as `ChatOpenAI(..., max_tokens=settings.config.llm.cloud_max_tokens)`. 4096 is generous for every current cloud-routed task (`"answer"`, `"eval"` — both prose-plus-short-JSON responses) without risking the same credit-exhaustion failure on a routine call.
+
+**Alternatives considered**: Leaving `max_tokens` unset and instead catching the 402 and retrying with a lower cap — rejected as needless complexity; a fixed, sane cap prevents the failure outright rather than reacting to it after the first attempt already failed. Making the cap per-task (e.g. a smaller cap for `"eval"` than `"answer"`) — not done; both tasks produce comparably short output, and a single shared setting is simpler until real usage shows otherwise.
+
+**Verified against real data**: before the fix, a real `"answer"` call failed with `402 - This request requires more credits ... You requested up to 64000 tokens`. After the fix, the exact same real question, run through the real agent end to end, succeeded — a real answer citing the correct source, with real faithfulness (1.0) and relevance (1.0) judge calls completing normally, no 402. A second, separate 402 (`in_flight_budget_exhausted`) hit later in the same verification session is a real, external account-level constraint (the OpenRouter account's remaining budget, run down by this session's own real testing) — not a code defect, and not something this fix is meant to address.
+
+**Affects**: `config/config.yaml`, `config/settings.py`, `providers/openrouter_provider.py`
+
+---
+
 ## 2026-08-29 — LangSmith evaluation layer: eval task, opt-in tracing, real Dataset + evaluate()
 
 **Context**: `docs/Technical_Design_Document.docx` section 13's "realistic evaluation workflow" — a 20-30 question test set, run through LangSmith after any meaningful architecture change, tracking Recall@K for retrieval alongside faithfulness/relevance for final answers — was entirely unbuilt; `eval/` was an empty package. `docs/File_Folder_Structure.docx` specifies `eval/test_questions.json`, `eval/run_evaluation.py`, and `eval/evaluators.py` (faithfulness/relevance/recall scorers).
