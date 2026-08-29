@@ -7,6 +7,7 @@ import the shapes they need from here rather than defining their own.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel
@@ -52,3 +53,27 @@ class ErrorResponse(BaseModel):
 
     error: str
     detail: str
+
+
+class LastRunResponse(BaseModel):
+    """The most recent daily batch run, within a ``SourcesStatusResponse``."""
+
+    run_id: str
+    started_at: datetime
+    completed_at: datetime | None
+    status: str
+
+
+class SourceStatusResponse(BaseModel):
+    """One source's outcome in the most recent run."""
+
+    source_type: str
+    items_processed: int
+    status: ServiceStatus
+
+
+class SourcesStatusResponse(BaseModel):
+    """``GET /api/sources/status`` response body."""
+
+    last_run: LastRunResponse | None
+    sources: list[SourceStatusResponse]

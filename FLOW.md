@@ -13,10 +13,11 @@ change to an entry point or call chain.
 > `agent/merger.py`, `agent/synthesizer.py`, and the LangGraph wiring in
 > `agent/graph.py` are all implemented (see below). `agent/graph.py::run()`
 > does not yet implement multi-turn conversation memory — see DECISIONS.md,
-> 2026-08-25. The API layer is starting: `api/main.py` and
-> `GET /api/health` and `POST /api/query` are implemented (see below), with
-> the four error-response handlers registered for every route. Remaining:
-> the sources and settings endpoints, session persistence (part of the
+> 2026-08-25. The API layer is under way: `api/main.py`,
+> `GET /api/health`, `POST /api/query`, and `GET /api/sources/status` are
+> implemented (see below), with the four error-response handlers
+> registered for every route. Remaining: the settings endpoints (and
+> optionally `POST /api/ingest/trigger`), session persistence (part of the
 > conversation-memory phase), the three extractors (Gmail, GitHub, Google
 > Calendar), and the React frontend.
 
@@ -71,15 +72,16 @@ both endpoint nodes.
 
 ## Shared: SQLite storage (`storage/sqlite_store.py`)
 
-Not an entry point itself — used by the ingestion and query entry points
-below once they're implemented. Documented here because its call shape
-(upsert-then-lookup, replace-not-append for chunks) matters to anything that
-calls it.
+Not an entry point itself — used by the ingestion, agent, and API entry
+points. Documented here because its call shape (upsert-then-lookup,
+replace-not-append for chunks) matters to anything that calls it.
 
 1. `connect(db_path=None)` — opens a connection (default:
-   `settings.env.sqlite_db_path`, or `":memory:"` for tests), enables
-   `PRAGMA foreign_keys`, and runs the schema (idempotent — safe to call on
-   every process start)
+   `settings.env.sqlite_db_path`, or `":memory:"` for tests) with
+   `check_same_thread=False` (needed since `api/main.py` shares one
+   connection across FastAPI's threadpool — see DECISIONS.md, 2026-08-25),
+   enables `PRAGMA foreign_keys`, and runs the schema (idempotent — safe to
+   call on every process start)
 2. Ingesting an item:
    a. `insert_item(conn, item)` → upserts on `(source_type, source_ref_id)`
       and returns the *effective* item id — which may differ from
@@ -91,10 +93,12 @@ calls it.
 3. Querying: `get_item()` / `get_chunks_for_item()` for direct lookups,
    `keyword_search(conn, query, top_k)` for BM25-ranked full-text search —
    this is the keyword half of hybrid search that `agent/search_nodes.py`
-   will call
+   calls
 4. Daily batch bookkeeping: `start_ingestion_run()` →
-   `complete_ingestion_run(status=...)` → `get_last_run_timestamp()` reads the
-   watermark for the next run's `since=`
+   `complete_ingestion_run(status=...)` → `get_last_run_timestamp()` reads
+   the watermark for the next run's `since=`; `get_last_ingestion_run()`
+   returns the most recent run regardless of status (for display, e.g.
+   `agent/sources_status.py` — see DECISIONS.md, 2026-08-25)
 
 ---
 
@@ -560,3 +564,16 @@ DECISIONS.md, 2026-08-25.
    — a `ProviderError`/`VectorStoreError`/`GraphStoreError`/`StorageError`/
    any other exception `run()` raises is caught by `api/main.py`'s shared
    handlers above, not by this route itself
+
+---
+
+## Entry point: `GET /api/sources/status` (`api/routes/sources.py`)
+
+1. Reads `conn` from `request.app.state`
+2. `agent/sources_status.py::get_sources_status()` — see DECISIONS.md,
+   2026-08-25, for how per-source `items_processed`/`status` are derived
+   (not stored) from `storage/sqlite_store.py::get_last_ingestion_run()`
+   plus a per-`source_type` `items` count within that run's window
+3. Returns `{"last_run": {...} | null, "sources": [...]}` per
+   `docs/API_Specification.docx` section 3.3 — `last_run` is `null` and
+   every source reports 0 items/`"ok"` if the batch has never run

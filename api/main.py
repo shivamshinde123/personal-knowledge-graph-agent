@@ -20,7 +20,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from api.routes import health, query
+from api.routes import health, query, sources
 from providers.base import ProviderError
 from storage.chroma_store import VectorStoreError, get_collection
 from storage.neo4j_store import GraphStoreError, get_driver
@@ -53,6 +53,7 @@ def create_app(*, lifespan_fn=lifespan) -> FastAPI:
     app = FastAPI(title="Personal Knowledge Graph Agent", lifespan=lifespan_fn)
     app.include_router(health.router, prefix="/api")
     app.include_router(query.router, prefix="/api")
+    app.include_router(sources.router, prefix="/api")
     _register_exception_handlers(app)
     return app
 
