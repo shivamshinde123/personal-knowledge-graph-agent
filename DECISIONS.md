@@ -8,6 +8,41 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-25 — Query Router is a rule-based heuristic, not an LLM call
+
+**Context**: `Technical_Design_Document.docx` section 8.2 says the Query
+Router "decides which retrieval methods are actually needed" but doesn't
+specify the mechanism. Two signals settle it in favor of a heuristic over
+an LLM call: `providers/base.py`'s `Task` type (`"metadata" | "relationship"
+| "answer"`) has no `"route"` entry, and `Component_Map.docx`'s `QueryRouter`
+row lists only `VectorSearchNode`/`KeywordSearchNode`/`GraphTraversalNode`
+under "Calls" — never `ProviderInterface`, unlike `AnswerSynthesizer`'s row
+which explicitly does.
+
+**Decision**: `agent/router.py::route()` is a pure function using simple
+pattern matching, no LLM call:
+- `keyword_search` is always `True` — cheap, deterministic, and "search is
+  hybrid" is already a locked-in architectural default (`CLAUDE.md`), so
+  there's no real cost to always including it.
+- `vector_search` is skipped only for what looks like an exact lookup: a
+  quoted phrase, or a "from/by \<someone\>" filter pattern — matching the
+  doc's own example ("keyword search ... for a specific lookup like
+  'emails from this recruiter'"). Every other question runs it.
+- `graph_traversal` runs only when the question's phrasing implies the
+  answer depends on how items relate to each other (e.g. "how does X relate
+  to Y", "what led to X") — a fixed list of relationship-implying phrases,
+  matching the doc's other example ("graph traversal for a broad thematic
+  question" being about *connections*, not just content).
+
+**Alternatives considered**: An LLM-based router (asking the model to
+classify which nodes are needed) — rejected per the two signals above, and
+because it would add LLM latency/cost to every single query for a decision
+a handful of regexes can make deterministically and near-instantly.
+
+**Affects**: `agent/router.py`
+
+---
+
 ## 2026-08-25 — Browser history is excluded from relationship detection, enforced in `pipeline/relationships.py`
 
 **Context**: A real end-to-end run of the daily batch (local files +
