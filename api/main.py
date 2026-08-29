@@ -20,7 +20,8 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from api.routes import health, query, sources
+from api.routes import health, query, settings, sources
+from config.settings import ConfigError
 from providers.base import ProviderError
 from storage.chroma_store import VectorStoreError, get_collection
 from storage.neo4j_store import GraphStoreError, get_driver
@@ -54,6 +55,7 @@ def create_app(*, lifespan_fn=lifespan) -> FastAPI:
     app.include_router(health.router, prefix="/api")
     app.include_router(query.router, prefix="/api")
     app.include_router(sources.router, prefix="/api")
+    app.include_router(settings.router, prefix="/api")
     _register_exception_handlers(app)
     return app
 
@@ -63,8 +65,8 @@ def _register_exception_handlers(app: FastAPI) -> None:
 
     Per ``docs/API_Specification.docx`` section 2. The exception *types*
     caught here (``ProviderError``, ``VectorStoreError``, ``GraphStoreError``,
-    ``StorageError``) are imported from ``storage``/``providers`` purely for
-    HTTP status mapping, not to call anything in those layers — this is
+    ``StorageError``, ``ConfigError``) are imported purely for HTTP status
+    mapping, not to call anything in those layers — this is
     presentation-layer plumbing done once, here, not business logic
     scattered across route modules. See ``DECISIONS.md``.
     """
@@ -92,6 +94,12 @@ def _register_exception_handlers(app: FastAPI) -> None:
     async def handle_storage_error(request: Request, exc: Exception) -> JSONResponse:
         return JSONResponse(
             status_code=500, content={"error": "storage_error", "detail": str(exc)}
+        )
+
+    @app.exception_handler(ConfigError)
+    async def handle_config_error(request: Request, exc: ConfigError) -> JSONResponse:
+        return JSONResponse(
+            status_code=500, content={"error": "config_error", "detail": str(exc)}
         )
 
     @app.exception_handler(Exception)

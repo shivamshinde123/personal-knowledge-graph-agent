@@ -8,6 +8,42 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-25 — `PUT /api/settings` writes `config.yaml` with `ruamel.yaml`'s round-trip mode, not plain PyYAML
+
+**Context**: `config/settings.py::load_config()` already reads `config.yaml`
+with plain `yaml.safe_load()`, which is fine for reading. But
+`PUT /api/settings` needs to *write* it back, and `config.yaml` is a
+hand-maintained file where every setting has an inline comment documenting
+its valid values (`provider_mode: mixed # fully_local | fully_cloud |
+mixed`) — a first attempt using plain `yaml.safe_load()` + `yaml.safe_dump()`
+would silently discard every comment and reformat the whole file (verified
+directly: it also stripped the quotes off `schedule: "0 23 * * *"` and
+reindented the list entries) the very first time a user changes a setting
+through the Settings screen.
+
+**Decision**: `config/settings.py::update_llm_config()` uses `ruamel.yaml`'s
+`YAML()` round-trip mode (`preserve_quotes = True`,
+`indent(mapping=2, sequence=4, offset=2)` — tuned to match this file's
+existing indentation exactly) to load, mutate only the `llm` section's
+given keys in place, and write back — verified directly against the real
+`config.yaml`: a diff after the write showed only the two intended lines
+changed, comments/quotes/list formatting all untouched. The new `llm`
+section is validated via `LLMConfig.model_validate()` *before* anything is
+written to disk, so a bad update (an invalid `provider_mode`) can't
+corrupt the file. A `path` parameter (defaulting to the real file) lets
+tests write to a temp file without ever touching the real `config.yaml` or
+the process-wide `get_settings()` cache — that cache is only invalidated
+when the write actually targeted the default path.
+
+**Alternatives considered**: Plain PyYAML dump — rejected outright, as
+verified above. Hand-rolled regex-based line patching — rejected as more
+fragile and harder to reason about than a real round-trip-preserving YAML
+parser for what's still structured editing.
+
+**Affects**: `config/settings.py`, `api/routes/settings.py`
+
+---
+
 ## 2026-08-25 — Per-source item counts/status for `GET /api/sources/status` are derived, not stored
 
 **Context**: `Database_Schema.docx`'s `ingestion_runs` table has a single
