@@ -94,5 +94,10 @@ def client(conn, collection, driver):
     app.state.conn = conn
     app.state.collection = collection
     app.state.driver = driver
-    with TestClient(app) as test_client:
+    # raise_server_exceptions=False: an unhandled exception should exercise
+    # api/main.py's registered Exception handler and come back as a real
+    # HTTP response, the same as it would in production — TestClient's
+    # default instead re-raises it as a Python exception for debugging,
+    # bypassing that handler entirely.
+    with TestClient(app, raise_server_exceptions=False) as test_client:
         yield test_client
