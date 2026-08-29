@@ -1,15 +1,24 @@
 """``GET /api/sources/status``: the most recent daily batch run, per source.
 
 Per ``docs/API_Specification.docx`` section 3.3, for display on the
-Settings screen.
+Settings screen. Also ``GET``/``POST /api/sources/connections`` — live
+per-source connection checks, an extension beyond the original spec (see
+``agent/connection_check.py``, ``DECISIONS.md``).
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
 
+from agent.connection_check import get_connection_status
 from agent.sources_status import get_sources_status
-from api.schemas import LastRunResponse, SourcesStatusResponse, SourceStatusResponse
+from api.schemas import (
+    ConnectionsResponse,
+    ConnectionStatusResponse,
+    LastRunResponse,
+    SourcesStatusResponse,
+    SourceStatusResponse,
+)
 
 router = APIRouter()
 
@@ -38,4 +47,30 @@ def get_sources_status_route(request: Request) -> SourcesStatusResponse:
             )
             for source in result.sources
         ],
+    )
+
+
+@router.get("/sources/connections", response_model=ConnectionsResponse)
+def get_connections_route() -> ConnectionsResponse:
+    """Report each source's live connection status, using the cache if fresh."""
+    return _to_connections_response(get_connection_status())
+
+
+@router.post("/sources/connections/verify", response_model=ConnectionsResponse)
+def verify_connections_route() -> ConnectionsResponse:
+    """Force a fresh check of every source's connection ("Reverify" button)."""
+    return _to_connections_response(get_connection_status(force_refresh=True))
+
+
+def _to_connections_response(connections) -> ConnectionsResponse:
+    return ConnectionsResponse(
+        connections=[
+            ConnectionStatusResponse(
+                source_type=c.source_type,
+                status=c.status,
+                detail=c.detail,
+                checked_at=c.checked_at,
+            )
+            for c in connections
+        ]
     )

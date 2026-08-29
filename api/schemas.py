@@ -81,6 +81,21 @@ class SourcesStatusResponse(BaseModel):
     sources: list[SourceStatusResponse]
 
 
+class ConnectionStatusResponse(BaseModel):
+    """One source's live connection check, within a ``ConnectionsResponse``."""
+
+    source_type: str
+    status: Literal["ok", "error", "not_configured"]
+    detail: str | None
+    checked_at: datetime
+
+
+class ConnectionsResponse(BaseModel):
+    """``GET``/``POST /api/sources/connections`` response body."""
+
+    connections: list[ConnectionStatusResponse]
+
+
 class SettingsResponse(BaseModel):
     """``GET /api/settings`` response body."""
 
