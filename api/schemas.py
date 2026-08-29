@@ -104,3 +104,33 @@ class SettingsUpdateResponse(BaseModel):
     provider_mode: ProviderMode
     local_model: str
     cloud_model: str
+
+
+class SessionSummary(BaseModel):
+    """One session, within a ``SessionsListResponse``."""
+
+    session_id: str
+    title: str | None
+    updated_at: datetime
+
+
+class SessionsListResponse(BaseModel):
+    """``GET /api/sessions`` response body."""
+
+    sessions: list[SessionSummary]
+
+
+class MessageResponse(BaseModel):
+    """One message, within a ``SessionHistoryResponse``."""
+
+    role: Literal["user", "agent"]
+    text: str
+    timestamp: datetime
+    sources: list[SourceResponse] | None = None
+
+
+class SessionHistoryResponse(BaseModel):
+    """``GET /api/sessions/{session_id}`` response body."""
+
+    session_id: str
+    messages: list[MessageResponse]

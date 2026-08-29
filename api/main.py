@@ -21,7 +21,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from api.routes import health, query, settings, sources
+from api.routes import health, query, sessions, settings, sources
 from config.settings import ConfigError
 from providers.base import ProviderError
 from storage.chroma_store import VectorStoreError, get_collection
@@ -70,6 +70,7 @@ def create_app(*, lifespan_fn=lifespan) -> FastAPI:
     app.include_router(query.router, prefix="/api")
     app.include_router(sources.router, prefix="/api")
     app.include_router(settings.router, prefix="/api")
+    app.include_router(sessions.router, prefix="/api")
     _register_exception_handlers(app)
     return app
 

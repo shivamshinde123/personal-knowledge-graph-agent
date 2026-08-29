@@ -15,17 +15,20 @@ change to an entry point or call chain.
 > under way: session/message storage (`storage/sqlite_store.py`), history
 > support in the provider layer (`providers/base.py`), and
 > `agent/graph.py::run()` loading/persisting turns are all implemented —
-> see DECISIONS.md, 2026-08-25. The API layer is essentially complete for
-> what doesn't need conversation memory: `api/main.py`, `GET /api/health`,
-> `POST /api/query`, `GET /api/sources/status`, and `GET`/`PUT /api/settings`
-> are all implemented (see below), with five error-response handlers
-> registered for every route. The React frontend (`frontend/`) is
-> implemented and functional for everything the backend currently
-> supports: the chat window and the settings screen (see below) — its
-> session sidebar is an honest empty state, not fake data, pending the
-> `GET /api/sessions` endpoints. Remaining: `GET /api/sessions`/
-> `GET /api/sessions/{id}` and wiring the frontend sidebar to them
-> (finishing the conversation-memory phase), optionally
+> see DECISIONS.md, 2026-08-25. **Known open gap**: history reaches the
+> answer-synthesis prompt correctly, but retrieval (router, search nodes,
+> graph traversal) only ever sees the current question's raw text, so a
+> vague follow-up like "the second one" can retrieve the wrong context —
+> verified directly against real data, not fixed yet (see DECISIONS.md,
+> 2026-08-25). The API layer is complete: `api/main.py`,
+> `GET /api/health`, `POST /api/query`, `GET /api/sources/status`,
+> `GET`/`PUT /api/settings`, and `GET /api/sessions`/
+> `GET /api/sessions/{id}` are all implemented (see below), with five
+> error-response handlers registered for every route. The React frontend
+> (`frontend/`) is implemented and functional for the chat window and
+> settings screen — its session sidebar still shows a hardcoded empty
+> state and hasn't been wired to the now-real `GET /api/sessions`
+> endpoints yet. Remaining: that frontend wiring, optionally
 > `POST /api/ingest/trigger`, and the three extractors (Gmail, GitHub,
 > Google Calendar).
 
@@ -651,6 +654,26 @@ DECISIONS.md, 2026-08-25.
 3. Returns `{"status": "updated", "provider_mode", "local_model",
    "cloud_model"}` per `docs/API_Specification.docx` section 3.7, reflecting
    the freshly written-and-reread configuration
+
+---
+
+## Entry point: `GET /api/sessions` (`api/routes/sessions.py`)
+
+1. `storage/sqlite_store.py::list_sessions()` — most recently active first
+2. Returns `{"sessions": [{"session_id", "title", "updated_at"}, ...]}` per
+   `docs/API_Specification.docx` section 3.4
+
+---
+
+## Entry point: `GET /api/sessions/{session_id}` (`api/routes/sessions.py`)
+
+1. `storage/sqlite_store.py::get_session()` — a `None` result returns a
+   404 directly as `JSONResponse({"error": "not_found", ...})`, not via
+   `HTTPException` (see DECISIONS.md, 2026-08-25, for why: `HTTPException`
+   would bypass this project's `{"error", "detail"}` shape)
+2. `storage/sqlite_store.py::get_messages_for_session()` — oldest first
+3. Returns `{"session_id", "messages": [{"role", "text", "timestamp",
+   "sources"}, ...]}` per `docs/API_Specification.docx` section 3.5
 
 ---
 

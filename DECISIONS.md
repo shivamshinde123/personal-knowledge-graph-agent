@@ -8,6 +8,32 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-25 — `GET /api/sessions/{id}` returns a plain 404 JSON response, not `HTTPException`
+
+**Context**: An unknown `session_id` needs to be a 404 (per REST convention
+and the general shape of the other endpoints), but FastAPI's `HTTPException`
+gets handled by Starlette's own default `HTTPException` handler — which
+takes precedence over `api/main.py`'s registered `Exception` handler — and
+returns `{"detail": str}`, not this project's `{"error": str, "detail":
+str}` shape from `API_Specification.docx` section 2.
+
+**Decision**: `api/routes/sessions.py::get_session_history()` returns a
+`JSONResponse(status_code=404, content={"error": "not_found", ...})`
+directly from the route function instead of raising `HTTPException` —
+simplest way to keep this one case consistent with every other error shape
+in the API, without adding a sixth registered exception handler just for
+`starlette.exceptions.HTTPException`.
+
+Also: session/message reads go straight through `storage/sqlite_store.py`
+from `api/routes/sessions.py`, not via an `agent/` module — same reasoning
+as `api/routes/settings.py` (`DECISIONS.md`, 2026-08-25): this is a plain
+data read, not agent reasoning, so there's no meaningful "agent" step to
+route it through.
+
+**Affects**: `api/routes/sessions.py`
+
+---
+
 ## 2026-08-25 — `agent/graph.py::run()` resolves the session, loads history, and persists the turn — around the graph, not inside it
 
 **Context**: With `storage/sqlite_store.py::record_conversation_turn()`
