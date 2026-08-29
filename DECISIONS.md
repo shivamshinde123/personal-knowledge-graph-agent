@@ -8,6 +8,66 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-29 — Condense follow-up questions into a standalone query before retrieval
+
+**Context**: Conversation history reaches the answer-synthesis prompt
+(`providers/base.py::generate_answer(..., history=...)`), but the Router
+and search nodes (`agent/router.py`, `agent/search_nodes.py`,
+`agent/graph_traversal.py`) only ever see the current turn's raw question
+text. A vague follow-up like "why was the second one chosen?" has no
+topical keywords of its own, so retrieval has nothing to go on —
+previously verified against a real two-turn conversation where a follow-up
+retrieved completely unrelated content (see
+`memory/followup_question_retrieval_gap.md`).
+
+**Decision**: Added `ProviderInterface.generate_search_query(question,
+history) -> str` (a new `"condense"` task) that rewrites a follow-up into
+a standalone query, resolving references like "it"/"that"/"the second
+one" against the prior turns. `agent/graph.py` runs this as a new
+`condense_query` node, immediately after `START`, only when the session
+has history (a fresh, first-turn question is already standalone, so this
+skips the LLM call entirely in the common case). Its output becomes
+`search_query` in the graph's shared state; the Router and both search
+nodes retrieve on `search_query` instead of `question`. The original
+`question` is untouched everywhere else — it's still what's persisted to
+`sessions`/`messages` and what's passed to `generate_answer()`, so the
+user-visible transcript and the final answer's phrasing are unaffected.
+A `ProviderError` from the condense call is caught and logged, falling
+back to retrieving on the raw question rather than failing the whole
+turn — a degraded (but not broken) follow-up is better than an error.
+In `provider_mode: mixed`, `"condense"` is routed to Ollama alongside
+`"metadata"`/`"relationship"`, not OpenRouter: it runs on every follow-up
+question, and a rough rewrite that still improves retrieval over the raw
+follow-up is good enough — the final answer is what actually needs the
+better model.
+
+**Alternatives considered**: Passing `history` directly into the Router's
+regex heuristics and each search node — rejected because it would spread
+history-handling logic across three separate call sites and couple
+retrieval's keyword/semantic matching to conversation state instead of a
+single upstream rewrite; a dedicated condensing step keeps history
+resolution in one place and lets every downstream node stay
+history-agnostic. Embedding the last turn's answer text directly into the
+vector search query (no LLM call) — rejected as too blunt: it would bias
+toward whatever was retrieved last turn even for an unrelated follow-up,
+where a real rewrite (or no rewrite, for a fresh topic change) is needed.
+
+**Verified against real data**: ran `agent/graph.py::run()` end-to-end
+against the real SQLite store, a real Chroma collection, the real
+embedding model, and the real Neo4j instance (only the condense/answer
+LLM calls faked, local Ollama's configured model unavailable in this
+environment) for a real two-turn conversation: turn one asked about
+storage technology choices; turn two, a deliberately vocabulary-free
+follow-up ("Why was the second one picked?"), correctly retrieved the
+same real item once condensed into a query naming the actual technology —
+confirming the condensed query, not the raw follow-up, drives retrieval,
+and that history correctly reaches the condense call (2 prior turns) while
+a fresh session makes zero condense calls.
+
+**Affects**: `providers/base.py`, `agent/graph.py`
+
+---
+
 ## 2026-08-29 — Skip relationship candidates already connected in either direction
 
 **Context**: `pipeline/relationships.py::detect_relationships()` runs once

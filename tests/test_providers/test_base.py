@@ -174,6 +174,46 @@ class TestGenerateAnswer:
         assert "Tell me more about the second one" in prompt
 
 
+class TestGenerateSearchQuery:
+    def test_returns_the_stripped_response_text(self):
+        chat_model = FakeChatModel(["  What database did the storage layer choose?  "])
+        provider = LangChainProvider(chat_model, provider_name="test")
+        history = [
+            ConversationTurn(role="user", text="What database options were weighed?"),
+            ConversationTurn(role="agent", text="SQLite, Chroma, and Neo4j [1]."),
+        ]
+
+        query = provider.generate_search_query(
+            "Why was the second one chosen?", history
+        )
+
+        assert query == "What database did the storage layer choose?"
+
+    def test_prompt_includes_history_and_the_follow_up(self):
+        chat_model = FakeChatModel(["rewritten query"])
+        provider = LangChainProvider(chat_model, provider_name="test")
+        history = [
+            ConversationTurn(role="user", text="What did I work on yesterday?"),
+            ConversationTurn(role="agent", text="You worked on X and Y [1]."),
+        ]
+
+        provider.generate_search_query("Tell me more about the second one", history)
+
+        prompt = chat_model.prompts[0]
+        assert "What did I work on yesterday?" in prompt
+        assert "You worked on X and Y [1]." in prompt
+        assert "Tell me more about the second one" in prompt
+
+    def test_an_empty_response_raises_provider_error(self):
+        chat_model = FakeChatModel(["   "] * 4)
+        provider = LangChainProvider(chat_model, provider_name="test")
+
+        with pytest.raises(ProviderError):
+            provider.generate_search_query(
+                "q", [ConversationTurn(role="user", text="x")]
+            )
+
+
 class TestRetryBehavior:
     def test_retries_transient_failures_and_succeeds(self):
         chat_model = FakeChatModel(
@@ -247,3 +287,4 @@ class TestGetProvider:
         assert get_provider("answer") == "CLOUD"
         assert get_provider("metadata") == "LOCAL"
         assert get_provider("relationship") == "LOCAL"
+        assert get_provider("condense") == "LOCAL"

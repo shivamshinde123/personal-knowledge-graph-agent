@@ -13,10 +13,20 @@ as ``ConversationTurn`` history before invoking the graph, and — after a
 successful run — persists this turn via
 ``storage/sqlite_store.py::record_conversation_turn()``. See
 ``DECISIONS.md``.
+
+Follow-up retrieval: when there's prior history, a ``condense_query`` node
+runs before the router and rewrites the raw follow-up into a standalone
+``search_query`` (e.g. "why was the second one chosen?" ->
+"why was <the actual thing> chosen over alternatives?"), which the router
+and search nodes use instead of ``question`` — retrieval otherwise only
+ever sees the follow-up's own, often keyword-less, text. The original
+``question`` is untouched and is still what's persisted and passed to the
+synthesizer. See ``DECISIONS.md``.
 """
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from dataclasses import dataclass
 from typing import TypedDict
@@ -31,8 +41,10 @@ from agent.merger import MergedResult, merge
 from agent.router import RouteDecision, route
 from agent.search_nodes import SearchHit, keyword_search_node, vector_search
 from agent.synthesizer import Source, synthesize
-from providers.base import ConversationTurn
+from providers.base import ConversationTurn, ProviderError, get_provider
 from storage.sqlite_store import get_messages_for_session, record_conversation_turn
+
+logger = logging.getLogger(__name__)
 
 
 class _AgentState(TypedDict):
@@ -40,6 +52,7 @@ class _AgentState(TypedDict):
 
     question: str
     history: list[ConversationTurn]
+    search_query: str
     decision: RouteDecision
     vector_hits: list[SearchHit]
     keyword_hits: list[SearchHit]
@@ -88,6 +101,7 @@ def run(
         {
             "question": question,
             "history": history,
+            "search_query": question,
             "decision": RouteDecision(
                 vector_search=False, keyword_search=False, graph_traversal=False
             ),
@@ -157,18 +171,38 @@ def _build_graph(
     ``config`` parameter.
     """
 
+    def condense_node(state: _AgentState) -> dict:
+        if not state["history"]:
+            # Nothing to resolve references against — the raw question is
+            # already standalone. Also keeps the common first-turn case
+            # free of an extra LLM call.
+            return {}
+        try:
+            provider = get_provider("condense")
+            search_query = provider.generate_search_query(
+                state["question"], state["history"]
+            )
+        except ProviderError as exc:
+            logger.warning(
+                "Follow-up query condensing failed, retrieving on the raw "
+                "question instead: %s",
+                exc,
+            )
+            return {}
+        return {"search_query": search_query}
+
     def router_node(state: _AgentState) -> dict:
-        return {"decision": route(state["question"])}
+        return {"decision": route(state["search_query"])}
 
     def vector_node(state: _AgentState) -> dict:
         if not state["decision"].vector_search:
             return {"vector_hits": []}
-        return {"vector_hits": vector_search(collection, state["question"])}
+        return {"vector_hits": vector_search(collection, state["search_query"])}
 
     def keyword_node(state: _AgentState) -> dict:
         if not state["decision"].keyword_search:
             return {"keyword_hits": []}
-        return {"keyword_hits": keyword_search_node(conn, state["question"])}
+        return {"keyword_hits": keyword_search_node(conn, state["search_query"])}
 
     def graph_node(state: _AgentState) -> dict:
         if not state["decision"].graph_traversal:
@@ -187,6 +221,7 @@ def _build_graph(
         return {"answer": result.answer, "sources": result.sources}
 
     builder = StateGraph(_AgentState)
+    builder.add_node("condense_query", condense_node)
     builder.add_node("router", router_node)
     builder.add_node("vector_search", vector_node)
     builder.add_node("keyword_search", keyword_node)
@@ -194,7 +229,8 @@ def _build_graph(
     builder.add_node("merge", merge_node)
     builder.add_node("synthesize", synthesize_node)
 
-    builder.add_edge(START, "router")
+    builder.add_edge(START, "condense_query")
+    builder.add_edge("condense_query", "router")
     builder.add_edge("router", "vector_search")
     builder.add_edge("vector_search", "keyword_search")
     builder.add_edge("keyword_search", "graph_traversal")
