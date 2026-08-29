@@ -192,6 +192,17 @@ def _chunk_from_row(row: sqlite3.Row) -> Chunk:
     )
 
 
+def _ingestion_run_from_row(row: sqlite3.Row) -> IngestionRun:
+    return IngestionRun(
+        id=row["id"],
+        run_started_at=_from_iso(row["run_started_at"]),
+        status=row["status"],
+        run_completed_at=_from_iso(row["run_completed_at"]),
+        items_processed=row["items_processed"],
+        error_log=row["error_log"],
+    )
+
+
 def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
     """Open a SQLite connection with the schema initialized.
 
@@ -516,3 +527,23 @@ def get_last_run_timestamp(conn: sqlite3.Connection) -> datetime | None:
         "WHERE status = 'success'"
     ).fetchone()
     return _from_iso(row["ts"])
+
+
+def get_last_ingestion_run(conn: sqlite3.Connection) -> IngestionRun | None:
+    """Return the most recently started batch run, regardless of status.
+
+    Unlike :func:`get_last_run_timestamp` (which only considers successful
+    runs, since that's what advances the watermark), this is for display —
+    e.g. ``GET /api/sources/status`` — where a failed or in-progress run is
+    exactly what the user needs to see.
+
+    Args:
+        conn: An open connection from :func:`connect`.
+
+    Returns:
+        The most recent run, or ``None`` if the batch has never run.
+    """
+    row = conn.execute(
+        "SELECT * FROM ingestion_runs ORDER BY run_started_at DESC LIMIT 1"
+    ).fetchone()
+    return None if row is None else _ingestion_run_from_row(row)

@@ -13,6 +13,7 @@ from storage.sqlite_store import (
     delete_item,
     get_chunks_for_item,
     get_item,
+    get_last_ingestion_run,
     get_last_run_timestamp,
     insert_chunk,
     insert_item,
@@ -237,3 +238,38 @@ class TestIngestionRuns:
         complete_ingestion_run(conn, second, status="success", items_processed=2)
 
         assert get_last_run_timestamp(conn) >= first_ts
+
+
+class TestGetLastIngestionRun:
+    def test_none_before_any_run(self, conn):
+        assert get_last_ingestion_run(conn) is None
+
+    def test_returns_the_most_recent_run_even_if_it_failed(self, conn):
+        first = start_ingestion_run(conn)
+        complete_ingestion_run(conn, first, status="success", items_processed=1)
+        second = start_ingestion_run(conn)
+        complete_ingestion_run(
+            conn,
+            second,
+            status="failed",
+            items_processed=0,
+            error_log="notion: unreachable",
+        )
+
+        run = get_last_ingestion_run(conn)
+
+        assert run.id == second
+        assert run.status == "failed"
+        assert run.error_log == "notion: unreachable"
+
+    def test_fields_round_trip(self, conn):
+        run_id = start_ingestion_run(conn)
+        complete_ingestion_run(conn, run_id, status="success", items_processed=7)
+
+        run = get_last_ingestion_run(conn)
+
+        assert run.id == run_id
+        assert run.items_processed == 7
+        assert run.run_started_at is not None
+        assert run.run_completed_at is not None
+        assert run.error_log is None

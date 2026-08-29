@@ -8,6 +8,40 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-25 — Per-source item counts/status for `GET /api/sources/status` are derived, not stored
+
+**Context**: `Database_Schema.docx`'s `ingestion_runs` table has a single
+aggregate `items_processed` integer and one `error_log` string across all
+sources for a run — but `API_Specification.docx` section 3.3 wants a
+per-source breakdown (`{"source_type": "notion", "items_processed": 4,
+"status": "ok"}` for each of the six sources). Extending the schema with a
+per-source breakdown column, or a new child table, would work but is a
+real schema change for a read-only display endpoint.
+
+**Decision**: `agent/sources_status.py::get_sources_status()` derives both
+numbers from data that already exists: `items_processed` per source is a
+`COUNT(*)` on `items` filtered to `source_type` and `ingested_at` within
+`[run_started_at, run_completed_at]` (or through now, if still running);
+`status` is `"error"` if the run's `error_log` string contains that source's
+name (every error message `scheduler/daily_batch.py` writes is prefixed
+`"{source_name}: ..."` or `"{source_name}/{item_id}: ..."`, so a substring
+check is reliable here), else `"ok"`. All six source types are always
+listed, even ones with no extractor built yet (0 items, `"ok"` — nothing
+has failed if nothing has run).
+
+**Alternatives considered**: A dedicated per-source breakdown table —
+deferred; the derived approach needs no migration and no changes to
+`scheduler/daily_batch.py`'s existing bookkeeping, at the cost of being an
+approximation (an item's `ingested_at` timestamp could in principle fall
+just outside the run's recorded window under clock skew, though in
+practice it's set during that exact run). Worth revisiting only if this
+approximation turns out to be wrong in practice.
+
+**Affects**: `agent/sources_status.py`, `api/routes/sources.py`,
+`storage/sqlite_store.py` (`get_last_ingestion_run()`, new)
+
+---
+
 ## 2026-08-25 — Errors are mapped to `{error, detail}` via handlers registered once in `api/main.py`
 
 **Context**: `API_Specification.docx` section 2 requires every error
