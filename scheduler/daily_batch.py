@@ -1,10 +1,14 @@
 """Daily batch entrypoint: coordinates every extractor and the ingestion pipeline.
 
-Run via ``uv run python scheduler/daily_batch.py``, registered with cron
-(Mac/Linux) or Task Scheduler (Windows) on ``config.yaml``'s
-``ingestion.schedule``. Per ``docs/File_Folder_Structure.docx`` section 4,
-adding a new source means adding one entry to ``_EXTRACTORS`` below — no
-other module needs to change.
+Run via ``uv run python -m scheduler.daily_batch`` (module invocation, not
+a raw script path — ``uv run python scheduler/daily_batch.py`` only adds
+this file's own directory to ``sys.path``, not the project root, so the
+absolute imports below fail with ``ModuleNotFoundError``; verified
+directly — see DECISIONS.md, 2026-08-29), registered with cron (Mac/Linux)
+or Task Scheduler (Windows) on ``config.yaml``'s ``ingestion.schedule``.
+Per ``docs/File_Folder_Structure.docx`` section 4, adding a new source
+means adding one entry to ``_EXTRACTORS`` below — no other module needs to
+change.
 
 An item that was already ingested and gets re-extracted (edited since its
 last ingestion) has its existing relationships cleared before relationship

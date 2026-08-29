@@ -1,0 +1,29 @@
+"""Tests for POST /api/ingest/trigger."""
+
+
+class TestTriggerIngestion:
+    def test_returns_202_with_a_started_status_and_run_id(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "api.routes.ingest.trigger_ingestion", lambda: "run_manual_20260829_1200"
+        )
+
+        response = client.post("/api/ingest/trigger")
+
+        assert response.status_code == 202
+        assert response.json() == {
+            "status": "started",
+            "run_id": "run_manual_20260829_1200",
+        }
+
+    def test_calls_trigger_ingestion_exactly_once(self, client, monkeypatch):
+        calls = []
+
+        def fake_trigger():
+            calls.append(1)
+            return "run_manual_x"
+
+        monkeypatch.setattr("api.routes.ingest.trigger_ingestion", fake_trigger)
+
+        client.post("/api/ingest/trigger")
+
+        assert len(calls) == 1

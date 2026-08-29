@@ -396,9 +396,11 @@ metadata/chunks/embeddings are already persisted.
 
 ## Entry point: `scheduler/daily_batch.py` (`main()`)
 
-Run via `uv run python scheduler/daily_batch.py`, registered with cron /
-Task Scheduler on `config.yaml`'s `ingestion.schedule`. `main()` is a thin
-wrapper: it opens the real, settings-derived SQLite connection, Chroma
+Run via `uv run python -m scheduler.daily_batch` (module invocation — a
+raw script path fails with `ModuleNotFoundError`, see DECISIONS.md,
+2026-08-29), registered with cron / Task Scheduler on `config.yaml`'s
+`ingestion.schedule`. `main()` is a thin wrapper: it opens the real,
+settings-derived SQLite connection, Chroma
 collection, and Neo4j driver, then delegates to `_run(conn, collection,
 driver)` — the actual orchestration, kept separate so tests can pass in
 test doubles/temp resources instead.
@@ -733,6 +735,31 @@ DECISIONS.md, 2026-08-25.
 2. `storage/sqlite_store.py::get_messages_for_session()` — oldest first
 3. Returns `{"session_id", "messages": [{"role", "text", "timestamp",
    "sources"}, ...]}` per `docs/API_Specification.docx` section 3.5
+
+---
+
+## Entry point: `POST /api/ingest/trigger` (`api/routes/ingest.py`)
+
+Per `docs/API_Specification.docx` section 3.8 — a manual override for
+development/testing, outside the daily schedule.
+
+1. `agent/ingest_trigger.py::trigger_ingestion()` — generates a
+   human-readable run label (`run_manual_<UTC timestamp>`) and spawns
+   `scheduler/daily_batch.py` via `subprocess.Popen([sys.executable, "-m",
+   "scheduler.daily_batch"], cwd=PROJECT_ROOT)`: an independent OS
+   process, not an in-process call, so the Interface/Agent layers never
+   import `scheduler` directly (per `docs/Component_Map.docx`'s dependency
+   rules) and the spawned run gets its own fresh SQLite/Chroma/Neo4j
+   connections rather than sharing the API process's long-lived
+   `app.state` ones. Module invocation (`-m`), not a raw script path — see
+   DECISIONS.md, 2026-08-29, for why the latter fails with
+   `ModuleNotFoundError`
+2. Returns immediately (no waiting for the subprocess): `202 Accepted`,
+   `{"status": "started", "run_id": <label>}`. The label is independent of
+   the UUID `storage/sqlite_store.py::start_ingestion_run()` assigns
+   internally once the spawned process actually starts — there's no
+   endpoint to look a run up by this label; outcome is checked afterward
+   via `GET /api/sources/status`, same as a scheduled run
 
 ---
 
