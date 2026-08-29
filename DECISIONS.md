@@ -8,6 +8,32 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-25 — Conversation history is passed to `generate_answer()` as a separate, non-cited parameter
+
+**Context**: `Technical_Design_Document.docx` section 8.4 says follow-up
+questions ("tell me more about the second one") should work via LangGraph
+state carrying prior context, but `ProviderInterface.generate_answer()`
+had no way to receive it — only the current question and retrieved
+context.
+
+**Decision**: Added `providers/base.py::ConversationTurn` (`role`, `text`)
+and a `history: Sequence[ConversationTurn] = ()` parameter to
+`generate_answer()`, threaded through `agent/synthesizer.py::synthesize()`
+the same way. `_build_answer_prompt()` renders history as its own labeled
+section, explicitly told to the model as being *for resolving references
+only, not citable content* — keeping the existing citation numbering
+(`[1]`, `[2]`, …) tied only to the actual retrieved context, so history
+can't accidentally get cited as if it were a source. Empty by default, so
+every existing caller (and every existing test double implementing
+`generate_answer`) needed a matching default — updated in
+`tests/test_agent/test_graph.py` and `test_synthesizer.py`'s fakes, caught
+immediately by the full suite when the real signature changed underneath
+them.
+
+**Affects**: `providers/base.py`, `agent/synthesizer.py`
+
+---
+
 ## 2026-08-25 — Session/message storage: new tables, a single `record_conversation_turn()` write path, session title auto-generated from the first question
 
 **Context**: Conversation memory needs somewhere to persist sessions and

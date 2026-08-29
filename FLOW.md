@@ -191,11 +191,14 @@ only `providers/base.py`'s `get_provider()` and its return type,
    JSON — see DECISIONS.md, 2026-08-24, for why free-form labels were
    dropped after a real ingestion run showed them fragmenting into 16
    near-duplicate variants
-5. `provider.generate_answer(question, context)` — what
-   `agent/synthesizer.py::synthesize()` will call; the response cites
-   `context` positionally (`[1]`, `[2]`, …), which the synthesizer resolves
-   against each `ContextChunk`'s `title`/`url` before returning the final
-   cited answer
+5. `provider.generate_answer(question, context, history=())` — called by
+   `agent/synthesizer.py::synthesize()`; the response cites `context`
+   positionally (`[1]`, `[2]`, …), which the synthesizer resolves against
+   each `ContextChunk`'s `title`/`url` before returning the final cited
+   answer. `history` (`ConversationTurn` list, oldest first) is rendered as
+   its own labeled prompt section, explicitly *not* citable — only for
+   resolving follow-up references like "the second one" (see DECISIONS.md,
+   2026-08-25)
 
 ---
 
@@ -482,7 +485,7 @@ Not an entry point itself — will be called by `agent/graph.py::run()` once
 it exists, as the final step before returning a response. Calls
 `ProviderInterface` and `SQLiteStore`, per `Component_Map.docx`.
 
-- `synthesize(conn, question, merged_results, *, top_k=None) ->
+- `synthesize(conn, question, merged_results, *, top_k=None, history=()) ->
   SynthesizedAnswer` — takes the top `top_k` (default `config.yaml`'s
   `retrieval.top_k_vector` — see DECISIONS.md, 2026-08-25) merged results,
   fetches each item's full chunk text via `get_item()`/
@@ -491,9 +494,11 @@ it exists, as the final step before returning a response. Calls
   exists, or has no chunks, is skipped, not fatal. If no result yields
   usable context, returns a fixed "nothing found" answer without calling
   the LLM at all. Otherwise calls
-  `get_provider("answer").generate_answer(question, context)` and returns
-  the answer alongside an ordered `sources` list — index `i` matches the
-  `[i + 1]` citation marker the provider is instructed to use.
+  `get_provider("answer").generate_answer(question, context, history)` and
+  returns the answer alongside an ordered `sources` list — index `i`
+  matches the `[i + 1]` citation marker the provider is instructed to use.
+  `history` (prior `ConversationTurn`s) is passed straight through to the
+  provider, not used for retrieval itself — see DECISIONS.md, 2026-08-25.
 
 ---
 

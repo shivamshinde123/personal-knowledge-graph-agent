@@ -76,6 +76,19 @@ class ContextChunk:
     url: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ConversationTurn:
+    """One prior turn in the conversation, for follow-up questions.
+
+    Passed to :meth:`ProviderInterface.generate_answer` so the model can
+    resolve references like "the second one" or "that" in the current
+    question — not itself part of the cited context.
+    """
+
+    role: Literal["user", "agent"]
+    text: str
+
+
 class ProviderInterface(ABC):
     """The shared contract every concrete LLM provider implements."""
 
@@ -111,7 +124,12 @@ class ProviderInterface(ABC):
         """
 
     @abstractmethod
-    def generate_answer(self, question: str, context: Sequence[ContextChunk]) -> str:
+    def generate_answer(
+        self,
+        question: str,
+        context: Sequence[ContextChunk],
+        history: Sequence[ConversationTurn] = (),
+    ) -> str:
         """Synthesize an answer to a question from retrieved context.
 
         Args:
@@ -120,6 +138,8 @@ class ProviderInterface(ABC):
                 relevance. The response cites them as ``[1]``, ``[2]``, …,
                 matching this order — callers resolve those markers to
                 ``context``'s ``title``/``url`` fields.
+            history: Prior turns in this conversation, oldest first, for
+                resolving follow-up references — not itself cited.
 
         Returns:
             The generated answer text.
@@ -235,12 +255,27 @@ def _parse_relationship_response(raw: str) -> RelationshipJudgment | None:
     )
 
 
-def _build_answer_prompt(question: str, context: Sequence[ContextChunk]) -> str:
+def _build_answer_prompt(
+    question: str,
+    context: Sequence[ContextChunk],
+    history: Sequence[ConversationTurn] = (),
+) -> str:
     numbered = "\n\n".join(
         f"[{i + 1}] ({chunk.source_type}) {chunk.text}"
         for i, chunk in enumerate(context)
     )
+    history_section = ""
+    if history:
+        transcript = "\n".join(
+            f"{turn.role.capitalize()}: {turn.text}" for turn in history
+        )
+        history_section = (
+            "Prior conversation, for resolving references like 'the second "
+            "one' or 'that' in the current question — not itself part of "
+            f"the citable context:\n{transcript}\n\n"
+        )
     return (
+        f"{history_section}"
         "Answer the question using only the numbered context below. Cite "
         "the context you use inline with its number in brackets, e.g. [1]. "
         "If the context doesn't answer the question, say so.\n\n"
@@ -290,9 +325,14 @@ class LangChainProvider(ProviderInterface):
 
         return _retry_with_backoff(call, provider_name=self._provider_name)
 
-    def generate_answer(self, question: str, context: Sequence[ContextChunk]) -> str:
+    def generate_answer(
+        self,
+        question: str,
+        context: Sequence[ContextChunk],
+        history: Sequence[ConversationTurn] = (),
+    ) -> str:
         """See :meth:`ProviderInterface.generate_answer`."""
-        prompt = _build_answer_prompt(question, context)
+        prompt = _build_answer_prompt(question, context, history)
 
         def call() -> str:
             response = self._chat_model.invoke(prompt)
