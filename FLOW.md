@@ -9,12 +9,12 @@ change to an entry point or call chain.
 > `metadata`, `embeddings`, `relationships`), `scheduler/daily_batch.py`,
 > and three extractors (local files, Notion, browser history) are
 > implemented and merged to `main`. The agent layer is under way:
-> `agent/router.py`, `agent/search_nodes.py`, and
-> `agent/graph_traversal.py` are implemented (see below); the merger, the
-> synthesizer, and LangGraph wiring in `agent/graph.py` are next, alongside
-> the remaining three extractors (Gmail, GitHub, Google Calendar) and the
-> API/frontend layers. The `POST /api/query` entry point below is still
-> documented as designed in `docs/` and marked
+> `agent/router.py`, `agent/search_nodes.py`, `agent/graph_traversal.py`,
+> and `agent/merger.py` are implemented (see below); the synthesizer and
+> LangGraph wiring in `agent/graph.py` are next, alongside the remaining
+> three extractors (Gmail, GitHub, Google Calendar) and the API/frontend
+> layers. The `POST /api/query` entry point below is still documented as
+> designed in `docs/` and marked
 > _(not yet implemented)_ until `agent/graph.py` and `api/` exist.
 
 ---
@@ -426,6 +426,21 @@ no independent starting point into the graph (see DECISIONS.md,
   in the seed set, and ranks the rest by how many distinct seeds connect to
   them (ties broken by the best seed rank that reached them). A seed whose
   lookup fails is logged and skipped, not fatal.
+
+---
+
+## Shared: result merger (`agent/merger.py`)
+
+Not an entry point itself — will be called by `agent/graph.py::run()` once
+it exists, on whichever nodes' hit lists actually ran. A pure function, no
+external calls, per `Component_Map.docx`.
+
+- `merge(*hit_lists) -> list[MergedResult]` — Reciprocal Rank Fusion:
+  `score += 1 / (60 + rank)` for each list an item appears in (`k=60`, the
+  standard constant — see DECISIONS.md, 2026-08-25), summed across lists,
+  then sorted highest score first. An item appearing in more lists, or
+  ranked higher within a list, scores higher. A node that didn't run simply
+  contributes an empty list (or is omitted).
 
 ---
 

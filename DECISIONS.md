@@ -8,6 +8,28 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-25 — Result Merger uses the standard RRF constant k=60
+
+**Context**: `Technical_Design_Document.docx` section 6 names Reciprocal
+Rank Fusion as the merging method (`score += 1 / (k + rank)` per list an
+item appears in) but doesn't specify the smoothing constant `k`, which
+controls how much a low rank is discounted relative to a high one.
+
+**Decision**: `agent/merger.py` uses `k=60`, the constant from the paper
+that introduced RRF (Cormack, Clarke & Buettcher, 2009) and the value most
+hybrid-search implementations default to — using the field's own
+established default rather than inventing a project-specific number with
+no particular justification.
+
+**Alternatives considered**: None seriously — no project-specific reason
+surfaced to deviate from the standard value, and picking an arbitrary
+different constant would need its own justification this project has no
+basis for.
+
+**Affects**: `agent/merger.py`
+
+---
+
 ## 2026-08-25 — Graph traversal expands outward from search hits and ranks by shared-connection count
 
 **Context**: `Technical_Design_Document.docx` section 8.2 step 3 says
