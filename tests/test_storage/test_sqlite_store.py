@@ -15,9 +15,13 @@ from storage.sqlite_store import (
     get_item,
     get_last_ingestion_run,
     get_last_run_timestamp,
+    get_messages_for_session,
+    get_session,
     insert_chunk,
     insert_item,
     keyword_search,
+    list_sessions,
+    record_conversation_turn,
     replace_chunks,
     start_ingestion_run,
 )
@@ -273,3 +277,127 @@ class TestGetLastIngestionRun:
         assert run.run_started_at is not None
         assert run.run_completed_at is not None
         assert run.error_log is None
+
+
+class TestRecordConversationTurn:
+    def test_creates_a_new_session_with_a_title_from_the_question(self, conn):
+        record_conversation_turn(
+            conn, "sess-1", "What did I work on related to RAG?", "Answer.", None
+        )
+
+        session = get_session(conn, "sess-1")
+
+        assert session.title == "What did I work on related to RAG?"
+        assert session.created_at is not None
+        assert session.updated_at is not None
+
+    def test_long_question_title_is_truncated(self, conn):
+        long_question = "A" * 100
+
+        record_conversation_turn(conn, "sess-1", long_question, "Answer.", None)
+
+        session = get_session(conn, "sess-1")
+
+        assert len(session.title) <= 63  # 60 chars + "..."
+        assert session.title.endswith("...")
+
+    def test_a_second_turn_does_not_change_the_title(self, conn):
+        record_conversation_turn(conn, "sess-1", "First question", "Answer 1.", None)
+        record_conversation_turn(
+            conn, "sess-1", "Follow-up question", "Answer 2.", None
+        )
+
+        session = get_session(conn, "sess-1")
+
+        assert session.title == "First question"
+
+    def test_a_second_turn_advances_updated_at(self, conn):
+        record_conversation_turn(conn, "sess-1", "First question", "Answer 1.", None)
+        first_updated_at = get_session(conn, "sess-1").updated_at
+
+        record_conversation_turn(
+            conn, "sess-1", "Follow-up question", "Answer 2.", None
+        )
+
+        assert get_session(conn, "sess-1").updated_at >= first_updated_at
+
+    def test_records_both_the_question_and_the_answer_as_messages(self, conn):
+        record_conversation_turn(
+            conn, "sess-1", "What did I work on?", "You worked on X.", None
+        )
+
+        messages = get_messages_for_session(conn, "sess-1")
+
+        assert [m.role for m in messages] == ["user", "agent"]
+        assert messages[0].text == "What did I work on?"
+        assert messages[1].text == "You worked on X."
+
+    def test_messages_across_turns_stay_in_order(self, conn):
+        record_conversation_turn(conn, "sess-1", "Q1", "A1", None)
+        record_conversation_turn(conn, "sess-1", "Q2", "A2", None)
+
+        messages = get_messages_for_session(conn, "sess-1")
+
+        assert [m.text for m in messages] == ["Q1", "A1", "Q2", "A2"]
+
+    def test_agent_message_stores_sources(self, conn):
+        sources = [{"item_id": "a", "source_type": "notion", "title": "T", "url": "u"}]
+
+        record_conversation_turn(conn, "sess-1", "Q", "A", sources)
+
+        messages = get_messages_for_session(conn, "sess-1")
+        agent_message = next(m for m in messages if m.role == "agent")
+        assert agent_message.sources == sources
+
+    def test_user_message_never_has_sources(self, conn):
+        record_conversation_turn(
+            conn,
+            "sess-1",
+            "Q",
+            "A",
+            [{"item_id": "a", "source_type": "notion", "title": "T", "url": "u"}],
+        )
+
+        messages = get_messages_for_session(conn, "sess-1")
+        user_message = next(m for m in messages if m.role == "user")
+        assert user_message.sources is None
+
+
+class TestListSessions:
+    def test_empty_before_any_conversation(self, conn):
+        assert list_sessions(conn) == []
+
+    def test_lists_most_recently_active_first(self, conn):
+        record_conversation_turn(conn, "sess-old", "Old question", "A", None)
+        record_conversation_turn(conn, "sess-new", "New question", "A", None)
+
+        sessions = list_sessions(conn)
+
+        assert [s.id for s in sessions] == ["sess-new", "sess-old"]
+
+    def test_a_touched_session_moves_to_the_front(self, conn):
+        record_conversation_turn(conn, "sess-a", "Q", "A", None)
+        record_conversation_turn(conn, "sess-b", "Q", "A", None)
+        record_conversation_turn(conn, "sess-a", "Follow-up", "A", None)
+
+        sessions = list_sessions(conn)
+
+        assert sessions[0].id == "sess-a"
+
+
+class TestGetSession:
+    def test_none_for_unknown_session(self, conn):
+        assert get_session(conn, "does-not-exist") is None
+
+
+class TestGetMessagesForSession:
+    def test_empty_for_unknown_session(self, conn):
+        assert get_messages_for_session(conn, "does-not-exist") == []
+
+    def test_only_returns_messages_for_the_given_session(self, conn):
+        record_conversation_turn(conn, "sess-a", "Q-a", "A-a", None)
+        record_conversation_turn(conn, "sess-b", "Q-b", "A-b", None)
+
+        messages = get_messages_for_session(conn, "sess-a")
+
+        assert [m.text for m in messages] == ["Q-a", "A-a"]

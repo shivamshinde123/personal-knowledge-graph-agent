@@ -115,6 +115,15 @@ replace-not-append for chunks) matters to anything that calls it.
    the watermark for the next run's `since=`; `get_last_ingestion_run()`
    returns the most recent run regardless of status (for display, e.g.
    `agent/sources_status.py` — see DECISIONS.md, 2026-08-25)
+5. Conversation memory (tables not in `docs/Database_Schema.docx` — see
+   DECISIONS.md, 2026-08-25): `record_conversation_turn(conn, session_id,
+   question, answer, sources)` is the one write path — upserts the session
+   (auto-generated title from the question on first turn, `updated_at`
+   refreshed on later turns) and inserts both the user and agent messages.
+   `list_sessions()` (most recently active first), `get_session()`, and
+   `get_messages_for_session()` (oldest first) are the read side, for
+   `GET /api/sessions`/`GET /api/sessions/{id}` and for loading prior
+   turns before a follow-up question.
 
 ---
 

@@ -16,6 +16,7 @@ Typical use::
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from collections.abc import Iterable
@@ -30,6 +31,13 @@ from config.settings import get_settings
 logger = logging.getLogger(__name__)
 
 IngestionStatus = Literal["running", "success", "partial_failure", "failed"]
+MessageRole = Literal["user", "agent"]
+
+# Conversation-memory tables (sessions/messages) aren't in
+# docs/Database_Schema.docx — that document predates the conversation-memory
+# feature. Added here per CLAUDE.md's "make the decision, note it extends
+# the existing design" allowance — see DECISIONS.md.
+_TITLE_MAX_LENGTH = 60
 
 
 class StorageError(Exception):
@@ -85,6 +93,35 @@ class IngestionRun:
     error_log: str | None = None
 
 
+@dataclass(slots=True)
+class Session:
+    """One conversation session, for the sidebar and history reload."""
+
+    id: str
+    title: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(slots=True)
+class Message:
+    """One turn in a conversation: a user question or an agent answer.
+
+    ``sources`` is a raw list of dicts (``item_id``/``source_type``/
+    ``title``/``url`` keys), not ``agent/synthesizer.py``'s ``Source``
+    dataclass — this module never imports from ``agent/``, per the
+    project's one-way dependency rule, so it stores/returns the plain
+    shape and leaves conversion to whichever caller needs it typed.
+    """
+
+    id: str
+    session_id: str
+    role: MessageRole
+    text: str
+    created_at: datetime
+    sources: list[dict] | None = None
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
   id                TEXT PRIMARY KEY,
@@ -136,6 +173,23 @@ CREATE TABLE IF NOT EXISTS ingestion_runs (
   items_processed    INTEGER DEFAULT 0,
   error_log          TEXT
 );
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id           TEXT PRIMARY KEY,
+  title        TEXT,
+  created_at   TIMESTAMP NOT NULL,
+  updated_at   TIMESTAMP NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id           TEXT PRIMARY KEY,
+  session_id   TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  role         TEXT NOT NULL,
+  text         TEXT NOT NULL,
+  sources      TEXT,
+  created_at   TIMESTAMP NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
 """
 
 _INSERT_ITEM = """
@@ -547,3 +601,145 @@ def get_last_ingestion_run(conn: sqlite3.Connection) -> IngestionRun | None:
         "SELECT * FROM ingestion_runs ORDER BY run_started_at DESC LIMIT 1"
     ).fetchone()
     return None if row is None else _ingestion_run_from_row(row)
+
+
+def _session_from_row(row: sqlite3.Row) -> Session:
+    return Session(
+        id=row["id"],
+        title=row["title"],
+        created_at=_from_iso(row["created_at"]),
+        updated_at=_from_iso(row["updated_at"]),
+    )
+
+
+def _message_from_row(row: sqlite3.Row) -> Message:
+    sources = row["sources"]
+    return Message(
+        id=row["id"],
+        session_id=row["session_id"],
+        role=row["role"],
+        text=row["text"],
+        created_at=_from_iso(row["created_at"]),
+        sources=None if sources is None else json.loads(sources),
+    )
+
+
+def _derive_title(question: str) -> str:
+    """Auto-generate a session title from its first question.
+
+    Per ``docs/UIUX_Wireframes.docx`` section 2.1 ("auto-generated title"),
+    without a dedicated LLM call — the question text itself, truncated, is
+    already a reasonable title and avoids the extra cost/latency of
+    summarizing it. See DECISIONS.md.
+    """
+    question = " ".join(question.split())
+    if len(question) <= _TITLE_MAX_LENGTH:
+        return question
+    return question[:_TITLE_MAX_LENGTH].rstrip() + "..."
+
+
+def record_conversation_turn(
+    conn: sqlite3.Connection,
+    session_id: str,
+    question: str,
+    answer: str,
+    sources: list[dict] | None,
+) -> None:
+    """Persist one question/answer turn, creating the session if it's new.
+
+    A new session's title is auto-generated from ``question`` (see
+    :func:`_derive_title`); an existing session's title is left as-is and
+    only its ``updated_at`` is refreshed, so the sidebar's ordering reflects
+    the most recently active conversation.
+
+    Args:
+        conn: An open connection from :func:`connect`.
+        session_id: The session this turn belongs to.
+        question: The user's question, stored as a ``"user"`` message.
+        answer: The synthesized answer, stored as an ``"agent"`` message.
+        sources: The answer's cited sources (already-plain dicts — see
+            :class:`Message`), or ``None``.
+
+    Raises:
+        StorageError: If the write fails.
+    """
+    now = _to_iso(datetime.now(UTC))
+    try:
+        conn.execute(
+            "INSERT INTO sessions (id, title, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at",
+            (session_id, _derive_title(question), now, now),
+        )
+        conn.execute(
+            "INSERT INTO messages (id, session_id, role, text, sources, "
+            "created_at) VALUES (?, ?, 'user', ?, NULL, ?)",
+            (str(uuid4()), session_id, question, now),
+        )
+        conn.execute(
+            "INSERT INTO messages (id, session_id, role, text, sources, "
+            "created_at) VALUES (?, ?, 'agent', ?, ?, ?)",
+            (
+                str(uuid4()),
+                session_id,
+                answer,
+                None if sources is None else json.dumps(sources),
+                now,
+            ),
+        )
+        conn.commit()
+    except sqlite3.Error as exc:
+        conn.rollback()
+        raise StorageError(
+            f"Could not record conversation turn for session {session_id!r}: {exc}"
+        ) from exc
+
+
+def list_sessions(conn: sqlite3.Connection) -> list[Session]:
+    """List every session, most recently active first.
+
+    Args:
+        conn: An open connection from :func:`connect`.
+
+    Returns:
+        Every session, ordered by ``updated_at`` descending.
+    """
+    rows = conn.execute("SELECT * FROM sessions ORDER BY updated_at DESC").fetchall()
+    return [_session_from_row(row) for row in rows]
+
+
+def get_session(conn: sqlite3.Connection, session_id: str) -> Session | None:
+    """Fetch a single session by id.
+
+    Args:
+        conn: An open connection from :func:`connect`.
+        session_id: The session's id.
+
+    Returns:
+        The session, or ``None`` if no session has that id.
+    """
+    row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    return None if row is None else _session_from_row(row)
+
+
+def get_messages_for_session(
+    conn: sqlite3.Connection, session_id: str
+) -> list[Message]:
+    """Fetch a session's full message history, oldest first.
+
+    Args:
+        conn: An open connection from :func:`connect`.
+        session_id: The session whose messages to fetch.
+
+    Returns:
+        The session's messages in the order they occurred. Empty if the
+        session doesn't exist or has no messages yet.
+    """
+    rows = conn.execute(
+        # rowid tiebreaker: a turn's user/agent messages share one
+        # `created_at` (see record_conversation_turn), so created_at alone
+        # doesn't guarantee user-before-agent order.
+        "SELECT * FROM messages WHERE session_id = ? ORDER BY created_at, rowid",
+        (session_id,),
+    ).fetchall()
+    return [_message_from_row(row) for row in rows]
