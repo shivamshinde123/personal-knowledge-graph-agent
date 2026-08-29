@@ -8,14 +8,15 @@ change to an entry point or call chain.
 > provider layer, the entire pipeline layer (`filters`, `chunking`,
 > `metadata`, `embeddings`, `relationships`), `scheduler/daily_batch.py`,
 > and three extractors (local files, Notion, browser history) are
-> implemented and merged to `main`. The agent layer is nearly complete:
+> implemented and merged to `main`. The agent layer is complete:
 > `agent/router.py`, `agent/search_nodes.py`, `agent/graph_traversal.py`,
-> `agent/merger.py`, and `agent/synthesizer.py` are implemented (see
-> below); only the LangGraph wiring in `agent/graph.py` is left, alongside
-> the remaining three extractors (Gmail, GitHub, Google Calendar) and the
-> API/frontend layers. The `POST /api/query` entry point below is still
-> documented as designed in `docs/` and marked
-> _(not yet implemented)_ until `agent/graph.py` and `api/` exist.
+> `agent/merger.py`, `agent/synthesizer.py`, and the LangGraph wiring in
+> `agent/graph.py` are all implemented (see below). `agent/graph.py::run()`
+> does not yet implement multi-turn conversation memory — see DECISIONS.md,
+> 2026-08-25. Remaining: the three extractors (Gmail, GitHub, Google
+> Calendar) and the API/frontend layers — `POST /api/query` below is still
+> documented as designed in `docs/` and marked _(not yet implemented)_
+> until `api/` itself exists to call `agent/graph.py::run()`.
 
 ---
 
@@ -465,23 +466,45 @@ it exists, as the final step before returning a response. Calls
 
 ---
 
+## Entry point: `agent/graph.py::run(conn, collection, driver, question, session_id=None)`
+
+Not yet reachable over HTTP — `api/` doesn't exist. Callable directly today
+(see `tests/test_agent/test_graph.py`). Builds a fresh LangGraph
+`StateGraph` per call (`_build_graph()`, closures over this call's
+`conn`/`collection`/`driver` — see DECISIONS.md, 2026-08-25) and invokes it
+as one fixed, linear sequence of nodes:
+
+1. `router` — `agent/router.py::route(question)` → the `RouteDecision`
+   stored in state for every downstream node to check
+
+   **Branch point**: this is the agent's main branch. A quoted phrase or a
+   "from"/"by" filter skips vector search; relationship-implying phrasing
+   (e.g. "how does X relate to Y") enables graph traversal; keyword search
+   always runs.
+2. `vector_search` — `agent/search_nodes.py::vector_search()` if
+   `decision.vector_search`, else contributes `[]`
+3. `keyword_search` — `agent/search_nodes.py::keyword_search_node()` if
+   `decision.keyword_search` (always, currently), else `[]`
+4. `graph_traversal` — `agent/graph_traversal.py::graph_traversal()`,
+   seeded from the combined vector + keyword hits, if
+   `decision.graph_traversal`, else `[]`
+5. `merge` — `agent/merger.py::merge()` — Reciprocal Rank Fusion across
+   whichever of the three hit lists are non-empty
+6. `synthesize` — `agent/synthesizer.py::synthesize()` — fetches full text
+   for the top results from SQLite, calls
+   `get_provider("answer").generate_answer()`, returns a cited answer
+7. `run()` returns a `QueryResult` (`session_id`, `answer`, `sources`,
+   `retrieval_methods_used`) — `session_id` is echoed back if given, else a
+   fresh one is generated; no conversation memory yet (see DECISIONS.md,
+   2026-08-25).
+
+---
+
 ## Entry point: `POST /api/query` (`api/routes/query.py`) — _(not yet implemented)_
 
 1. Request validated against `api/schemas.py`
-2. `agent/graph.py::run(question, session_id)` invoked
-3. `agent/router.py::route()` inspects the question and decides which of
-   `VectorSearchNode` / `KeywordSearchNode` / `GraphTraversalNode` to invoke
-
-   **Branch point**: this is the agent's main branch. Questions naming a
-   specific identifier favour keyword search; open-ended questions favour vector
-   search; questions about how things connect pull in graph traversal.
-4. Selected nodes run (`agent/search_nodes.py`, `agent/graph_traversal.py`)
-5. `agent/merger.py::merge()` — Reciprocal Rank Fusion across whichever nodes
-   actually ran
-6. `agent/synthesizer.py::synthesize()` — fetches full text for the top results
-   from SQLite, calls `get_provider("answer").generate_answer()`, returns a
-   cited answer
-7. Response serialized per `docs/API_Specification.docx` and returned
+2. `agent/graph.py::run()` invoked (see above for its own internal steps)
+3. Response serialized per `docs/API_Specification.docx` and returned
 
 ---
 

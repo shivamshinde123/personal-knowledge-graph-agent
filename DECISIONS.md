@@ -8,6 +8,46 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-25 — Agent graph uses a linear StateGraph with internal short-circuiting, not conditional-edge fan-out
+
+**Context**: `agent/router.py::route()` decides which of vector search,
+keyword search, and graph traversal should actually do work for a given
+question. LangGraph supports this with conditional edges (a router
+function returning which node(s) to visit next), which is the more
+"native" way to express conditional branching in a StateGraph.
+
+**Decision**: `agent/graph.py` instead wires all six nodes into one fixed,
+linear sequence (`router → vector_search → keyword_search →
+graph_traversal → merge → synthesize → END`) via plain `add_edge()` calls,
+and has each retrieval node check `state["decision"]` itself, returning an
+empty hit list as a cheap no-op when its flag is `False` rather than being
+skipped by the graph structure. Reasoning: every "skip" here is a
+near-zero-cost no-op (an empty list, no I/O), so conditional-edge fan-out
+buys nothing functionally while adding real complexity — fan-out/fan-in
+bookkeeping, and reducer functions on shared state fields to handle
+concurrent branch writes safely. A fixed linear graph keeps every node a
+plain, individually testable function and keeps the state schema simple
+(no reducers needed, since nothing runs concurrently).
+
+**Alternatives considered**: Conditional edges — rejected per the above;
+worth revisiting only if a future node becomes expensive enough that
+literally not calling it (vs. calling it and cheaply no-opping) matters,
+which isn't the case for any of the current six nodes.
+
+**Scope note — conversation memory deferred**: `run()` accepts
+`session_id` per `API_Specification.docx`'s `POST /api/query` contract
+(generating a new one via `uuid4` if not given), but this pass does not
+implement multi-turn conversation memory — the state schema has no running
+message history, and the synthesizer prompt doesn't incorporate prior
+turns. `Technical_Design_Document.docx` section 8.4's follow-up-question
+support ("tell me more about the second one") is real, separate work
+(conversation history in state, coreference-aware prompting) deliberately
+left for a dedicated follow-up unit of work rather than bolted on here.
+
+**Affects**: `agent/graph.py`
+
+---
+
 ## 2026-08-25 — Answer Synthesizer caps context at `retrieval.top_k_vector`, with a no-LLM-call fallback
 
 **Context**: `agent/merger.py::merge()` can return many ranked items (up
