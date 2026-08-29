@@ -7,12 +7,12 @@ corresponding ``agent/router.py::RouteDecision`` flag is ``False`` runs as
 a cheap no-op (contributing an empty hit list) rather than being excluded
 from the graph via conditional edges — see ``DECISIONS.md`` for why.
 
-Scope note: ``run()`` accepts ``session_id`` (per
-``docs/API_Specification.docx``'s ``POST /api/query`` contract) but this
-first pass does not yet implement multi-turn conversation memory —
-follow-up question resolution ("tell me more about the second one") needs
-its own state schema and prompt work, and is deliberately left as a
-follow-up unit of work rather than bolted on here. See ``DECISIONS.md``.
+Conversation memory: ``run()`` resolves ``session_id`` (an existing one, or
+a fresh one for a new session) up front, loads that session's prior turns
+as ``ConversationTurn`` history before invoking the graph, and — after a
+successful run — persists this turn via
+``storage/sqlite_store.py::record_conversation_turn()``. See
+``DECISIONS.md``.
 """
 
 from __future__ import annotations
@@ -31,12 +31,15 @@ from agent.merger import MergedResult, merge
 from agent.router import RouteDecision, route
 from agent.search_nodes import SearchHit, keyword_search_node, vector_search
 from agent.synthesizer import Source, synthesize
+from providers.base import ConversationTurn
+from storage.sqlite_store import get_messages_for_session, record_conversation_turn
 
 
 class _AgentState(TypedDict):
     """The graph's shared state, threaded through every node."""
 
     question: str
+    history: list[ConversationTurn]
     decision: RouteDecision
     vector_hits: list[SearchHit]
     keyword_hits: list[SearchHit]
@@ -70,18 +73,21 @@ def run(
         collection: An open Chroma collection.
         driver: An open Neo4j driver.
         question: The user's natural language question.
-        session_id: An existing session to continue, or ``None`` to start
-            a new one (a fresh id is generated either way — see the module
-            docstring's scope note on conversation memory).
+        session_id: An existing session to continue, or ``None`` to start a
+            new one (a fresh id is generated either way).
 
     Returns:
         The synthesized answer, its sources, and which retrieval methods
         actually ran (per ``agent/router.py::route()``'s decision).
     """
+    resolved_session_id = session_id or str(uuid4())
+    history = _load_history(conn, session_id) if session_id else []
+
     graph = _build_graph(conn, collection, driver)
     final_state = graph.invoke(
         {
             "question": question,
+            "history": history,
             "decision": RouteDecision(
                 vector_search=False, keyword_search=False, graph_traversal=False
             ),
@@ -103,12 +109,40 @@ def run(
         )
         if used
     ]
+
+    sources: list[Source] = final_state["sources"]
+    record_conversation_turn(
+        conn,
+        resolved_session_id,
+        question,
+        final_state["answer"],
+        [_source_to_dict(source) for source in sources] or None,
+    )
+
     return QueryResult(
-        session_id=session_id or str(uuid4()),
+        session_id=resolved_session_id,
         answer=final_state["answer"],
-        sources=final_state["sources"],
+        sources=sources,
         retrieval_methods_used=retrieval_methods_used,
     )
+
+
+def _load_history(conn: sqlite3.Connection, session_id: str) -> list[ConversationTurn]:
+    """Load a session's prior turns as provider-ready ``ConversationTurn``s."""
+    return [
+        ConversationTurn(role=message.role, text=message.text)
+        for message in get_messages_for_session(conn, session_id)
+    ]
+
+
+def _source_to_dict(source: Source) -> dict:
+    """Shape a ``Source`` for ``record_conversation_turn()``'s plain-dict storage."""
+    return {
+        "item_id": source.item_id,
+        "source_type": source.source_type,
+        "title": source.title,
+        "url": source.url,
+    }
 
 
 def _build_graph(
@@ -147,7 +181,9 @@ def _build_graph(
         return {"merged": merged}
 
     def synthesize_node(state: _AgentState) -> dict:
-        result = synthesize(conn, state["question"], state["merged"])
+        result = synthesize(
+            conn, state["question"], state["merged"], history=state["history"]
+        )
         return {"answer": result.answer, "sources": result.sources}
 
     builder = StateGraph(_AgentState)

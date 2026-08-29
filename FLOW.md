@@ -11,20 +11,23 @@ change to an entry point or call chain.
 > implemented and merged to `main`. The agent layer is complete:
 > `agent/router.py`, `agent/search_nodes.py`, `agent/graph_traversal.py`,
 > `agent/merger.py`, `agent/synthesizer.py`, and the LangGraph wiring in
-> `agent/graph.py` are all implemented (see below). `agent/graph.py::run()`
-> does not yet implement multi-turn conversation memory — see DECISIONS.md,
-> 2026-08-25. The API layer is essentially complete for what doesn't need
-> conversation memory: `api/main.py`, `GET /api/health`, `POST /api/query`,
-> `GET /api/sources/status`, and `GET`/`PUT /api/settings` are all
-> implemented (see below), with five error-response handlers registered
-> for every route. The React frontend (`frontend/`) is implemented and
-> functional for everything the backend currently supports: the chat
-> window and the settings screen (see below) — its session sidebar is an
-> honest empty state, not fake data, pending real session persistence.
-> Remaining: session persistence and `GET /api/sessions`/
-> `GET /api/sessions/{id}` (part of the conversation-memory phase),
-> optionally `POST /api/ingest/trigger`, and the three extractors (Gmail,
-> GitHub, Google Calendar).
+> `agent/graph.py` are all implemented (see below). Conversation memory is
+> under way: session/message storage (`storage/sqlite_store.py`), history
+> support in the provider layer (`providers/base.py`), and
+> `agent/graph.py::run()` loading/persisting turns are all implemented —
+> see DECISIONS.md, 2026-08-25. The API layer is essentially complete for
+> what doesn't need conversation memory: `api/main.py`, `GET /api/health`,
+> `POST /api/query`, `GET /api/sources/status`, and `GET`/`PUT /api/settings`
+> are all implemented (see below), with five error-response handlers
+> registered for every route. The React frontend (`frontend/`) is
+> implemented and functional for everything the backend currently
+> supports: the chat window and the settings screen (see below) — its
+> session sidebar is an honest empty state, not fake data, pending the
+> `GET /api/sessions` endpoints. Remaining: `GET /api/sessions`/
+> `GET /api/sessions/{id}` and wiring the frontend sidebar to them
+> (finishing the conversation-memory phase), optionally
+> `POST /api/ingest/trigger`, and the three extractors (Gmail, GitHub,
+> Google Calendar).
 
 ---
 
@@ -504,35 +507,46 @@ it exists, as the final step before returning a response. Calls
 
 ## Entry point: `agent/graph.py::run(conn, collection, driver, question, session_id=None)`
 
-Not yet reachable over HTTP — `api/` doesn't exist. Callable directly today
-(see `tests/test_agent/test_graph.py`). Builds a fresh LangGraph
-`StateGraph` per call (`_build_graph()`, closures over this call's
-`conn`/`collection`/`driver` — see DECISIONS.md, 2026-08-25) and invokes it
-as one fixed, linear sequence of nodes:
+Reachable over HTTP via `POST /api/query` (see below). Also callable
+directly (see `tests/test_agent/test_graph.py`).
 
-1. `router` — `agent/router.py::route(question)` → the `RouteDecision`
-   stored in state for every downstream node to check
+1. Resolves `session_id` — the given one, or a fresh `uuid4` for a new
+   session — and loads that session's prior turns via
+   `storage/sqlite_store.py::get_messages_for_session()` → `ConversationTurn`
+   list (`_load_history()`; empty for a new session). See DECISIONS.md,
+   2026-08-25.
+2. Builds a fresh LangGraph `StateGraph` per call (`_build_graph()`,
+   closures over this call's `conn`/`collection`/`driver` — see
+   DECISIONS.md, 2026-08-25) and invokes it, with `history` in the initial
+   state, as one fixed, linear sequence of nodes:
 
-   **Branch point**: this is the agent's main branch. A quoted phrase or a
-   "from"/"by" filter skips vector search; relationship-implying phrasing
-   (e.g. "how does X relate to Y") enables graph traversal; keyword search
-   always runs.
-2. `vector_search` — `agent/search_nodes.py::vector_search()` if
-   `decision.vector_search`, else contributes `[]`
-3. `keyword_search` — `agent/search_nodes.py::keyword_search_node()` if
-   `decision.keyword_search` (always, currently), else `[]`
-4. `graph_traversal` — `agent/graph_traversal.py::graph_traversal()`,
-   seeded from the combined vector + keyword hits, if
-   `decision.graph_traversal`, else `[]`
-5. `merge` — `agent/merger.py::merge()` — Reciprocal Rank Fusion across
-   whichever of the three hit lists are non-empty
-6. `synthesize` — `agent/synthesizer.py::synthesize()` — fetches full text
-   for the top results from SQLite, calls
-   `get_provider("answer").generate_answer()`, returns a cited answer
-7. `run()` returns a `QueryResult` (`session_id`, `answer`, `sources`,
-   `retrieval_methods_used`) — `session_id` is echoed back if given, else a
-   fresh one is generated; no conversation memory yet (see DECISIONS.md,
-   2026-08-25).
+   a. `router` — `agent/router.py::route(question)` → the `RouteDecision`
+      stored in state for every downstream node to check
+
+      **Branch point**: this is the agent's main branch. A quoted phrase
+      or a "from"/"by" filter skips vector search; relationship-implying
+      phrasing (e.g. "how does X relate to Y") enables graph traversal;
+      keyword search always runs.
+   b. `vector_search` — `agent/search_nodes.py::vector_search()` if
+      `decision.vector_search`, else contributes `[]`
+   c. `keyword_search` — `agent/search_nodes.py::keyword_search_node()` if
+      `decision.keyword_search` (always, currently), else `[]`
+   d. `graph_traversal` — `agent/graph_traversal.py::graph_traversal()`,
+      seeded from the combined vector + keyword hits, if
+      `decision.graph_traversal`, else `[]`
+   e. `merge` — `agent/merger.py::merge()` — Reciprocal Rank Fusion across
+      whichever of the three hit lists are non-empty
+   f. `synthesize` — `agent/synthesizer.py::synthesize()` — fetches full
+      text for the top results from SQLite, calls
+      `get_provider("answer").generate_answer(question, context, history)`,
+      returns a cited answer
+3. After the graph returns, calls
+   `storage/sqlite_store.py::record_conversation_turn()` with the resolved
+   session id, the question, the final answer, and its sources — this
+   persists *before* `run()` returns, so a client's very next call with the
+   same `session_id` already sees this turn as history (step 1)
+4. Returns a `QueryResult` (`session_id`, `answer`, `sources`,
+   `retrieval_methods_used`)
 
 ---
 
