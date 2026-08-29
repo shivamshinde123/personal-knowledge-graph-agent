@@ -188,7 +188,12 @@ only `providers/base.py`'s `get_provider()` and its return type,
 2. Both concrete providers construct a `LangChainProvider` around a
    LangChain chat model (`ChatOllama` / `ChatOpenAI`) — this is where every
    provider call's prompt building, JSON response parsing, and
-   retry-with-backoff actually live, shared by both
+   retry-with-backoff actually live, shared by both. The `ChatOpenAI`
+   (OpenRouter) side always passes an explicit `max_tokens`
+   (`llm.cloud_max_tokens`, default `4096`) — left unset it would default
+   to the routed model's own maximum (64000 for `claude-sonnet-4`), which
+   can exceed the account's remaining credit balance and fail the call
+   outright; verified directly — see DECISIONS.md, 2026-08-29
 3. `provider.generate_metadata(texts)` — called by
    `pipeline/metadata.py::generate_metadata()` for the `project_name`/`topic`
    fields (batched: one call per group of `config.yaml`'s

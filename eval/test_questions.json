@@ -3,8 +3,8 @@
     "id": "q01",
     "question": "What local embedding model does the system use to embed chunks?",
     "category": "factual",
-    "expected_item_ids": ["b019d892-4678-42fd-b375-3322e28dab82"],
-    "expected_answer_summary": "sentence-transformers/all-MiniLM-L6-v2, chosen as a free local embedding model."
+    "expected_item_ids": ["b019d892-4678-42fd-b375-3322e28dab82", "3bd0afb7-0e1e-46eb-a393-5c4d9b25f197"],
+    "expected_answer_summary": "sentence-transformers/all-MiniLM-L6-v2, chosen as a free local embedding model — stated in both Tech_Stack.docx and the Complete Project Design Document's section 11.2."
   },
   {
     "id": "q02",

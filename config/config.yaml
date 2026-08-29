@@ -6,6 +6,7 @@ llm:
   provider_mode: mixed # fully_local | fully_cloud | mixed
   local_model: llama3:8b # used when provider_mode is fully_local or mixed (ingestion tasks)
   cloud_model: anthropic/claude-sonnet-4 # used for cloud-routed tasks
+  cloud_max_tokens: 4096 # response token cap for cloud calls; unset defaults to the model's own max, which can exceed the account's remaining credit balance
 
 ingestion:
   schedule: "0 23 * * *" # cron expression; default 11 PM daily
