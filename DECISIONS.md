@@ -8,6 +8,20 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-29 — Relationship prompt neutralizes shared boilerplate; parser tolerates a reasoning preamble
+
+**Context**: The 2026-08-24 relationship-confirmation fix (skepticism-by-default prompt + confidence threshold) was only ever verified against the cheap `anthropic/claude-3-haiku`, and a real false positive remained open (see `memory/relationship_confidence_pattern_matching.md`): two texts sharing a literal boilerplate line ("Companion document to: <some other document>") got confirmed as `companion_to`, even though the line doesn't name either text as the other's companion — it names a third, unrelated document. Re-tested against the actual configured default, `anthropic/claude-sonnet-4` (real OpenRouter calls; temporarily set `provider_mode: fully_cloud` for the test, reverted immediately after): the same false positive reproduced, with *higher* confidence (1.0 vs. haiku's 0.9) — ruling out "model capability" as the cause and confirming it's a genuine prompt-design flaw, not something a stronger model fixes on its own.
+
+**Decision**: Added an explicit instruction to `_build_relationship_prompt()`: before judging, name any sentence/header/phrase that appears verbatim in both texts, and treat such shared boilerplate as *not* evidence of a relationship unless it specifically names the other text (not a third document) as companion/reference. Re-tested against real `claude-sonnet-4`: this alone made the model correctly reject the false-positive pair — but also made it reliably explain its reasoning before the JSON, violating the prompt's existing "respond with ONLY JSON" instruction and breaking `_parse_relationship_response()`'s `json.loads(raw)`. Rather than fighting the model back into silent, unexplained JSON-only output (real-tested and unreliable), added `_extract_json_object()`: scans the response for brace-balanced `{...}` substrings and returns the last one that's valid JSON containing a `related` key, tolerating a reasoning preamble instead of requiring pure JSON.
+
+**Alternatives considered**: Stripping boilerplate text programmatically before it reaches the prompt (the original memory's suggestion) — rejected as harder to get right than it sounds: "boilerplate" would need identifying without domain-specific heuristics (exact-substring matching two chunks that happen to be different lengths, header vs. body ambiguity), whereas the LLM can already recognize verbatim-shared text with a plain-language instruction. Forcing the model into single-shot JSON-only output via a lower `temperature` or a stricter format instruction — not attempted, since OpenRouter's `ChatOpenAI` wrapper here doesn't expose reliable structured-output enforcement across arbitrary routed models, and the preamble-tolerant parser is simple and already real-verified.
+
+**Verified against real data**: four real `claude-sonnet-4` calls via OpenRouter (capped `max_tokens=2000` for cost — the app's default, uncapped, exceeded the available credit balance on a first attempt; noted as a separate, pre-existing latent issue in `providers/openrouter_provider.py`, not fixed here since it's out of scope for this fix). (1) The original false-positive pair (cookie recipe vs. ingestion design, sharing the boilerplate line) → correctly rejected (`None`), where it was previously wrongly confirmed. (2) A genuine positive control — a text whose "Companion document to:" line actually names the other text's real title → correctly confirmed as `companion_to`. (3) A genuinely related pair with no shared boilerplate at all (a design plan and its implementation notes) → still correctly confirmed as `implements`, confirming the fix didn't make the model over-conservative generally. (4) A genuinely unrelated pair with no shared boilerplate → still correctly rejected.
+
+**Affects**: `providers/base.py`
+
+---
+
 ## 2026-08-29 — Condense follow-up questions into a standalone query before retrieval
 
 **Context**: Conversation history reaches the answer-synthesis prompt
