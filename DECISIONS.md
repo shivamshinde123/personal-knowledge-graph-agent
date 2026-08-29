@@ -8,6 +8,41 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-25 — Keyword search node builds a safe FTS5 query with stopword removal and OR-joined terms
+
+**Context**: `storage/sqlite_store.py::keyword_search()` was already
+built and tested against simple, pre-formed FTS5 match expressions (e.g.
+`"router"`), but never against a raw natural-language question. Passing a
+question directly as the `MATCH` expression has two problems: FTS5's
+special characters/operators (`" * ^ - + ( ) : NEAR AND OR NOT`) can turn
+an ordinary sentence into invalid syntax or an unintended query, and FTS5's
+default implicit join between space-separated bare terms is `AND` — too
+strict for natural language, since requiring every single word (including
+filler words like "what"/"the"/"is") to appear would return far fewer
+results than a human would expect.
+
+**Decision**: `agent/search_nodes.py::_to_fts_query()` extracts
+alphanumeric words, drops a small stopword list (articles, auxiliary
+verbs, question words, pronouns), double-quotes each remaining term (so
+each is matched as a literal string rather than parsed for FTS5 operators
+— sidesteps the special-character problem entirely), and joins them with
+explicit `OR` — so a question matches items containing *any* significant
+term, ranked by BM25 relevance rather than requiring all of them. A
+question with no significant terms left (e.g. "What is this?") returns no
+hits without ever calling `keyword_search()`, rather than running an
+empty/degenerate query.
+
+**Alternatives considered**: Passing the raw question straight through —
+rejected, breaks on ordinary punctuation/apostrophes and is over-strict via
+implicit `AND`. Using FTS5's built-in `NEAR`/proximity operators for a
+closer approximation of natural phrasing — rejected as unnecessary
+complexity; plain `OR` plus BM25 ranking already surfaces the most
+relevant results without hand-tuning proximity windows.
+
+**Affects**: `agent/search_nodes.py`
+
+---
+
 ## 2026-08-25 — Query Router is a rule-based heuristic, not an LLM call
 
 **Context**: `Technical_Design_Document.docx` section 8.2 says the Query
