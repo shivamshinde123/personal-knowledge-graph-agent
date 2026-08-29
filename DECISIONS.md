@@ -8,6 +8,38 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-25 — Graph traversal expands outward from search hits and ranks by shared-connection count
+
+**Context**: `Technical_Design_Document.docx` section 8.2 step 3 says
+"connected nodes are pulled from Neo4j via graph traversal" but doesn't
+specify a starting point. A natural-language question has no direct entry
+point into the graph on its own — `Neo4jStore` is queried by item id, not
+by text — so traversal has to start from somewhere. Neither doc specifies
+how discovered neighbors should be ranked relative to each other, either,
+since `storage/neo4j_store.py::get_related_items()` only returns one
+item's unordered one-hop neighbors.
+
+**Decision**: `agent/graph_traversal.py::graph_traversal()` takes the
+seed hits already found by vector/keyword search and expands one hop out
+from each of them via `get_related_items()`, excluding anything already in
+the seed set. Neighbors are ranked by how many *distinct* seed items they
+connect to — a neighbor reachable from several of the seeds is a stronger
+signal than one reachable from only one — with ties broken by the best
+(lowest) rank among the seeds that reached it. A seed whose lookup fails is
+logged and skipped, matching the rest of the codebase's per-item
+resilience pattern, rather than aborting traversal for every other seed.
+
+**Alternatives considered**: Extracting probable entity names from the
+question text itself (e.g. via NER) to give traversal an independent
+starting point — rejected as significant added complexity and a new
+failure surface for a personal tool where the search-hit-seeded approach
+already covers "how does X relate to Y"-style questions well, since X and Y
+are exactly what vector/keyword search should already be surfacing.
+
+**Affects**: `agent/graph_traversal.py`
+
+---
+
 ## 2026-08-25 — Keyword search node builds a safe FTS5 query with stopword removal and OR-joined terms
 
 **Context**: `storage/sqlite_store.py::keyword_search()` was already
