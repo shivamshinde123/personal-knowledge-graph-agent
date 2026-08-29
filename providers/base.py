@@ -37,7 +37,8 @@ from config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
-Task = Literal["metadata", "relationship", "answer", "condense"]
+Task = Literal["metadata", "relationship", "answer", "condense", "eval"]
+EvalCriterion = Literal["faithfulness", "relevance"]
 
 _MAX_RETRIES = 3
 _BASE_DELAY_SECONDS = 1.0
@@ -75,6 +76,18 @@ class ContextChunk:
     source_type: str
     title: str | None = None
     url: str | None = None
+
+
+@dataclass(slots=True)
+class EvalJudgment:
+    """An LLM-as-judge score for one evaluation criterion, in ``eval/``.
+
+    Not used on the query path — only by ``eval/evaluators.py``'s
+    faithfulness/relevance scorers.
+    """
+
+    score: float
+    reasoning: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +184,40 @@ class ProviderInterface(ABC):
 
         Returns:
             A standalone rewrite of ``question``, suitable for retrieval.
+
+        Raises:
+            ProviderError: If the call fails after retries are exhausted.
+        """
+
+    @abstractmethod
+    def generate_eval_judgment(
+        self,
+        criterion: EvalCriterion,
+        question: str,
+        answer: str,
+        context: Sequence[str],
+    ) -> EvalJudgment:
+        """Score one answer against one evaluation criterion, LLM-as-judge.
+
+        Used only by ``eval/evaluators.py`` — never on the query path. Not
+        every argument is relevant to every criterion (``"faithfulness"``
+        doesn't need ``question``; ``"relevance"`` doesn't need
+        ``context``), but all three are always passed for a uniform
+        signature; the prompt uses only what each criterion needs.
+
+        Args:
+            criterion: Which quality dimension to score —
+                ``"faithfulness"`` (is everything in ``answer`` actually
+                supported by ``context``, or does it hallucinate) or
+                ``"relevance"`` (does ``answer`` actually address
+                ``question``).
+            question: The question that was asked.
+            answer: The agent's synthesized answer.
+            context: The retrieved chunk texts the answer was grounded in.
+
+        Returns:
+            A score in ``[0.0, 1.0]`` (higher is better) with a short
+            explanation.
 
         Raises:
             ProviderError: If the call fails after retries are exhausted.
@@ -283,21 +330,27 @@ def _build_relationship_prompt(source_text: str, candidate_text: str) -> str:
 _FLAT_JSON_OBJECT = re.compile(r"\{[^{}]*\}")
 
 
-def _extract_json_object(raw: str) -> str:
+def _extract_json_object(raw: str, required_key: str) -> str:
     """Pull a flat JSON object out of a response that may reason before it.
 
-    The relationship prompt now asks the model to first name any shared
-    boilerplate before judging (see DECISIONS.md), and models reliably
-    comply by explaining their reasoning ahead of the JSON rather than
-    emitting ONLY JSON as instructed — so the raw response is no longer
-    reliably pure JSON on its own. Scans for every brace-balanced `{...}`
-    substring and returns the last one that's valid JSON containing a
-    `related` key, since the judgment is always the final thing emitted.
-    Falls back to returning ``raw`` unchanged if nothing matches, so the
-    caller's own ``json.loads`` still raises a clear, familiar error.
+    The relationship prompt asks the model to first name any shared
+    boilerplate before judging (see DECISIONS.md, 2026-08-29), and models
+    reliably comply by explaining their reasoning ahead of the JSON rather
+    than emitting ONLY JSON as instructed — so the raw response is not
+    reliably pure JSON on its own. The eval-judgment prompts (see
+    ``eval/evaluators.py``) invite similar reasoning-before-scoring. Scans
+    for every brace-balanced `{...}` substring and returns the last one
+    that's valid JSON containing ``required_key``, since the judgment is
+    always the final thing emitted. Falls back to returning ``raw``
+    unchanged if nothing matches, so the caller's own ``json.loads`` still
+    raises a clear, familiar error.
 
     Args:
         raw: The model's raw response text.
+        required_key: The key the real judgment object must contain (e.g.
+            ``"related"``, ``"score"``) — distinguishes it from any other
+            brace-balanced substring that happens to appear in the
+            reasoning text.
 
     Returns:
         The extracted JSON object substring, or ``raw`` if none was found.
@@ -307,13 +360,13 @@ def _extract_json_object(raw: str) -> str:
             parsed = json.loads(candidate)
         except json.JSONDecodeError:
             continue
-        if isinstance(parsed, dict) and "related" in parsed:
+        if isinstance(parsed, dict) and required_key in parsed:
             return candidate
     return raw
 
 
 def _parse_relationship_response(raw: str) -> RelationshipJudgment | None:
-    parsed = json.loads(_extract_json_object(raw))
+    parsed = json.loads(_extract_json_object(raw, required_key="related"))
     if not isinstance(parsed, dict) or "related" not in parsed:
         raise ValueError(f"Expected a JSON object with 'related', got: {raw!r}")
     if not parsed["related"]:
@@ -367,6 +420,52 @@ def _build_condense_prompt(question: str, history: Sequence[ConversationTurn]) -
         "text.\n\n"
         f"Prior conversation:\n{transcript}\n\nFollow-up question: {question}"
     )
+
+
+_EVAL_CRITERION_INSTRUCTIONS: dict[EvalCriterion, str] = {
+    "faithfulness": (
+        "Score how well the ANSWER is supported by the CONTEXT alone. "
+        "Every specific claim, fact, or detail in the answer must be "
+        "traceable to something actually stated in the context — not "
+        "something plausible-sounding, not general knowledge, not an "
+        "inference the context doesn't support. 1.0 means every claim is "
+        "directly grounded in the context; 0.0 means the answer states "
+        "significant details the context never mentions (hallucination). "
+        "The QUESTION is given only for background; do not score whether "
+        "the answer addresses it — that's a separate criterion."
+    ),
+    "relevance": (
+        "Score how directly the ANSWER addresses the QUESTION — on-topic, "
+        "and covering what was actually asked, not a tangent or a partial "
+        "answer to a different question. 1.0 means it fully addresses the "
+        "question; 0.0 means it doesn't address the question at all. The "
+        "CONTEXT is given only for background; do not score factual "
+        "accuracy against it — that's a separate criterion."
+    ),
+}
+
+
+def _build_eval_prompt(
+    criterion: EvalCriterion, question: str, answer: str, context: Sequence[str]
+) -> str:
+    context_text = "\n\n".join(context) if context else "(no context retrieved)"
+    return (
+        f"{_EVAL_CRITERION_INSTRUCTIONS[criterion]}\n\n"
+        "Respond with ONLY JSON: "
+        '{"score": number between 0 and 1, "reasoning": short explanation}. '
+        "No other text.\n\n"
+        f"Question: {question}\n\nContext:\n{context_text}\n\nAnswer: {answer}"
+    )
+
+
+def _parse_eval_response(raw: str) -> EvalJudgment:
+    parsed = json.loads(_extract_json_object(raw, required_key="score"))
+    if not isinstance(parsed, dict) or "score" not in parsed:
+        raise ValueError(f"Expected a JSON object with 'score', got: {raw!r}")
+    score = float(parsed["score"])
+    if not 0.0 <= score <= 1.0:
+        raise ValueError(f"Eval score out of the [0, 1] range: {raw!r}")
+    return EvalJudgment(score=score, reasoning=str(parsed.get("reasoning", "")))
 
 
 class LangChainProvider(ProviderInterface):
@@ -441,6 +540,22 @@ class LangChainProvider(ProviderInterface):
 
         return _retry_with_backoff(call, provider_name=self._provider_name)
 
+    def generate_eval_judgment(
+        self,
+        criterion: EvalCriterion,
+        question: str,
+        answer: str,
+        context: Sequence[str],
+    ) -> EvalJudgment:
+        """See :meth:`ProviderInterface.generate_eval_judgment`."""
+        prompt = _build_eval_prompt(criterion, question, answer, context)
+
+        def call() -> EvalJudgment:
+            response = self._chat_model.invoke(prompt)
+            return _parse_eval_response(str(response.content))
+
+        return _retry_with_backoff(call, provider_name=self._provider_name)
+
 
 def get_provider(task: Task) -> ProviderInterface:
     """Select the configured provider for a given task.
@@ -450,12 +565,15 @@ def get_provider(task: Task) -> ProviderInterface:
     - ``fully_local``: every task runs through Ollama.
     - ``fully_cloud``: every task runs through OpenRouter.
     - ``mixed``: the low-frequency, quality-sensitive ``"answer"`` task runs
-      through OpenRouter; the cheaper, high-frequency ``"metadata"`` and
-      ``"relationship"`` ingestion tasks run through Ollama, as does
-      ``"condense"`` — it runs on every follow-up question, and a rough
-      rewrite that still improves retrieval over the raw follow-up is good
-      enough; the final answer is what actually needs the better model.
-      See ``DECISIONS.md``.
+      through OpenRouter, as does ``"eval"`` — judging answer quality
+      deserves the same caliber of model as generating them, and eval runs
+      are infrequent (only ``eval/run_evaluation.py``, not the query path)
+      so the extra cost is acceptable. The cheaper, high-frequency
+      ``"metadata"`` and ``"relationship"`` ingestion tasks run through
+      Ollama, as does ``"condense"`` — it runs on every follow-up question,
+      and a rough rewrite that still improves retrieval over the raw
+      follow-up is good enough; the final answer is what actually needs
+      the better model. See ``DECISIONS.md``.
 
     Args:
         task: Which kind of call the returned provider will be used for.
@@ -475,4 +593,8 @@ def get_provider(task: Task) -> ProviderInterface:
         return create_local_provider()
     if mode == "fully_cloud":
         return create_openrouter_provider()
-    return create_openrouter_provider() if task == "answer" else create_local_provider()
+    return (
+        create_openrouter_provider()
+        if task in ("answer", "eval")
+        else create_local_provider()
+    )

@@ -11,26 +11,28 @@ change to an entry point or call chain.
 > implemented and merged to `main`. The agent layer is complete:
 > `agent/router.py`, `agent/search_nodes.py`, `agent/graph_traversal.py`,
 > `agent/merger.py`, `agent/synthesizer.py`, and the LangGraph wiring in
-> `agent/graph.py` are all implemented (see below). Conversation memory is
-> under way: session/message storage (`storage/sqlite_store.py`), history
-> support in the provider layer (`providers/base.py`), and
-> `agent/graph.py::run()` loading/persisting turns are all implemented —
-> see DECISIONS.md, 2026-08-25. **Known open gap**: history reaches the
-> answer-synthesis prompt correctly, but retrieval (router, search nodes,
-> graph traversal) only ever sees the current question's raw text, so a
-> vague follow-up like "the second one" can retrieve the wrong context —
-> verified directly against real data, not fixed yet (see DECISIONS.md,
-> 2026-08-25). The API layer is complete: `api/main.py`,
-> `GET /api/health`, `POST /api/query`, `GET /api/sources/status`,
-> `GET`/`PUT /api/settings`, and `GET /api/sessions`/
-> `GET /api/sessions/{id}` are all implemented (see below), with five
-> error-response handlers registered for every route. **Conversation
-> memory is now end-to-end complete**, frontend included: the sidebar
-> lists real sessions and reopening one loads its real history (see
-> below) — verified directly against real, previously-recorded
-> conversation data through the real API. Remaining:
-> optionally `POST /api/ingest/trigger`, and the three extractors (Gmail,
-> GitHub, Google Calendar).
+> `agent/graph.py` (including the `condense_query` follow-up node) are all
+> implemented (see below). Conversation memory is end-to-end complete,
+> frontend included: session/message storage, history support in the
+> provider layer, `agent/graph.py::run()` loading/persisting turns, and
+> the sidebar listing/reopening real sessions are all implemented and
+> verified against real, previously-recorded conversation data through the
+> real API — including the follow-up-retrieval gap noted in earlier
+> revisions of this document, since fixed (see DECISIONS.md, 2026-08-29).
+> The API layer is complete: `api/main.py`, `GET /api/health`,
+> `POST /api/query`, `GET /api/sources/status`, `GET`/`PUT /api/settings`,
+> `GET /api/sessions`/`GET /api/sessions/{id}`, and
+> `POST /api/ingest/trigger` are all implemented (see below), with six
+> error-response handlers registered for every route. Relationship
+> detection has had several real-data-verified quality passes since first
+> built: bidirectional-duplicate prevention, per-candidate source chunk
+> selection, a narrowing distance cutoff, boilerplate-neutralization in
+> the confirmation prompt, and stale-relationship clearing on item edits
+> (see DECISIONS.md, all 2026-08-29). The evaluation layer
+> (`eval/test_questions.json`, `eval/evaluators.py`,
+> `eval/run_evaluation.py`, `agent/tracing.py`) is implemented and
+> verified against the real LangSmith account (see below). Remaining: the
+> three extractors not yet built (Gmail, GitHub, Google Calendar).
 
 ---
 
@@ -174,12 +176,15 @@ only `providers/base.py`'s `get_provider()` and its return type,
 `ProviderInterface`.
 
 1. `get_provider(task)` — `task` is `"metadata"`, `"relationship"`,
-   `"condense"`, or `"answer"`; reads `settings.config.llm.provider_mode`
-   and returns `create_local_provider()` (Ollama),
-   `create_openrouter_provider()` (OpenRouter), or, under `mixed`, routes
-   `"answer"` to OpenRouter and the three cheaper, higher-frequency tasks
-   (`"metadata"`, `"relationship"`, `"condense"`) to Ollama (see
-   DECISIONS.md, 2026-08-24 and 2026-08-29)
+   `"condense"`, `"answer"`, or `"eval"`; reads
+   `settings.config.llm.provider_mode` and returns `create_local_provider()`
+   (Ollama), `create_openrouter_provider()` (OpenRouter), or, under `mixed`,
+   routes `"answer"` and `"eval"` to OpenRouter (judging answer quality
+   deserves the same caliber of model as generating them, and eval runs
+   are infrequent — only `eval/run_evaluation.py`, never the query path)
+   and the three cheaper, higher-frequency tasks (`"metadata"`,
+   `"relationship"`, `"condense"`) to Ollama (see DECISIONS.md, 2026-08-24
+   and 2026-08-29)
 2. Both concrete providers construct a `LangChainProvider` around a
    LangChain chat model (`ChatOllama` / `ChatOpenAI`) — this is where every
    provider call's prompt building, JSON response parsing, and
@@ -217,6 +222,29 @@ only `providers/base.py`'s `get_provider()` and its return type,
    `agent/graph.py`'s `condense_query` node, only when `history` is
    non-empty, to rewrite a follow-up into a standalone retrieval query
    (see DECISIONS.md, 2026-08-29)
+7. `provider.generate_eval_judgment(criterion, question, answer, context)`
+   — called only by `eval/evaluators.py`'s `evaluate_faithfulness()` /
+   `evaluate_relevance()`, never on the query path. `criterion` is
+   `"faithfulness"` (is everything in `answer` supported by `context`) or
+   `"relevance"` (does `answer` address `question`); returns an
+   `EvalJudgment(score, reasoning)`. Same preamble-tolerant parsing as
+   `generate_relationship()` (see DECISIONS.md, 2026-08-29)
+
+---
+
+## Shared: tracing (`agent/tracing.py`)
+
+Not an entry point itself. `enable_tracing()` sets the
+`LANGSMITH_TRACING`/`LANGSMITH_API_KEY`/`LANGSMITH_PROJECT` environment
+variables LangChain/LangGraph's own auto-instrumentation reads — no
+`langsmith` import anywhere in `agent/graph.py`, and nothing to change
+there for a traced run to show up in the configured LangSmith project.
+Idempotent (safe to call more than once); a no-op returning `False` if no
+`LANGSMITH_API_KEY` is configured. Deliberately **not** called from
+`agent/graph.py::run()` — called explicitly, once, only by the two real
+entry points that should be traced: `api/main.py`'s startup lifespan (see
+below — tests substitute a no-op lifespan, so this never runs during a
+test) and `eval/run_evaluation.py::main()`. See DECISIONS.md, 2026-08-29.
 
 ---
 
@@ -621,8 +649,10 @@ builds the FastAPI app and registers every route module from
 `api/routes/`; the module-level `app = create_app()` is what `uvicorn`
 actually serves.
 
-1. On startup, the `lifespan` context manager opens one SQLite connection
-   (`storage/sqlite_store.py::connect()`), one Chroma collection
+1. On startup, the `lifespan` context manager first calls
+   `agent/tracing.py::enable_tracing()` (a no-op if no `LANGSMITH_API_KEY`
+   is configured — see "Shared: tracing" above), then opens one SQLite
+   connection (`storage/sqlite_store.py::connect()`), one Chroma collection
    (`storage/chroma_store.py::get_collection()`), and one Neo4j driver
    (`storage/neo4j_store.py::get_driver()`), and stores them on
    `app.state.conn`/`collection`/`driver` for the process's lifetime —
@@ -798,3 +828,40 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    `http://127.0.0.1:8080/api` (not `localhost` — see DECISIONS.md,
    2026-08-25) with CORS enabled on the backend side for the dev server's
    own origin (see DECISIONS.md, 2026-08-25)
+
+---
+
+## Entry point: `eval/run_evaluation.py` (`main()`)
+
+Run via `uv run python -m eval.run_evaluation` (module invocation — see
+DECISIONS.md, 2026-08-29, for why `python eval/run_evaluation.py` would
+fail the same way `scheduler/daily_batch.py` did). Per
+`docs/Technical_Design_Document.docx` section 13.6's "realistic evaluation
+workflow" — run after any meaningful architecture change.
+
+1. `agent/tracing.py::enable_tracing()` — logs a warning (doesn't abort)
+   if no `LANGSMITH_API_KEY` is configured, since dataset upload will
+   still fail later without one
+2. Opens the real, settings-derived SQLite connection, Chroma collection,
+   and Neo4j driver (same as `scheduler/daily_batch.py::main()`)
+3. `load_test_questions()` — reads `eval/test_questions.json`'s 26
+   hand-written questions (real, built against the currently-ingested
+   corpus — project design docs and Notion recipe pages; see
+   DECISIONS.md, 2026-08-29)
+4. `_ensure_dataset(client, questions)` — reuses an existing LangSmith
+   Dataset named `pkg-agent-eval-questions` if one exists, else creates it
+   and uploads every question as an example (`inputs: {question}`,
+   `outputs: {expected_item_ids, expected_answer_summary}`)
+5. `get_provider("eval")` — the LLM-as-judge provider (cloud in `mixed`
+   mode; see "Shared: LLM providers" above)
+6. `langsmith.evaluate()` runs `_make_target()`'s function — which calls
+   the real `agent/graph.py::run()` for each question, then reconstructs
+   the exact context text `agent/synthesizer.py::synthesize()` used (all
+   of each cited source's chunks, `get_chunks_for_item()` +
+   `"\n\n".join()`) — against three evaluators from `_make_evaluators()`:
+   `recall_at_k` (pure, `eval/evaluators.py`), `evaluate_faithfulness()`,
+   and `evaluate_relevance()` (both LLM-as-judge via the `"eval"`
+   provider). Results land as a real, browsable experiment in the
+   configured LangSmith project
+
+---

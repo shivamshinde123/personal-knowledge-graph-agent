@@ -21,6 +21,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from agent.tracing import enable_tracing
 from api.routes import health, ingest, query, sessions, settings, sources
 from config.settings import ConfigError
 from providers.base import ProviderError
@@ -31,7 +32,16 @@ from storage.sqlite_store import StorageError, connect
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Open real, settings-derived storage clients for the app's lifetime."""
+    """Open real, settings-derived storage clients for the app's lifetime.
+
+    Also enables LangSmith tracing here (a no-op if no
+    ``LANGSMITH_API_KEY`` is configured) — never in ``agent/graph.py``
+    itself, since tests substitute a no-op lifespan (see
+    ``tests/test_api/conftest.py``) and never reach this function, so
+    tracing can never leak into a test run this way. See
+    ``agent/tracing.py``, ``DECISIONS.md``.
+    """
+    enable_tracing()
     app.state.conn = connect()
     app.state.collection = get_collection()
     app.state.driver = get_driver()
