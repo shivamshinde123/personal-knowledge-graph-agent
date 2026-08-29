@@ -19,6 +19,79 @@ from providers.base import (
 )
 
 
+class TestGenerateEvalJudgment:
+    def test_parses_score_and_reasoning(self):
+        chat_model = FakeChatModel(
+            ['{"score": 0.9, "reasoning": "Well grounded in the context."}']
+        )
+        provider = LangChainProvider(chat_model, provider_name="test")
+
+        judgment = provider.generate_eval_judgment(
+            "faithfulness", "q", "a", ["context chunk"]
+        )
+
+        assert judgment.score == 0.9
+        assert judgment.reasoning == "Well grounded in the context."
+
+    def test_a_reasoning_preamble_before_the_json_is_still_parsed(self):
+        chat_model = FakeChatModel(
+            [
+                "Looking at the answer against the context, every claim "
+                'checks out.\n\n{"score": 1.0, "reasoning": "Fully supported."}'
+            ]
+        )
+        provider = LangChainProvider(chat_model, provider_name="test")
+
+        judgment = provider.generate_eval_judgment(
+            "faithfulness", "q", "a", ["context"]
+        )
+
+        assert judgment.score == 1.0
+
+    def test_a_score_outside_0_to_1_raises_provider_error(self):
+        chat_model = FakeChatModel(['{"score": 1.5, "reasoning": "x"}'] * 4)
+        provider = LangChainProvider(chat_model, provider_name="test")
+
+        with pytest.raises(ProviderError):
+            provider.generate_eval_judgment("relevance", "q", "a", [])
+
+    def test_missing_score_raises_provider_error(self):
+        chat_model = FakeChatModel(['{"reasoning": "no score given"}'] * 4)
+        provider = LangChainProvider(chat_model, provider_name="test")
+
+        with pytest.raises(ProviderError):
+            provider.generate_eval_judgment("relevance", "q", "a", [])
+
+    def test_missing_reasoning_defaults_to_empty_string(self):
+        chat_model = FakeChatModel(['{"score": 0.5}'])
+        provider = LangChainProvider(chat_model, provider_name="test")
+
+        judgment = provider.generate_eval_judgment("relevance", "q", "a", [])
+
+        assert judgment.reasoning == ""
+
+    def test_faithfulness_prompt_includes_context_not_a_missing_placeholder(self):
+        chat_model = FakeChatModel(['{"score": 0.8, "reasoning": "ok"}'])
+        provider = LangChainProvider(chat_model, provider_name="test")
+
+        provider.generate_eval_judgment(
+            "faithfulness", "What is X?", "X is Y.", ["X is defined as Y in doc Z."]
+        )
+
+        prompt = chat_model.prompts[0]
+        assert "What is X?" in prompt
+        assert "X is Y." in prompt
+        assert "X is defined as Y in doc Z." in prompt
+
+    def test_empty_context_is_shown_as_such_not_left_blank(self):
+        chat_model = FakeChatModel(['{"score": 0.0, "reasoning": "no context"}'])
+        provider = LangChainProvider(chat_model, provider_name="test")
+
+        provider.generate_eval_judgment("relevance", "q", "a", [])
+
+        assert "no context retrieved" in chat_model.prompts[0]
+
+
 class FakeChatModel:
     """Queues canned responses (or exceptions) for successive .invoke() calls."""
 
@@ -329,6 +402,7 @@ class TestGetProvider:
         )
 
         assert get_provider("answer") == "CLOUD"
+        assert get_provider("eval") == "CLOUD"
         assert get_provider("metadata") == "LOCAL"
         assert get_provider("relationship") == "LOCAL"
         assert get_provider("condense") == "LOCAL"

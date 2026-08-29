@@ -1,0 +1,184 @@
+[
+  {
+    "id": "q01",
+    "question": "What local embedding model does the system use to embed chunks?",
+    "category": "factual",
+    "expected_item_ids": ["b019d892-4678-42fd-b375-3322e28dab82"],
+    "expected_answer_summary": "sentence-transformers/all-MiniLM-L6-v2, chosen as a free local embedding model."
+  },
+  {
+    "id": "q02",
+    "question": "What vector database stores the chunk embeddings?",
+    "category": "factual",
+    "expected_item_ids": ["b019d892-4678-42fd-b375-3322e28dab82", "994149e7-52ee-4195-91f8-c96a8c72f912"],
+    "expected_answer_summary": "Chroma, run embedded/local."
+  },
+  {
+    "id": "q03",
+    "question": "What graph database stores the relationships between items?",
+    "category": "factual",
+    "expected_item_ids": ["994149e7-52ee-4195-91f8-c96a8c72f912", "b019d892-4678-42fd-b375-3322e28dab82"],
+    "expected_answer_summary": "Neo4j Community Edition, run locally."
+  },
+  {
+    "id": "q04",
+    "question": "Which database stores the raw extracted text and item metadata?",
+    "category": "factual",
+    "expected_item_ids": ["994149e7-52ee-4195-91f8-c96a8c72f912"],
+    "expected_answer_summary": "SQLite, the single source-of-truth text layer for all six sources."
+  },
+  {
+    "id": "q05",
+    "question": "How often does the ingestion batch run?",
+    "category": "factual",
+    "expected_item_ids": ["672269af-0c11-41a4-8389-296d466b610b", "3bd0afb7-0e1e-46eb-a393-5c4d9b25f197"],
+    "expected_answer_summary": "Once daily, as a scheduled batch (cron on Mac/Linux, Task Scheduler on Windows)."
+  },
+  {
+    "id": "q06",
+    "question": "Why was continuous/real-time ingestion rejected in favor of a once-daily batch?",
+    "category": "synthesis",
+    "expected_item_ids": ["3bd0afb7-0e1e-46eb-a393-5c4d9b25f197"],
+    "expected_answer_summary": "To reduce API usage and overall complexity, per the revised decision in the design discussion."
+  },
+  {
+    "id": "q07",
+    "question": "What value does the system use to determine which items count as 'new' during an ingestion run?",
+    "category": "factual",
+    "expected_item_ids": ["672269af-0c11-41a4-8389-296d466b610b", "3bd0afb7-0e1e-46eb-a393-5c4d9b25f197"],
+    "expected_answer_summary": "A single stored last_run_timestamp value, only updated after a run completes successfully."
+  },
+  {
+    "id": "q08",
+    "question": "What Python code formatter and linter does the project use?",
+    "category": "factual",
+    "expected_item_ids": ["39ee8075-d6c2-4e0a-9f91-5bb461e3c1f3"],
+    "expected_answer_summary": "black for formatting, ruff (or flake8) for linting."
+  },
+  {
+    "id": "q09",
+    "question": "What tool manages Python dependencies and the virtual environment for this project?",
+    "category": "factual",
+    "expected_item_ids": ["39ee8075-d6c2-4e0a-9f91-5bb461e3c1f3"],
+    "expected_answer_summary": "uv, exclusively."
+  },
+  {
+    "id": "q10",
+    "question": "What port does the FastAPI backend run on?",
+    "category": "factual",
+    "expected_item_ids": ["d4c5438a-d366-4dc5-8d03-d6f32fb4953f"],
+    "expected_answer_summary": "localhost:8080."
+  },
+  {
+    "id": "q11",
+    "question": "Does the API require authentication?",
+    "category": "factual",
+    "expected_item_ids": ["d4c5438a-d366-4dc5-8d03-d6f32fb4953f"],
+    "expected_answer_summary": "No — the system is single-user and local-only, bound to localhost, so there's no authentication layer."
+  },
+  {
+    "id": "q12",
+    "question": "What HTTP status code does POST /api/ingest/trigger return?",
+    "category": "factual",
+    "expected_item_ids": ["d4c5438a-d366-4dc5-8d03-d6f32fb4953f"],
+    "expected_answer_summary": "202 Accepted."
+  },
+  {
+    "id": "q13",
+    "question": "What local LLM runtime does the system support?",
+    "category": "factual",
+    "expected_item_ids": ["b019d892-4678-42fd-b375-3322e28dab82", "3bd0afb7-0e1e-46eb-a393-5c4d9b25f197"],
+    "expected_answer_summary": "Ollama, for running models locally."
+  },
+  {
+    "id": "q14",
+    "question": "What service provides access to cloud LLM providers?",
+    "category": "factual",
+    "expected_item_ids": ["3bd0afb7-0e1e-46eb-a393-5c4d9b25f197", "b019d892-4678-42fd-b375-3322e28dab82"],
+    "expected_answer_summary": "OpenRouter, giving access to a user-selected model via one unified account/API key."
+  },
+  {
+    "id": "q15",
+    "question": "What are the three provider_mode options for configuring the LLM provider?",
+    "category": "factual",
+    "expected_item_ids": ["3bd0afb7-0e1e-46eb-a393-5c4d9b25f197"],
+    "expected_answer_summary": "fully_local, fully_cloud, and mixed."
+  },
+  {
+    "id": "q16",
+    "question": "Who is the primary intended user of this project, according to the Product Requirements Document?",
+    "category": "factual",
+    "expected_item_ids": ["57fe507a-224b-4716-b3dd-43e5369a2328"],
+    "expected_answer_summary": "The project's own builder, Shivam Shinde, an AI/ML engineer and recent WPI Data Science graduate."
+  },
+  {
+    "id": "q17",
+    "question": "What happens in Phase 4 of the implementation plan?",
+    "category": "factual",
+    "expected_item_ids": ["57fe507a-224b-4716-b3dd-43e5369a2328"],
+    "expected_answer_summary": "Evaluation and optimization: building the 20-30 question evaluation test set and wiring it into LangSmith, then running retrieval and relationship-quality evaluation."
+  },
+  {
+    "id": "q18",
+    "question": "What design principle guides the chat interface, per the UI/UX wireframes?",
+    "category": "factual",
+    "expected_item_ids": ["3913de37-4170-450f-bd89-3d1833093247"],
+    "expected_answer_summary": "Chat-first: the primary interaction is a natural-language question and a synthesized, cited answer, not a search-results list."
+  },
+  {
+    "id": "q19",
+    "question": "Does the React frontend communicate with the FastAPI backend over the public internet?",
+    "category": "factual",
+    "expected_item_ids": ["672269af-0c11-41a4-8389-296d466b610b"],
+    "expected_answer_summary": "No — only over localhost; the system isn't exposed to the local network or internet by default."
+  },
+  {
+    "id": "q20",
+    "question": "How does relationship detection avoid comparing every new item against the entire existing dataset?",
+    "category": "synthesis",
+    "expected_item_ids": ["3bd0afb7-0e1e-46eb-a393-5c4d9b25f197"],
+    "expected_answer_summary": "Vector similarity narrows candidates to a small relevant list first; only that short list is then evaluated by the LLM."
+  },
+  {
+    "id": "q21",
+    "question": "Which document is the System Architecture Document a companion to?",
+    "category": "cross_document",
+    "expected_item_ids": ["672269af-0c11-41a4-8389-296d466b610b"],
+    "expected_answer_summary": "The Complete Project Design Document and the Product Requirements Document."
+  },
+  {
+    "id": "q22",
+    "question": "Which document is the Product Requirements Document a companion document to?",
+    "category": "cross_document",
+    "expected_item_ids": ["57fe507a-224b-4716-b3dd-43e5369a2328"],
+    "expected_answer_summary": "The Personal Knowledge Graph Agent Complete Project Design Document."
+  },
+  {
+    "id": "q23",
+    "question": "Which document is the File and Folder Structure document a companion to?",
+    "category": "cross_document",
+    "expected_item_ids": ["d872eb0d-0874-4789-b41b-a06a0fde7611"],
+    "expected_answer_summary": "The System Architecture Document."
+  },
+  {
+    "id": "q24",
+    "question": "How do the three storage backends relate to each other for a single item?",
+    "category": "cross_document",
+    "expected_item_ids": ["994149e7-52ee-4195-91f8-c96a8c72f912"],
+    "expected_answer_summary": "items.id (SQLite), Chroma's metadata.item_id, and Neo4j's Item.id are always the same value, so any store can be joined back to the others."
+  },
+  {
+    "id": "q25",
+    "question": "What sections appear on the Recipe List page in Notion?",
+    "category": "factual",
+    "expected_item_ids": ["77df5196-d1e9-4898-8901-6886197d0ff0"],
+    "expected_answer_summary": "Navigation, Actions, Cuisines, Recipes, Ingredients."
+  },
+  {
+    "id": "q26",
+    "question": "What sections appear on the New Recipe page in Notion?",
+    "category": "factual",
+    "expected_item_ids": ["13d248f3-1a5c-4e5b-a15d-3720280a0a18"],
+    "expected_answer_summary": "Ingredients, Instructions, and Steps."
+  }
+]
