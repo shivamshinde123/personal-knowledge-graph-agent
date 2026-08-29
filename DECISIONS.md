@@ -8,6 +8,50 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-25 — Session/message storage: new tables, a single `record_conversation_turn()` write path, session title auto-generated from the first question
+
+**Context**: Conversation memory needs somewhere to persist sessions and
+their messages, but `Database_Schema.docx` predates this feature — it has
+no `sessions`/`messages` tables. `UIUX_Wireframes.docx` section 2.1 says
+the sidebar lists sessions "by auto-generated title" without specifying how
+the title is generated.
+
+**Decision**: Two new tables, `sessions` (`id`, `title`, `created_at`,
+`updated_at`) and `messages` (`id`, `session_id`, `role`, `text`,
+`sources` — JSON-encoded, `created_at`), following this file's existing
+schema conventions (`ON DELETE CASCADE`, an index on the foreign key). A
+single `record_conversation_turn(conn, session_id, question, answer,
+sources)` is the one write path: it upserts the session (creating it with
+an auto-generated title on first turn, only refreshing `updated_at` on
+later turns — an `INSERT ... ON CONFLICT DO UPDATE`, same pattern as
+`insert_item()`) and inserts both the user and agent messages in one call,
+so callers never have to remember to do these three things in the right
+order separately.
+
+The title is the question text itself, truncated to 60 characters — not a
+dedicated LLM summarization call. Cheaper, zero added latency on every
+first turn, and a truncated question is already a reasonable session label
+(matching the wireframe's own examples: "RAG pipelines...", "Interview
+prep...").
+
+`Message.sources` is stored/returned as plain `list[dict]`, not
+`agent/synthesizer.py`'s `Source` dataclass — this module never imports
+from `agent/`, per the project's one-way dependency rule (storage sits
+below agent). Conversion to a typed shape is the caller's job.
+
+**Alternatives considered**: An LLM call to generate a "real" summary
+title — rejected as unnecessary cost/latency for a V1 feature; can be
+revisited later if truncated-question titles prove genuinely unclear in
+practice. Separate `create_session()`/`add_message()`/`touch_session()`
+functions instead of one `record_conversation_turn()` — rejected as more
+surface area for callers to get wrong (e.g. forgetting to touch the
+session on a later turn); every real caller needs all three writes
+together anyway.
+
+**Affects**: `storage/sqlite_store.py`
+
+---
+
 ## 2026-08-25 — Frontend scaffolded with Vite; default `oxlint` replaced with ESLint per `Coding_Conventions.docx`
 
 **Context**: `Technical_Design_Document.docx` section 9.2 already decided
