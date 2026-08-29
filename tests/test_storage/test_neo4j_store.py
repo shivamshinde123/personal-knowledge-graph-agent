@@ -23,6 +23,7 @@ from storage.neo4j_store import (
     get_driver,
     get_item,
     get_related_items,
+    has_any_relationship,
     write_relationship,
 )
 
@@ -201,3 +202,27 @@ class TestDeleteItem:
 
     def test_deleting_a_nonexistent_item_is_harmless(self, driver):
         delete_item(driver, "does-not-exist")
+
+
+class TestHasAnyRelationship:
+    def test_false_when_no_edge_exists(self, driver):
+        assert has_any_relationship(driver, "a", "b") is False
+
+    def test_true_for_the_written_direction(self, driver):
+        a, b = make_item(id="a"), make_item(id="b")
+        write_relationship(driver, a, b, Relationship(label="implements"))
+
+        assert has_any_relationship(driver, "a", "b") is True
+
+    def test_true_regardless_of_which_id_is_passed_first(self, driver):
+        a, b = make_item(id="a"), make_item(id="b")
+        write_relationship(driver, a, b, Relationship(label="implements"))
+
+        assert has_any_relationship(driver, "b", "a") is True
+
+    def test_false_for_unrelated_pair_even_if_both_have_other_edges(self, driver):
+        a, b = make_item(id="a"), make_item(id="b")
+        write_relationship(driver, a, b, Relationship(label="implements"))
+
+        assert has_any_relationship(driver, "a", "c") is False
+        assert has_any_relationship(driver, "b", "c") is False

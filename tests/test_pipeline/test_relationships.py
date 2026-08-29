@@ -19,7 +19,14 @@ from pipeline.embeddings import embed_chunks
 from pipeline.relationships import _mean_embedding, detect_relationships
 from providers.base import ProviderError, RelationshipJudgment
 from storage.chroma_store import get_collection
-from storage.neo4j_store import ensure_constraints, get_driver, get_related_items
+from storage.neo4j_store import (
+    ItemNode,
+    Relationship,
+    ensure_constraints,
+    get_driver,
+    get_related_items,
+    write_relationship,
+)
 from storage.sqlite_store import Item, connect, insert_item, replace_chunks
 
 TEST_URI = os.environ.get("NEO4J_TEST_URI", "bolt://localhost:7687")
@@ -461,6 +468,70 @@ class TestWholeDocumentNarrowing:
         result = detect_relationships(conn, driver, collection, source_id)
 
         assert [item_id for item_id, _ in result] == [storage_related_id]
+
+
+class TestSkipsAlreadyRelatedCandidates:
+    """Candidates already connected to the source, in either direction.
+
+    Skipped before the LLM is even called — see DECISIONS.md.
+    """
+
+    def test_a_candidate_already_related_in_the_forward_direction_is_skipped(
+        self, conn, driver, collection, monkeypatch
+    ):
+        source_id = ingest(conn, collection, ref="a", text="Building the storage layer")
+        candidate_id = ingest(
+            conn, collection, ref="b", text="Storage layer design notes"
+        )
+        write_relationship(
+            driver,
+            ItemNode(id=source_id, source_type="notion"),
+            ItemNode(id=candidate_id, source_type="notion"),
+            Relationship(label="implements", confidence=0.9),
+        )
+        provider = FakeProvider(
+            default=RelationshipJudgment(label="discussed_in", confidence=0.9)
+        )
+        monkeypatch.setattr(
+            "pipeline.relationships.get_provider", lambda task: provider
+        )
+
+        result = detect_relationships(conn, driver, collection, source_id)
+
+        assert result == []
+        assert provider.calls == []
+        related = get_related_items(driver, source_id)
+        assert len(related) == 1
+        assert related[0].relationship.label == "implements"
+
+    def test_a_candidate_already_related_in_the_reverse_direction_is_skipped(
+        self, conn, driver, collection, monkeypatch
+    ):
+        source_id = ingest(conn, collection, ref="a", text="Building the storage layer")
+        candidate_id = ingest(
+            conn, collection, ref="b", text="Storage layer design notes"
+        )
+        # The candidate was processed first and wrote the edge the other way.
+        write_relationship(
+            driver,
+            ItemNode(id=candidate_id, source_type="notion"),
+            ItemNode(id=source_id, source_type="notion"),
+            Relationship(label="implements", confidence=0.9),
+        )
+        provider = FakeProvider(
+            default=RelationshipJudgment(label="discussed_in", confidence=0.9)
+        )
+        monkeypatch.setattr(
+            "pipeline.relationships.get_provider", lambda task: provider
+        )
+
+        result = detect_relationships(conn, driver, collection, source_id)
+
+        assert result == []
+        assert provider.calls == []
+        related = get_related_items(driver, source_id)
+        assert len(related) == 1
+        assert related[0].relationship.label == "implements"
 
 
 class TestMeanEmbedding:

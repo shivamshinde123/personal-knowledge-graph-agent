@@ -335,10 +335,17 @@ metadata/chunks/embeddings are already persisted.
   {"$ne": "browser_history"}}]}` — so browser history is never a candidate
   either, see DECISIONS.md, 2026-08-25) and narrowed to the same
   `project_name` when the item has one classified. Deduplicates matches
-  down to distinct candidate items, then — using the item's first chunk as
-  representative text for the LLM prompt itself, unchanged — asks
-  `get_provider("relationship").generate_relationship()` to confirm or
-  reject each one. The prompt is deliberately biased toward "unrelated"
+  down to distinct candidate items, then — for each one — first calls
+  `storage/neo4j_store.py::has_any_relationship(driver, source_item_id,
+  candidate.item_id)`, an undirected Cypher match that catches an existing
+  edge in either direction regardless of label, and skips the candidate
+  entirely (no LLM call, no graph write) if one already exists — detection
+  runs per newly-processed item, so without this check the same real-world
+  relationship could get judged and written twice, once from each
+  endpoint's own processing run (see DECISIONS.md, 2026-08-29). Otherwise —
+  using the item's first chunk as representative text for the LLM prompt
+  itself, unchanged — asks `get_provider("relationship").generate_relationship()`
+  to confirm or reject each one. The prompt is deliberately biased toward "unrelated"
   (most vector-narrowed candidates aren't actually related) and requires a
   specific, describable connection rather than shared topic/vocabulary — see
   DECISIONS.md, 2026-08-24. A confirmed judgment whose `confidence` is below
