@@ -386,7 +386,24 @@ calls `pipeline/filters.py` next.
   falling back to a crude HTML-tag-stripped `text/html`; PDF/DOCX
   attachments get their text extracted via the same `pypdf`/`python-docx`
   libraries `extractors/local_files.py` uses. A thread where every
-  message was filtered out produces no item.
+  message was filtered out produces no item. `_effective_window()`
+  combines the incremental `since` cursor with `config/.env`'s
+  `GMAIL_DATE_RANGE_START`/`GMAIL_DATE_RANGE_END`, if set: the start date
+  floors `since` (via `max()`, never moving a later cursor backward) and
+  the end date adds an inclusive `before:` to the Gmail search query on
+  every run — see DECISIONS.md, 2026-08-30.
+- `extractors/github.py` — per repo (scoped to `settings.env.github_repos_list`
+  if set, else every accessible repo — see DECISIONS.md), extracts the
+  README (re-checked via its own last-commit date, not every run),
+  commits (message + changed file names, no diffs), PRs (title/body +
+  review comments), issues (excluding PR-shaped entries via the
+  `pull_request` key), and starred repos (module-level, not per-repo).
+  `_effective_window()` (same shape as `extractors/gmail.py`'s) combines
+  `since` with `GITHUB_DATE_RANGE_START`/`GITHUB_DATE_RANGE_END`: the
+  start date floors `since`; the end date (`until`) is passed as GitHub's
+  own `until` query param for commits, and filtered client-side for PRs/
+  issues/starred repos (those endpoints have no server-side upper bound)
+  — see DECISIONS.md, 2026-08-30.
 - `extractors/browser_history.py` — copies `settings.env.browser_history_path`
   to a temp file before opening it (the browser holds the original locked
   while running — see DECISIONS.md, 2026-08-24), then reads Chrome's `urls`
@@ -551,8 +568,8 @@ test doubles/temp resources instead.
 1. `_run()` reads the watermark via `get_last_run_timestamp(conn)` and
    starts a run record via `start_ingestion_run(conn)`
 2. For each registered extractor in `_EXTRACTORS` (currently
-   `local_file`, `notion`, `gmail`, and `browser_history` — adding a
-   source means adding one entry here, per
+   `local_file`, `notion`, `gmail`, `github`, and `browser_history` —
+   adding a source means adding one entry here, per
    `docs/File_Folder_Structure.docx` section 4;
    `tests/test_scheduler/test_daily_batch.py`'s integration tests pin
    `_EXTRACTORS` to `local_file` only via an autouse fixture, so a new
