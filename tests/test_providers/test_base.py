@@ -386,11 +386,17 @@ class TestGetProvider:
         assert get_provider("answer") == "CLOUD"
         assert get_provider("relationship") == "CLOUD"
 
-    def test_mixed_routes_answer_to_cloud_and_others_to_local(self, monkeypatch):
+    def test_embedding_always_routes_to_cloud_under_fully_local(self, monkeypatch):
+        """There is no local embedding path.
+
+        "embedding" always resolves to OpenRouter, even under
+        fully_local (see providers/base.py::get_provider()'s own
+        docstring).
+        """
         monkeypatch.setattr(
             "providers.base.get_settings",
             lambda: SimpleNamespace(
-                config=SimpleNamespace(llm=SimpleNamespace(provider_mode="mixed"))
+                config=SimpleNamespace(llm=SimpleNamespace(provider_mode="fully_local"))
             ),
         )
         monkeypatch.setattr(
@@ -401,8 +407,21 @@ class TestGetProvider:
             lambda: "CLOUD",
         )
 
-        assert get_provider("answer") == "CLOUD"
-        assert get_provider("eval") == "CLOUD"
-        assert get_provider("metadata") == "LOCAL"
-        assert get_provider("relationship") == "LOCAL"
-        assert get_provider("condense") == "LOCAL"
+        assert get_provider("embedding") == "CLOUD"
+
+    def test_embedding_always_routes_to_cloud_under_fully_cloud(self, monkeypatch):
+        monkeypatch.setattr(
+            "providers.base.get_settings",
+            lambda: SimpleNamespace(
+                config=SimpleNamespace(llm=SimpleNamespace(provider_mode="fully_cloud"))
+            ),
+        )
+        monkeypatch.setattr(
+            "providers.local_provider.create_local_provider", lambda: "LOCAL"
+        )
+        monkeypatch.setattr(
+            "providers.openrouter_provider.create_openrouter_provider",
+            lambda: "CLOUD",
+        )
+
+        assert get_provider("embedding") == "CLOUD"

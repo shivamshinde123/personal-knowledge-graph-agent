@@ -10,9 +10,13 @@ depends on directly, not a layer this rule is about. See ``DECISIONS.md``.
 
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter
 
+from agent.browse import browse_folder
 from api.schemas import (
+    BrowseFolderResponse,
     SettingsResponse,
     SettingsUpdateRequest,
     SettingsUpdateResponse,
@@ -30,35 +34,63 @@ def get_settings_route() -> SettingsResponse:
     llm = get_settings().config.llm
     return SettingsResponse(
         provider_mode=llm.provider_mode,
-        local_model=llm.local_model,
-        cloud_model=llm.cloud_model,
+        local_generation_model=llm.local_generation_model,
+        cloud_generation_model=llm.cloud_generation_model,
+        cloud_embedding_model=llm.cloud_embedding_model,
     )
 
 
 @router.put("/settings", response_model=SettingsUpdateResponse)
 def put_settings_route(payload: SettingsUpdateRequest) -> SettingsUpdateResponse:
-    """Update the LLM provider configuration; a ``ConfigError`` maps to 500."""
+    """Update the LLM provider configuration; a ``ConfigError`` maps to 500.
+
+    A ``cloud_embedding_model`` change isn't specially handled here — the
+    frontend is responsible for confirming with the user and triggering a
+    reset + re-ingest afterward (see ``SettingsResponse``'s docstring).
+    """
     config = update_llm_config(
         provider_mode=payload.provider_mode,
-        local_model=payload.local_model,
-        cloud_model=payload.cloud_model,
+        local_generation_model=payload.local_generation_model,
+        cloud_generation_model=payload.cloud_generation_model,
+        cloud_embedding_model=payload.cloud_embedding_model,
     )
     return SettingsUpdateResponse(
         status="updated",
         provider_mode=config.llm.provider_mode,
-        local_model=config.llm.local_model,
-        cloud_model=config.llm.cloud_model,
+        local_generation_model=config.llm.local_generation_model,
+        cloud_generation_model=config.llm.cloud_generation_model,
+        cloud_embedding_model=config.llm.cloud_embedding_model,
     )
 
 
 @router.get("/settings/sources", response_model=SourceConfigResponse)
 def get_source_config_route() -> SourceConfigResponse:
-    """Return the current source-scope configuration (watch folders, Notion scope)."""
+    """Return the current source-scope configuration.
+
+    Watch folders, Notion scope, GitHub repo scope, and the Gmail/GitHub
+    date ranges.
+    """
     env = get_settings().env
     return SourceConfigResponse(
         local_files_watch_dirs=[str(d) for d in env.watch_dirs],
         notion_page_ids=env.notion_page_ids_list,
+        github_repos=env.github_repos_list,
+        gmail_date_range_start=_isoformat(env.gmail_date_range_start),
+        gmail_date_range_end=_isoformat(env.gmail_date_range_end),
+        github_date_range_start=_isoformat(env.github_date_range_start),
+        github_date_range_end=_isoformat(env.github_date_range_end),
     )
+
+
+@router.post("/settings/browse-folder", response_model=BrowseFolderResponse)
+def browse_folder_route() -> BrowseFolderResponse:
+    """Open a native folder-picker dialog on the server machine.
+
+    Only meaningful because this backend runs on the same local machine as
+    the user — see ``agent/browse.py``. Blocks until the dialog is closed;
+    ``path`` is ``null`` if the user cancelled rather than picking one.
+    """
+    return BrowseFolderResponse(path=browse_folder())
 
 
 @router.put("/settings/sources", response_model=SourceConfigResponse)
@@ -67,8 +99,23 @@ def put_source_config_route(payload: SourceConfigUpdateRequest) -> SourceConfigR
     env = update_source_config(
         local_files_watch_dirs=payload.local_files_watch_dirs,
         notion_page_ids=payload.notion_page_ids,
+        github_repos=payload.github_repos,
+        gmail_date_range_start=payload.gmail_date_range_start,
+        gmail_date_range_end=payload.gmail_date_range_end,
+        github_date_range_start=payload.github_date_range_start,
+        github_date_range_end=payload.github_date_range_end,
     )
     return SourceConfigResponse(
         local_files_watch_dirs=[str(d) for d in env.watch_dirs],
         notion_page_ids=env.notion_page_ids_list,
+        github_repos=env.github_repos_list,
+        gmail_date_range_start=_isoformat(env.gmail_date_range_start),
+        gmail_date_range_end=_isoformat(env.gmail_date_range_end),
+        github_date_range_start=_isoformat(env.github_date_range_start),
+        github_date_range_end=_isoformat(env.github_date_range_end),
     )
+
+
+def _isoformat(value: date | None) -> str | None:
+    """``date | None`` -> ``"YYYY-MM-DD" | None``, for ``SourceConfigResponse``."""
+    return value.isoformat() if value is not None else None

@@ -10,6 +10,7 @@ from storage.sqlite_store import (
     complete_ingestion_run,
     insert_item,
     start_ingestion_run,
+    update_ingestion_run_progress,
 )
 
 
@@ -50,9 +51,24 @@ class TestGetSourcesStatus:
         body = response.json()
         assert body["last_run"]["run_id"] == run_id
         assert body["last_run"]["status"] == "success"
+        assert body["last_run"]["items_processed"] == 1
         notion = next(s for s in body["sources"] if s["source_type"] == "notion")
         assert notion["items_processed"] == 1
         assert notion["status"] == "ok"
+
+    def test_last_run_items_processed_updates_while_still_running(self, conn, client):
+        """Live progress, not just a final count once the whole run finishes.
+
+        Verifies the fix behind the field, not just its presence.
+        """
+        run_id = start_ingestion_run(conn)
+        update_ingestion_run_progress(conn, run_id, 7)
+
+        response = client.get("/api/sources/status")
+
+        body = response.json()
+        assert body["last_run"]["status"] == "running"
+        assert body["last_run"]["items_processed"] == 7
 
     def test_total_items_reflects_items_from_before_the_latest_run(self, conn, client):
         insert_item(
@@ -88,6 +104,8 @@ class TestGetConnections:
                 env=SimpleNamespace(
                     watch_dirs=[],
                     notion_api_key=None,
+                    gmail_credentials_path=None,
+                    github_token=None,
                     google_calendar_credentials_path=None,
                     browser_history_path=None,
                 )

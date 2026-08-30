@@ -1,14 +1,24 @@
+import { ChatIcon, GraphIcon, SettingsIcon } from "./icons/NavIcons.jsx";
+
 /**
- * Session list, "New chat" button, and the Settings link.
- * Per docs/UIUX_Wireframes.docx section 2.1.
+ * Session list, "New chat" button, and primary navigation (Chat / Graph /
+ * Settings). Per docs/UIUX_Wireframes.docx section 2.1, restyled per the
+ * Figma redesign (see DECISIONS.md) — a fixed dark theme with a
+ * translucent, blurred panel and a purple "active" pill on the current
+ * nav tab.
  *
  * @param {object} props
- * @param {"chat" | "settings"} props.view
+ * @param {"chat" | "settings" | "graph"} props.view
  * @param {Array<{session_id: string, title: string | null, updated_at: string}>} props.sessions
  * @param {string | null} props.activeSessionId
  * @param {() => void} props.onNewChat
  * @param {(sessionId: string) => void} props.onSelectSession
+ * @param {() => void} props.onOpenChat - switches to the chat view without
+ *   starting a new conversation (the current session, if any, stays
+ *   active) -- the design's "Chat" nav tab is a separate action from "New
+ *   chat", which the app previously had no dedicated way to do.
  * @param {() => void} props.onOpenSettings
+ * @param {() => void} props.onOpenGraph
  */
 function Sidebar({
   view,
@@ -16,17 +26,21 @@ function Sidebar({
   activeSessionId,
   onNewChat,
   onSelectSession,
+  onOpenChat,
   onOpenSettings,
+  onOpenGraph,
 }) {
   return (
     <nav className="sidebar">
       <div className="sidebar-header">
         <h1 className="sidebar-title">Knowledge Agent</h1>
+        <p className="sidebar-subtitle">Ambient Intelligence</p>
       </div>
       <button type="button" className="new-chat-button" onClick={onNewChat}>
-        + New chat
+        New chat
       </button>
       <div className="session-list">
+        <p className="session-list-label">Recent</p>
         {sessions.length === 0 ? (
           <p className="session-list-empty">No past conversations yet.</p>
         ) : (
@@ -38,35 +52,42 @@ function Sidebar({
                 session.session_id === activeSessionId ? "active" : ""
               }`}
               onClick={() => onSelectSession(session.session_id)}
+              title={session.title || "Untitled conversation"}
             >
               {session.title || "Untitled conversation"}
             </button>
           ))
         )}
       </div>
-      <button
-        type="button"
-        className="settings-link"
-        onClick={onOpenSettings}
-        aria-current={view === "settings" ? "page" : undefined}
-      >
-        <svg
-          className="settings-link-icon"
-          width="16"
-          height="16"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
+      <div className="sidebar-footer">
+        <button
+          type="button"
+          className="nav-link"
+          onClick={onOpenChat}
+          aria-current={view === "chat" ? "page" : undefined}
         >
-          <circle cx="12" cy="12" r="3" />
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-        </svg>
-        Settings
-      </button>
+          <ChatIcon className="nav-link-icon" aria-hidden="true" />
+          Chat
+        </button>
+        <button
+          type="button"
+          className="nav-link"
+          onClick={onOpenGraph}
+          aria-current={view === "graph" ? "page" : undefined}
+        >
+          <GraphIcon className="nav-link-icon" aria-hidden="true" />
+          Graph
+        </button>
+        <button
+          type="button"
+          className="nav-link"
+          onClick={onOpenSettings}
+          aria-current={view === "settings" ? "page" : undefined}
+        >
+          <SettingsIcon className="nav-link-icon" aria-hidden="true" />
+          Settings
+        </button>
+      </div>
     </nav>
   );
 }

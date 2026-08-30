@@ -6,15 +6,20 @@ client object — so these run without a live Ollama instance.
 
 from types import SimpleNamespace
 
+import pytest
 from langchain_ollama import ChatOllama
 
-from providers.base import LangChainProvider
+from providers.base import LangChainProvider, ProviderError
 from providers.local_provider import create_local_provider
 
 
-def fake_settings(*, local_model="llama3:8b", ollama_host="http://localhost:11434"):
+def fake_settings(
+    *, local_generation_model="llama3:8b", ollama_host="http://localhost:11434"
+):
     return SimpleNamespace(
-        config=SimpleNamespace(llm=SimpleNamespace(local_model=local_model)),
+        config=SimpleNamespace(
+            llm=SimpleNamespace(local_generation_model=local_generation_model)
+        ),
         env=SimpleNamespace(ollama_host=ollama_host),
     )
 
@@ -24,7 +29,8 @@ class TestCreateLocalProvider:
         monkeypatch.setattr(
             "providers.local_provider.get_settings",
             lambda: fake_settings(
-                local_model="llama3:8b", ollama_host="http://example:11434"
+                local_generation_model="llama3:8b",
+                ollama_host="http://example:11434",
             ),
         )
 
@@ -39,7 +45,7 @@ class TestCreateLocalProvider:
     def test_explicit_model_overrides_the_configured_default(self, monkeypatch):
         monkeypatch.setattr(
             "providers.local_provider.get_settings",
-            lambda: fake_settings(local_model="llama3:8b"),
+            lambda: fake_settings(local_generation_model="llama3:8b"),
         )
 
         provider = create_local_provider(model="mistral:7b")
@@ -54,3 +60,18 @@ class TestCreateLocalProvider:
         provider = create_local_provider(model="mistral:7b")
 
         assert provider._provider_name == "ollama:mistral:7b"
+
+    def test_has_no_embedding_function(self, monkeypatch):
+        """There is no local embedding path any more.
+
+        Embedding always goes through OpenRouter
+        (providers/openrouter_provider.py), regardless of provider_mode —
+        a local provider is generation-only.
+        """
+        monkeypatch.setattr(
+            "providers.local_provider.get_settings", lambda: fake_settings()
+        )
+        provider = create_local_provider()
+
+        with pytest.raises(ProviderError):
+            provider.generate_embeddings(["hello"])

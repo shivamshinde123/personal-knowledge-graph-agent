@@ -1,5 +1,6 @@
 """Tests for the configuration loader."""
 
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from config.settings import (
     AppConfig,
     ConfigError,
     EnvSettings,
+    _retry_on_transient_permission_error,
     anchor_path,
     get_settings,
     load_config,
@@ -23,12 +25,18 @@ class TestLoadConfig:
     def test_parses_the_committed_config_yaml(self):
         config = load_config()
 
-        assert config.llm.provider_mode == "mixed"
+        assert config.llm.provider_mode == "fully_local"
         assert config.chunking.target_chunk_size_tokens == 400
         assert config.chunking.chunk_overlap_tokens == 40
         assert config.retrieval.top_k_vector == 8
         assert config.retrieval.relationship_candidate_count == 10
-        assert config.embedding.model == "sentence-transformers/all-MiniLM-L6-v2"
+        assert config.llm.cloud_embedding_model == "openai/text-embedding-3-small"
+
+    def test_llm_config_has_no_local_embedding_model_field(self):
+        """There is no local embedding path — see LLMConfig's docstring."""
+        config = load_config()
+
+        assert not hasattr(config.llm, "local_embedding_model")
 
     def test_parses_nested_filter_rules(self):
         config = load_config()
@@ -69,7 +77,7 @@ class TestLoadConfig:
         config = load_config(partial)
 
         assert config.llm.provider_mode == "fully_local"
-        assert config.llm.local_model == "llama3:8b"
+        assert config.llm.local_generation_model == "llama3:8b"
         assert config.retrieval.top_k_vector == 8
 
     def test_invalid_provider_mode_is_rejected(self, tmp_path: Path):
@@ -202,9 +210,9 @@ _SAMPLE_CONFIG = """\
 # Reference: docs/Environment_Config_Reference.docx section 4.
 
 llm:
-  provider_mode: mixed # fully_local | fully_cloud | mixed
-  local_model: llama3:8b # used when provider_mode is fully_local or mixed
-  cloud_model: anthropic/claude-sonnet-4 # used for cloud-routed tasks
+  provider_mode: fully_local # fully_local | fully_cloud
+  local_generation_model: llama3:8b # used when fully_local
+  cloud_generation_model: anthropic/claude-sonnet-4 # used when fully_cloud
 
 ingestion:
   schedule: "0 23 * * *" # cron expression; default 11 PM daily
@@ -227,9 +235,6 @@ retrieval:
   top_k_keyword: 8
   relationship_candidate_count: 10
   relationship_confidence_threshold: 0.6
-
-embedding:
-  model: sentence-transformers/all-MiniLM-L6-v2
 """
 
 
@@ -241,25 +246,27 @@ class TestUpdateLlmConfig:
         result = update_llm_config(provider_mode="fully_cloud", path=config_path)
 
         assert result.llm.provider_mode == "fully_cloud"
-        assert result.llm.cloud_model == "anthropic/claude-sonnet-4"
-        assert result.llm.local_model == "llama3:8b"
+        assert result.llm.cloud_generation_model == "anthropic/claude-sonnet-4"
+        assert result.llm.local_generation_model == "llama3:8b"
 
     def test_updates_multiple_fields_at_once(self, tmp_path):
         config_path = tmp_path / "config.yaml"
         config_path.write_text(_SAMPLE_CONFIG, encoding="utf-8")
 
         result = update_llm_config(
-            provider_mode="fully_cloud", cloud_model="openai/gpt-4o", path=config_path
+            provider_mode="fully_cloud",
+            cloud_generation_model="openai/gpt-4o",
+            path=config_path,
         )
 
         assert result.llm.provider_mode == "fully_cloud"
-        assert result.llm.cloud_model == "openai/gpt-4o"
+        assert result.llm.cloud_generation_model == "openai/gpt-4o"
 
     def test_the_written_file_is_actually_updated(self, tmp_path):
         config_path = tmp_path / "config.yaml"
         config_path.write_text(_SAMPLE_CONFIG, encoding="utf-8")
 
-        update_llm_config(cloud_model="openai/gpt-4o", path=config_path)
+        update_llm_config(cloud_generation_model="openai/gpt-4o", path=config_path)
 
         assert "openai/gpt-4o" in config_path.read_text(encoding="utf-8")
 
@@ -270,10 +277,32 @@ class TestUpdateLlmConfig:
         update_llm_config(provider_mode="fully_cloud", path=config_path)
 
         written = config_path.read_text(encoding="utf-8")
-        assert "# fully_local | fully_cloud | mixed" in written
+        assert "# fully_local | fully_cloud" in written
         assert '"0 23 * * *"' in written
         assert "domain_blocklist:" in written
         assert "google.com/search" in written
+
+    def test_local_embedding_model_is_not_an_accepted_parameter(self, tmp_path):
+        """There is no local embedding path.
+
+        The function signature has no parameter for one, unlike
+        cloud_embedding_model.
+        """
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(_SAMPLE_CONFIG, encoding="utf-8")
+
+        with pytest.raises(TypeError):
+            update_llm_config(local_embedding_model="x", path=config_path)
+
+    def test_updates_the_cloud_embedding_model(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(_SAMPLE_CONFIG, encoding="utf-8")
+
+        result = update_llm_config(
+            cloud_embedding_model="openai/text-embedding-3-large", path=config_path
+        )
+
+        assert result.llm.cloud_embedding_model == "openai/text-embedding-3-large"
 
     def test_invalid_provider_mode_raises_and_does_not_write(self, tmp_path):
         config_path = tmp_path / "config.yaml"
@@ -295,6 +324,53 @@ class TestUpdateLlmConfig:
         update_llm_config(provider_mode="fully_cloud", path=config_path)
 
         assert get_settings() is before
+
+
+class TestRetryOnTransientPermissionError:
+    """Tests for the transient-permission-error retry helper.
+
+    Windows can transiently deny a file rename/replace if another process
+    (an antivirus scanner, the search indexer, an editor) has briefly
+    opened the target — see DECISIONS.md for how this was root-caused
+    against a real WinError 5 report.
+    """
+
+    def test_returns_the_result_on_first_success(self):
+        assert _retry_on_transient_permission_error(lambda: "ok") == "ok"
+
+    def test_retries_and_succeeds_after_transient_failures(self, monkeypatch):
+        monkeypatch.setattr("config.settings.time.sleep", lambda _seconds: None)
+        calls = {"count": 0}
+
+        def flaky():
+            calls["count"] += 1
+            if calls["count"] < 3:
+                raise PermissionError("WinError 5: Access is denied")
+            return "eventually ok"
+
+        assert _retry_on_transient_permission_error(flaky) == "eventually ok"
+        assert calls["count"] == 3
+
+    def test_raises_after_exhausting_every_attempt(self, monkeypatch):
+        monkeypatch.setattr("config.settings.time.sleep", lambda _seconds: None)
+
+        def always_fails():
+            raise PermissionError("WinError 5: Access is denied")
+
+        with pytest.raises(PermissionError):
+            _retry_on_transient_permission_error(always_fails)
+
+    def test_a_non_permission_error_is_not_retried(self, monkeypatch):
+        monkeypatch.setattr("config.settings.time.sleep", lambda _seconds: None)
+        calls = {"count": 0}
+
+        def raises_something_else():
+            calls["count"] += 1
+            raise ValueError("not a permission error")
+
+        with pytest.raises(ValueError):
+            _retry_on_transient_permission_error(raises_something_else)
+        assert calls["count"] == 1
 
 
 class TestUpdateSourceConfig:
@@ -320,6 +396,60 @@ class TestUpdateSourceConfig:
         )
 
         assert result.notion_page_ids_list == ["page-1", "page-2"]
+
+    def test_updates_github_repos(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+
+        result = update_source_config(
+            github_repos=["me/repo-a", "me/repo-b"], path=env_path
+        )
+
+        assert result.github_repos_list == ["me/repo-a", "me/repo-b"]
+
+    def test_an_empty_github_repos_list_clears_the_setting(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+        update_source_config(github_repos=["me/repo-a"], path=env_path)
+
+        result = update_source_config(github_repos=[], path=env_path)
+
+        assert result.github_repos_list == []
+
+    def test_updates_date_range_fields(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+
+        result = update_source_config(
+            gmail_date_range_start="2026-01-01",
+            gmail_date_range_end="2026-06-30",
+            github_date_range_start="2025-01-01",
+            github_date_range_end="2025-12-31",
+            path=env_path,
+        )
+
+        assert result.gmail_date_range_start == date(2026, 1, 1)
+        assert result.gmail_date_range_end == date(2026, 6, 30)
+        assert result.github_date_range_start == date(2025, 1, 1)
+        assert result.github_date_range_end == date(2025, 12, 31)
+
+    def test_an_empty_string_clears_a_date_range_field(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+        update_source_config(gmail_date_range_start="2026-01-01", path=env_path)
+
+        result = update_source_config(gmail_date_range_start="", path=env_path)
+
+        assert result.gmail_date_range_start is None
+
+    def test_a_none_date_range_field_is_left_unchanged(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+        update_source_config(gmail_date_range_start="2026-01-01", path=env_path)
+
+        result = update_source_config(notion_page_ids=["page-1"], path=env_path)
+
+        assert result.gmail_date_range_start == date(2026, 1, 1)
 
     def test_omitted_fields_are_left_unchanged(self, tmp_path):
         env_path = tmp_path / ".env"
@@ -363,6 +493,37 @@ class TestUpdateSourceConfig:
 
         assert str(result.watch_dirs[0]) == str(anchor_path(Path(windows_path)))
 
+    def test_a_trailing_backslash_does_not_corrupt_the_rest_of_the_file(self, tmp_path):
+        r"""Real-world regression: a path ending in a backslash.
+
+        (e.g. from a folder-picker returning a drive/project root) breaks
+        python-dotenv's own write-then-read round trip — it single-quotes
+        the value but only escapes literal quote characters, not
+        backslashes, so the trailing "\" lands right before the closing
+        quote and its parser reads that as an escaped quote instead of the
+        string ending, corrupting every line after it too. Verified
+        directly against a real .env that silently lost 12 keys, including
+        OPENROUTER_API_KEY, this way.
+        """
+        env_path = tmp_path / ".env"
+        env_path.write_text(
+            "OPENROUTER_API_KEY=sk-test-should-survive\n", encoding="utf-8"
+        )
+        trailing_backslash_path = "C:\\Users\\Test\\Documents\\Watched" + "\\"
+
+        update_source_config(
+            local_files_watch_dirs=[trailing_backslash_path], path=env_path
+        )
+
+        from dotenv import dotenv_values
+
+        values = dotenv_values(env_path)
+        assert values.get("OPENROUTER_API_KEY") == "sk-test-should-survive"
+        assert (
+            values.get("LOCAL_FILES_WATCH_DIRS")
+            == "C:\\Users\\Test\\Documents\\Watched"
+        )
+
     def test_a_non_default_path_does_not_touch_the_global_settings_cache(
         self, tmp_path
     ):
@@ -374,12 +535,46 @@ class TestUpdateSourceConfig:
 
         assert get_settings() is before
 
+    def test_a_transient_permission_error_is_retried_and_recovers(
+        self, tmp_path, monkeypatch
+    ):
+        """Real-world regression: a user hit exactly this.
+
+        WinError 5 on the rename set_key() does internally, while saving a
+        changed watch folder. Verified directly that a retry resolves it;
+        this confirms update_source_config() actually retries rather than
+        failing on the first transient denial.
+        """
+        monkeypatch.setattr("config.settings.time.sleep", lambda _seconds: None)
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+
+        import dotenv
+
+        real_set_key = dotenv.set_key
+        calls = {"count": 0}
+
+        def flaky_set_key(*args, **kwargs):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise PermissionError(
+                    "[WinError 5] Access is denied: '.tmp_xyz' -> '.env'"
+                )
+            return real_set_key(*args, **kwargs)
+
+        monkeypatch.setattr(dotenv, "set_key", flaky_set_key)
+
+        result = update_source_config(local_files_watch_dirs=["/a/b"], path=env_path)
+
+        assert calls["count"] == 2
+        assert [str(p) for p in result.watch_dirs] == [str(anchor_path(Path("/a/b")))]
+
 
 class TestGetSettings:
     def test_returns_both_halves(self):
         settings = get_settings()
 
-        assert settings.config.llm.provider_mode == "mixed"
+        assert settings.config.llm.provider_mode == "fully_local"
         assert settings.env.fastapi_port > 0
 
     def test_result_is_cached(self):

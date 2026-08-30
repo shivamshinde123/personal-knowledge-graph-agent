@@ -11,7 +11,7 @@
 // port-forward) is already listening on ::1:8080 — silently talking to the
 // wrong service instead of this API. 127.0.0.1 is unambiguous. See
 // DECISIONS.md.
-const API_BASE_URL = "http://127.0.0.1:8081/api";
+const API_BASE_URL = "http://127.0.0.1:8080/api";
 
 class ApiError extends Error {
   constructor(status, body) {
@@ -78,8 +78,10 @@ export function getSettings() {
 }
 
 /**
- * Update the LLM provider configuration (partial update). Per section 3.7.
- * @param {{provider_mode?: string, local_model?: string, cloud_model?: string}} payload
+ * Update the LLM provider configuration (partial update). Extends
+ * API_Specification.docx section 3.7 with cloud_embedding_model — see
+ * DECISIONS.md.
+ * @param {{provider_mode?: string, local_generation_model?: string, cloud_generation_model?: string, cloud_embedding_model?: string}} payload
  */
 export function putSettings(payload) {
   return request("/settings", {
@@ -90,21 +92,65 @@ export function putSettings(payload) {
 
 /**
  * Current source-scope configuration (local watch folders, Notion page
- * scope). Extension beyond API_Specification.docx — see DECISIONS.md.
+ * scope, GitHub repo scope, Gmail/GitHub date ranges). Extension beyond
+ * API_Specification.docx — see DECISIONS.md.
  */
 export function getSourceConfig() {
   return request("/settings/sources");
 }
 
 /**
- * Update the source-scope configuration (partial update).
- * @param {{local_files_watch_dirs?: string[], notion_page_ids?: string[]}} payload
+ * Update the source-scope configuration (partial update). The four
+ * date-range fields are plain "YYYY-MM-DD" strings (an empty string
+ * clears the field) — matching an <input type="date">'s value directly.
+ * @param {{local_files_watch_dirs?: string[], notion_page_ids?: string[], github_repos?: string[], gmail_date_range_start?: string, gmail_date_range_end?: string, github_date_range_start?: string, github_date_range_end?: string}} payload
  */
 export function putSourceConfig(payload) {
   return request("/settings/sources", {
     method: "PUT",
     body: JSON.stringify(payload),
   });
+}
+
+/**
+ * Open a native folder-picker dialog on the machine running the backend
+ * (meaningful only because this is a local, single-user system — a
+ * browser can't reveal a picked folder's real filesystem path on its
+ * own). Blocks until the dialog closes; `path` is null if cancelled.
+ * Extension beyond API_Specification.docx — see DECISIONS.md.
+ */
+export function postBrowseFolder() {
+  return request("/settings/browse-folder", { method: "POST" });
+}
+
+/**
+ * The whole relationship graph (every item node, every confirmed edge).
+ * Extension beyond API_Specification.docx — see DECISIONS.md.
+ */
+export function getGraph() {
+  return request("/graph");
+}
+
+/**
+ * Wipe SQLite, Chroma, and Neo4j back to empty. Destructive and
+ * irreversible — callers must confirm with the user before calling this.
+ * Extension beyond API_Specification.docx — see DECISIONS.md.
+ */
+export function postAdminReset() {
+  return request("/admin/reset", {
+    method: "POST",
+    body: JSON.stringify({ confirm: true }),
+  });
+}
+
+/**
+ * Manually start a daily-batch ingestion run right now, outside the
+ * schedule. Per API_Specification.docx section 3.8 — returns immediately
+ * (202 Accepted); the run itself happens in the background, checked
+ * afterward via getSourcesStatus().
+ */
+export function postIngestTrigger() {
+  return request("/ingest/trigger", { method: "POST" });
 }
 
 /** List past conversation sessions, most recently active first. Per section 3.4. */

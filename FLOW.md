@@ -7,9 +7,9 @@ change to an entry point or call chain.
 > **Status**: the configuration layer, all three storage backends, the
 > provider layer, the entire pipeline layer (`filters`, `chunking`,
 > `metadata`, `embeddings`, `relationships`), `scheduler/daily_batch.py`,
-> and four extractors (local files, Notion, Google Calendar, browser
-> history) are implemented and merged to `main`. The agent layer is
-> complete:
+> and all six extractors (local files, Notion, Gmail, GitHub, Google
+> Calendar, browser history) are implemented and merged to `main`. The
+> agent layer is complete:
 > `agent/router.py`, `agent/search_nodes.py`, `agent/graph_traversal.py`,
 > `agent/merger.py`, `agent/synthesizer.py`, and the LangGraph wiring in
 > `agent/graph.py` (including the `condense_query` follow-up node) are all
@@ -32,8 +32,8 @@ change to an entry point or call chain.
 > (see DECISIONS.md, all 2026-08-29). The evaluation layer
 > (`eval/test_questions.json`, `eval/evaluators.py`,
 > `eval/run_evaluation.py`, `agent/tracing.py`) is implemented and
-> verified against the real LangSmith account (see below). Remaining: two
-> extractors not yet built (Gmail, GitHub).
+> verified against the real LangSmith account (see below). No extractors
+> remain unbuilt.
 
 ---
 
@@ -48,17 +48,46 @@ Every entry point resolves configuration the same way, on first use:
 
 `reload_settings()` clears the cache and re-reads both sources.
 
-`update_llm_config(*, provider_mode=None, local_model=None, cloud_model=None,
+`update_llm_config(*, provider_mode=None, local_generation_model=None,
+cloud_generation_model=None, cloud_embedding_model=None,
 path=DEFAULT_CONFIG_PATH)` — used by `PUT /api/settings` (see below) to
-apply a provider change without a restart. Loads `config.yaml` with
+apply a provider/model change without a restart. Loads `config.yaml` with
 `ruamel.yaml`'s round-trip mode (not plain PyYAML — see DECISIONS.md,
 2026-08-25, for why: comments/quotes/list formatting must survive a write),
 updates only the given `llm` fields, validates via
 `LLMConfig.model_validate()` *before* writing anything to disk, then writes
-back and returns the freshly re-read config. Only invalidates the
-process-wide `get_settings()` cache when `path` is the real default file —
-a caller using a different path (tests) gets that file's own config back
-without touching the global cache.
+back (through `_retry_on_transient_permission_error()` — see below) and
+returns the freshly re-read config. Only invalidates the process-wide
+`get_settings()` cache when `path` is the real default file — a caller
+using a different path (tests) gets that file's own config back without
+touching the global cache.
+
+`update_source_config(*, local_files_watch_dirs=None, notion_page_ids=None,
+path=DEFAULT_ENV_PATH)` — used by `PUT /api/settings/sources`. `.env` is
+flat `KEY=VALUE` lines, so `python-dotenv`'s own `set_key()` (also routed
+through `_retry_on_transient_permission_error()`) rewrites just the given
+line(s) in place without a custom round-trip parser the way `config.yaml`
+needs. Every watch-folder path has a trailing `\`/`/` stripped before
+writing — a path ending in a bare backslash breaks `python-dotenv`'s own
+write-then-read round trip (its writer only escapes literal quote
+characters, not backslashes, so a trailing `\` lands right before the
+closing quote and its *reader* treats that as an escaped quote instead of
+the string ending — corrupting every line after it in the file too,
+verified directly against a real occurrence that silently dropped
+`OPENROUTER_API_KEY`). See DECISIONS.md, 2026-08-30.
+
+`_retry_on_transient_permission_error(call)` — both writers above go
+through this rather than calling their underlying write directly. Windows
+can transiently deny the rename/replace either write does (a real-time
+antivirus scanner, the search indexer, an editor's file-watcher briefly
+holding the target open) with a `PermissionError` (WinError 5) that
+clears itself within milliseconds — verified directly against a real
+user-reported failure, where the identical write succeeded immediately on
+manual retry. Retries up to 5 times with a short linear backoff before
+letting the error propagate to the caller's own `except OSError` →
+`ConfigError` handling unchanged; a non-`PermissionError` `OSError` (a
+genuinely bad path, real permissions) is never retried. See DECISIONS.md,
+2026-08-30.
 
 ---
 
@@ -92,6 +121,14 @@ both endpoint nodes.
    cascade-on-delete; callers must call this explicitly alongside
    `storage/chroma_store.py::delete_by_item()` since neither store enforces
    foreign keys against SQLite
+5. Whole-graph fetch: `get_full_graph(driver) -> GraphSnapshot(nodes, edges)`
+   — one `MATCH (i:Item) RETURN i` plus one
+   `MATCH (a:Item)-[r:RELATES_TO]->(b:Item) RETURN ...`, no pagination or
+   filtering (the graph stays small by construction — unconnected items
+   never get a node, see point 1's `docs/Database_Schema.docx` section 5
+   note). What `GET /api/graph` (see below) calls, via
+   `agent/graph_view.py::get_graph_snapshot()` — see DECISIONS.md,
+   2026-08-30.
 
 ---
 
@@ -120,10 +157,15 @@ replace-not-append for chunks) matters to anything that calls it.
    this is the keyword half of hybrid search that `agent/search_nodes.py`
    calls
 4. Daily batch bookkeeping: `start_ingestion_run()` →
-   `complete_ingestion_run(status=...)` → `get_last_run_timestamp()` reads
-   the watermark for the next run's `since=`; `get_last_ingestion_run()`
-   returns the most recent run regardless of status (for display, e.g.
-   `agent/sources_status.py` — see DECISIONS.md, 2026-08-25)
+   (`update_ingestion_run_progress(run_id, items_processed)`, called once
+   per item as `_run()` processes each one — not just at the very end, so
+   `items_processed` updates live while `status` is still `"running"`,
+   for a real live-progress readout rather than a start/stop signal — see
+   DECISIONS.md, 2026-08-30) → `complete_ingestion_run(status=...)` →
+   `get_last_run_timestamp()` reads the watermark for the next run's
+   `since=`; `get_last_ingestion_run()` returns the most recent run
+   regardless of status (for display, e.g. `agent/sources_status.py` —
+   see DECISIONS.md, 2026-08-25)
 5. Conversation memory (tables not in `docs/Database_Schema.docx` — see
    DECISIONS.md, 2026-08-25): `record_conversation_turn(conn, session_id,
    question, answer, sources)` is the one write path — upserts the session
@@ -150,7 +192,14 @@ module only persists and searches vectors already produced elsewhere.
 2. Ingesting a chunk: `upsert_chunks(collection, [vector_chunk, ...])` —
    `vector_chunk.id` must equal the corresponding
    `storage/sqlite_store.py::Chunk.embedding_id`, and `vector_chunk.item_id`
-   must equal the SQLite item's effective id from `insert_item()`
+   must equal the SQLite item's effective id from `insert_item()`. A
+   collection is locked to whatever vector dimensionality its first write
+   used — a later write of a different size (the embedding model's output
+   width changed) fails for every item, not just new ones; this function
+   detects that specific Chroma error and raises a `VectorStoreError`
+   naming the real fix ("Reset all data", then re-ingest) instead of the
+   generic message — verified directly against a real, systemic
+   occurrence of this failure. See DECISIONS.md, 2026-08-30.
 3. Querying: `query(collection, query_embedding, top_k, where=...)` — the
    vector half of hybrid search that `agent/search_nodes.py` will call; an
    optional `where` filter narrows by `source_type`/`project_name`/`topic`,
@@ -164,6 +213,17 @@ module only persists and searches vectors already produced elsewhere.
    averaging rather than re-embedding text; used by
    `pipeline/relationships.py`'s candidate narrowing (see DECISIONS.md,
    2026-08-24)
+6. `reset_all(persist_dir=None)` — **deletes and recreates the whole
+   collection** (`client.delete_collection()` +
+   `client.get_or_create_collection()`), not just its documents; deleting
+   documents alone leaves the dimension lock from step 2 in place, which
+   defeats the entire point of resetting before switching embedding
+   models. Returns the freshly created `Collection` — callers holding a
+   long-lived reference (`api/main.py`'s `app.state.collection`) must
+   replace it with the return value, since the old object is invalid once
+   its underlying collection is deleted. See DECISIONS.md, 2026-08-30
+   ("`reset_all()`'s Chroma reset never actually cleared the dimension
+   lock").
 
 ---
 
@@ -177,24 +237,34 @@ only `providers/base.py`'s `get_provider()` and its return type,
 `ProviderInterface`.
 
 1. `get_provider(task)` — `task` is `"metadata"`, `"relationship"`,
-   `"condense"`, `"answer"`, or `"eval"`; reads
-   `settings.config.llm.provider_mode` and returns `create_local_provider()`
-   (Ollama), `create_openrouter_provider()` (OpenRouter), or, under `mixed`,
-   routes `"answer"` and `"eval"` to OpenRouter (judging answer quality
-   deserves the same caliber of model as generating them, and eval runs
-   are infrequent — only `eval/run_evaluation.py`, never the query path)
-   and the three cheaper, higher-frequency tasks (`"metadata"`,
-   `"relationship"`, `"condense"`) to Ollama (see DECISIONS.md, 2026-08-24
-   and 2026-08-29)
+   `"condense"`, `"answer"`, `"eval"`, or `"embedding"`. For every task
+   except `"embedding"`, reads `settings.config.llm.provider_mode` and
+   returns `create_local_provider()` (Ollama) for `fully_local`, or
+   `create_openrouter_provider()` (OpenRouter) for `fully_cloud` — there is
+   no `mixed` mode (removed — see DECISIONS.md, 2026-08-30). `"embedding"`
+   is a special case: it **always** returns `create_openrouter_provider()`,
+   regardless of `provider_mode` — there is no local embedding path at all
+   (removed — see DECISIONS.md, 2026-08-30, latest entry). This means
+   `OPENROUTER_API_KEY` is required even under `fully_local`, purely for
+   embedding; `fully_local` only means generation is free/offline.
 2. Both concrete providers construct a `LangChainProvider` around a
-   LangChain chat model (`ChatOllama` / `ChatOpenAI`) — this is where every
-   provider call's prompt building, JSON response parsing, and
-   retry-with-backoff actually live, shared by both. The `ChatOpenAI`
-   (OpenRouter) side always passes an explicit `max_tokens`
-   (`llm.cloud_max_tokens`, default `4096`) — left unset it would default
-   to the routed model's own maximum (64000 for `claude-sonnet-4`), which
-   can exceed the account's remaining credit balance and fail the call
-   outright; verified directly — see DECISIONS.md, 2026-08-29
+   LangChain chat model (`ChatOllama` / `ChatOpenAI`) for their prompt
+   building, JSON response parsing, and retry-with-backoff — shared by
+   both. Only `create_openrouter_provider()` also builds an `embed_fn`
+   (wrapping a LangChain `OpenAIEmbeddings` pointed at OpenRouter's base
+   URL, `openrouter_provider.py::EMBEDDING_MODEL`, truncated to 384
+   dimensions via the `dimensions` parameter — verified directly against
+   the real OpenRouter API) — `create_local_provider()` passes no
+   `embed_fn` at all, so calling `generate_embeddings()` on a local
+   provider raises `ProviderError` (never actually reached in practice,
+   since `get_provider("embedding")` never returns one — see
+   DECISIONS.md, 2026-08-30, latest entry). The `ChatOpenAI`
+   (OpenRouter) side always passes an explicit
+   `max_tokens` (`llm.cloud_max_tokens`, default `4096`) — left unset it
+   would default to the routed model's own maximum (64000 for
+   `claude-sonnet-4`), which can exceed the account's remaining credit
+   balance and fail the call outright; verified directly — see
+   DECISIONS.md, 2026-08-29
 3. `provider.generate_metadata(texts)` — called by
    `pipeline/metadata.py::generate_metadata()` for the `project_name`/`topic`
    fields (batched: one call per group of `config.yaml`'s
@@ -235,6 +305,13 @@ only `providers/base.py`'s `get_provider()` and its return type,
    `"relevance"` (does `answer` address `question`); returns an
    `EvalJudgment(score, reasoning)`. Same preamble-tolerant parsing as
    `generate_relationship()` (see DECISIONS.md, 2026-08-29)
+8. `provider.generate_embeddings(texts)` — called by
+   `pipeline/embeddings.py::embed_chunks()`/`embed_query()` (see below);
+   returns one vector per input text. Always the OpenRouter provider's
+   `embed_fn` in practice — `get_provider("embedding")` never returns the
+   local provider (see point 1 above) — so `provider_mode` has no effect
+   on embeddings at all any more; only which *generation* provider is
+   used varies by mode (see DECISIONS.md, 2026-08-30, latest entry)
 
 ---
 
@@ -289,6 +366,45 @@ calls `pipeline/filters.py` next.
   2026-08-24. Logs an INFO progress line every 25 pages scanned (a full
   scan visits every visible page and can take a long time on a large
   workspace — see DECISIONS.md, 2026-08-24).
+- `extractors/gmail.py` — one item per **thread**, not per message
+  (`docs/Data_Extraction_Specification.docx` section 5 lists thread ID as
+  metadata, but `ExtractedItem` has no generic metadata field to hang it
+  off, so the whole thread — every message, oldest first — is
+  concatenated into one item's `raw_text` instead; a new reply
+  re-extracts and re-embeds the whole conversation, since `source_ref_id`
+  is the thread id — see DECISIONS.md, 2026-08-30). Auth: loads a cached
+  OAuth token (`data/gmail_token.json`), silently refreshing it if
+  expired — never triggers the interactive browser consent flow itself.
+  If no cached token exists yet, raises `ExtractorError` naming the
+  one-time setup command (`setup_auth()`, run via
+  `uv run python -m extractors.gmail --setup-auth`) instead of hanging an
+  unattended run waiting on a consent screen. Lists message ids via
+  `messages().list(q="after:<since>")` (Gmail search syntax), resolves
+  each to its thread id (free — included in the list response), then
+  fetches each distinct thread in full. Per message: labels matching
+  `config.yaml`'s `filters.gmail.excluded_labels` (e.g.
+  `CATEGORY_PROMOTIONS`) are dropped; body text prefers `text/plain`,
+  falling back to a crude HTML-tag-stripped `text/html`; PDF/DOCX
+  attachments get their text extracted via the same `pypdf`/`python-docx`
+  libraries `extractors/local_files.py` uses. A thread where every
+  message was filtered out produces no item. `_effective_window()`
+  combines the incremental `since` cursor with `config/.env`'s
+  `GMAIL_DATE_RANGE_START`/`GMAIL_DATE_RANGE_END`, if set: the start date
+  floors `since` (via `max()`, never moving a later cursor backward) and
+  the end date adds an inclusive `before:` to the Gmail search query on
+  every run — see DECISIONS.md, 2026-08-30.
+- `extractors/github.py` — per repo (scoped to `settings.env.github_repos_list`
+  if set, else every accessible repo — see DECISIONS.md), extracts the
+  README (re-checked via its own last-commit date, not every run),
+  commits (message + changed file names, no diffs), PRs (title/body +
+  review comments), issues (excluding PR-shaped entries via the
+  `pull_request` key), and starred repos (module-level, not per-repo).
+  `_effective_window()` (same shape as `extractors/gmail.py`'s) combines
+  `since` with `GITHUB_DATE_RANGE_START`/`GITHUB_DATE_RANGE_END`: the
+  start date floors `since`; the end date (`until`) is passed as GitHub's
+  own `until` query param for commits, and filtered client-side for PRs/
+  issues/starred repos (those endpoints have no server-side upper bound)
+  — see DECISIONS.md, 2026-08-30.
 - `extractors/calendar.py` — lists the primary calendar's events via
   `events().list(singleEvents=False, updatedMin=<since>)` — the
   `singleEvents=False` is what keeps a recurring series as one event
@@ -367,11 +483,16 @@ than one call per item.
 Not an entry point itself. Unlike `pipeline/metadata.py`, this stage writes
 to Chroma directly rather than staying storage-free — see DECISIONS.md,
 2026-08-24, for why the two pipeline stages made opposite choices there.
+Embedding itself is not done here directly any more — both functions
+below call `providers/base.py::get_provider("embedding").
+generate_embeddings()`, which always resolves to OpenRouter regardless of
+`provider_mode` (there is no local embedding path — see DECISIONS.md,
+2026-08-30, latest entry), so an ingestion run needs `OPENROUTER_API_KEY`
+configured even under `fully_local`.
 
 - `embed_chunks(collection, item_id, source_type, chunk_texts, *,
-  project_name=None, topic=None, created_at=None) -> list[Chunk]` — encodes
-  every chunk with the configured `sentence-transformers` model (loaded
-  once, cached by model name), calls
+  project_name=None, topic=None, created_at=None) -> list[Chunk]` — calls
+  `get_provider("embedding").generate_embeddings(chunk_texts)`, then
   `storage/chroma_store.py::upsert_chunks()` itself, and returns
   SQLite-ready `Chunk` objects (each with a freshly generated
   `embedding_id` pointing at the vector just written) for the caller to
@@ -379,6 +500,9 @@ to Chroma directly rather than staying storage-free — see DECISIONS.md,
   already-open `collection` rather than opening its own, since
   `get_collection()` opens a new client on every call by design — the
   caller opens one collection and reuses it across the whole ingestion run.
+- `embed_query(text) -> list[float]` — the single-text form, used for
+  query-time vector search and by `pipeline/relationships.py`'s candidate
+  search.
 
 ---
 
@@ -465,8 +589,8 @@ test doubles/temp resources instead.
 1. `_run()` reads the watermark via `get_last_run_timestamp(conn)` and
    starts a run record via `start_ingestion_run(conn)`
 2. For each registered extractor in `_EXTRACTORS` (currently
-   `local_file`, `notion`, `calendar`, and `browser_history` — adding a
-   source means adding one entry here, per
+   `local_file`, `notion`, `gmail`, `github`, `calendar`, and
+   `browser_history` — adding a source means adding one entry here, per
    `docs/File_Folder_Structure.docx` section 4;
    `tests/test_scheduler/test_daily_batch.py`'s integration tests pin
    `_EXTRACTORS` to `local_file` only via an autouse fixture, so a new
@@ -686,7 +810,13 @@ actually serves.
    (`storage/neo4j_store.py::get_driver()`), and stores them on
    `app.state.conn`/`collection`/`driver` for the process's lifetime —
    route handlers read them from `request.app.state` rather than via
-   `Depends()` (see DECISIONS.md, 2026-08-25)
+   `Depends()` (see DECISIONS.md, 2026-08-25). Also stores
+   `app.state.chroma_persist_dir` (the same directory `get_collection()`
+   just opened) so `POST /api/admin/reset` can later reset Chroma against
+   the exact directory this process is using, rather than re-deriving it
+   from `get_settings()` directly — the latter would break test isolation,
+   since tests point Chroma at an isolated `tmp_path` (see DECISIONS.md,
+   2026-08-30)
 2. On shutdown, the driver and connection are closed
 3. Tests substitute a no-op `lifespan_fn` and set `app.state` directly to
    test doubles (`tests/test_api/conftest.py`), so a test run never opens
@@ -751,9 +881,14 @@ DECISIONS.md, 2026-08-25.
    `0` whenever the latest run finds nothing new, which reads as "nothing
    has ever been ingested" without `total_items` alongside it (see
    DECISIONS.md, 2026-08-30)
-3. Returns `{"last_run": {...} | null, "sources": [...]}` per
-   `docs/API_Specification.docx` section 3.3 — `last_run` is `null` and
-   every source reports 0 items/`"ok"` if the batch has never run
+3. Returns `{"last_run": {..., "items_processed"} | null, "sources": [...]}`
+   per `docs/API_Specification.docx` section 3.3 — `last_run` is `null` and
+   every source reports 0 items/`"ok"` if the batch has never run.
+   `last_run.items_processed` (extends the documented shape — see
+   DECISIONS.md, 2026-08-30) updates live while `status` is still
+   `"running"`, not just once the run completes — this is what
+   `frontend/src/App.jsx`'s ingestion-completion polling reads to show
+   real, live progress rather than only a start/stop signal
 
 ---
 
@@ -775,15 +910,17 @@ See DECISIONS.md, 2026-08-29.
    order: `local_file`/`browser_history` — a real filesystem check
    (configured path/dir exists and is reachable); `notion` — a real,
    cheap Notion API call (`Client(auth=...).users.me()`) if
-   `NOTION_API_KEY` is set; `calendar` — a real, cheap Calendar API call
-   (`calendarList().get(calendarId="primary")`) using the cached OAuth
-   token if `GOOGLE_CALENDAR_CREDENTIALS_PATH` is set — "not yet
-   authorized" (the one-time `setup_auth()` step hasn't been run)
-   reports `"not_configured"`, not an error, since nothing is actually
-   broken; any other failure (revoked token, unreachable API) reports
-   `"error"` — see DECISIONS.md, 2026-08-30; `gmail`/`github` — always
-   `"not_configured"` with a "not yet built" detail, since no extractor
-   exists for these yet — never silently reported as `"ok"`
+   `NOTION_API_KEY` is set; `gmail` — a real, cheap Gmail API call
+   (`users().getProfile()`) using the cached OAuth token if
+   `GMAIL_CREDENTIALS_PATH` is set; `github` — a real, cheap GitHub API
+   call (`GET /user`) if `GITHUB_TOKEN` is set; `calendar` — a real,
+   cheap Calendar API call (`calendarList().get(calendarId="primary")`)
+   using the cached OAuth token if `GOOGLE_CALENDAR_CREDENTIALS_PATH` is
+   set. For the two OAuth sources (Gmail, Calendar), "not yet authorized"
+   (the one-time `setup_auth()` step hasn't been run) reports
+   `"not_configured"`, not an error, since nothing is actually broken;
+   any other failure (revoked token, unreachable API) reports `"error"`
+   — see DECISIONS.md, 2026-08-30
 4. Returns `{"connections": [{"source_type", "status", "detail",
    "checked_at"}, ...]}`, `status` one of `"ok"` / `"error"` /
    `"not_configured"`
@@ -792,26 +929,51 @@ See DECISIONS.md, 2026-08-29.
 
 ## Entry point: `GET /api/settings` (`api/routes/settings.py`)
 
-1. `config/settings.py::get_settings().config.llm` read directly — no
-   `agent/` intermediary, since `config` isn't `storage`/`providers` (see
-   DECISIONS.md, 2026-08-25)
-2. Returns `{"provider_mode", "local_model", "cloud_model"}` per
-   `docs/API_Specification.docx` section 3.6
+1. `config/settings.py::get_settings().config.llm` read directly for all
+   three model fields (the two generation models plus
+   `cloud_embedding_model`) — no `agent/` intermediary, since `config`
+   isn't `storage`/`providers` (see DECISIONS.md, 2026-08-25).
+   `cloud_embedding_model` is a normal `config.llm` field like the others
+   now, not a `providers/`-layer constant needing its own thin wrapper —
+   see DECISIONS.md, 2026-08-30 (the un-freeze entry)
+2. Returns `{"provider_mode", "local_generation_model",
+   "cloud_generation_model", "cloud_embedding_model"}` — no
+   `local_embedding_model` at all, since there's no local embedding path —
+   extends `docs/API_Specification.docx` section 3.6's original two-field
+   shape (see DECISIONS.md, 2026-08-30, all entries)
 
 ---
 
 ## Entry point: `PUT /api/settings` (`api/routes/settings.py`)
 
 1. Request body validated against `api/schemas.py::SettingsUpdateRequest`
-   (all fields optional — a partial update) — an invalid `provider_mode`
-   value is a 422 via the shared validation-error handler
+   (`provider_mode`, `local_generation_model`, `cloud_generation_model`,
+   `cloud_embedding_model` — all optional, a partial update) — an invalid
+   `provider_mode` value is a 422 via the shared validation-error handler
 2. `config/settings.py::update_llm_config()` called with whichever fields
    were given (see "Shared: configuration loading" above for its own
    steps) — a `ConfigError` (bad resulting config, or a file I/O failure)
-   is caught by `api/main.py`'s shared handler, mapped to 500
-3. Returns `{"status": "updated", "provider_mode", "local_model",
-   "cloud_model"}` per `docs/API_Specification.docx` section 3.7, reflecting
-   the freshly written-and-reread configuration
+   is caught by `api/main.py`'s shared handler, mapped to 500. This route
+   itself has no special handling for a `cloud_embedding_model` change —
+   the "confirm, then reset + re-ingest" behavior is entirely
+   `SettingsPanel.jsx`'s responsibility (see below), not enforced here
+3. Returns `{"status": "updated", "provider_mode",
+   "local_generation_model", "cloud_generation_model",
+   "cloud_embedding_model"}`, reflecting the freshly written-and-reread
+   configuration
+
+---
+
+## Entry point: `POST /api/settings/browse-folder` (`api/routes/settings.py`)
+
+Extension beyond `docs/API_Specification.docx` — see `agent/browse.py`,
+DECISIONS.md, 2026-08-30.
+
+1. `agent/browse.py::browse_folder()` — shells out to a PowerShell
+   `System.Windows.Forms.FolderBrowserDialog` script, blocking until the
+   dialog is closed
+2. Returns `{"path": <string> | null}` — `null` if the user cancelled
+   rather than picking a folder
 
 ---
 
@@ -837,6 +999,56 @@ provider config. See DECISIONS.md, 2026-08-30.
    those pages by id (`client.pages.retrieve()`) instead of the
    workspace-wide `client.search()`; empty keeps the original "every page
    the integration can see" behavior
+
+---
+
+## Entry point: `POST /api/admin/reset` (`api/routes/admin.py`)
+
+Extension beyond `docs/API_Specification.docx` — a destructive, hard-to-
+reverse full-database wipe. See DECISIONS.md, 2026-08-30.
+
+1. Request body validated against `api/schemas.py::AdminResetRequest`
+   (`confirm: bool`) — `confirm: false` (or omitted) returns a 422
+   directly as `JSONResponse({"error": "confirmation_required", ...})`,
+   same "shaped like every other error" reasoning as `GET
+   /api/sessions/{id}`'s 404, not via `HTTPException`
+2. `agent/admin.py::reset_all_data()`, reading `conn`/`driver` and
+   `chroma_persist_dir` (not `collection` — see step 3) from
+   `request.app.state` — wipes SQLite, Chroma, and Neo4j (see "Shared"
+   sections above for each store's own `reset_all()`)
+
+   **Branch point**: a partial failure (`AdminError`) is caught here and
+   returned as a 500 `JSONResponse({"error": "admin_error", "detail":
+   ...})` naming exactly which store(s) failed, rather than propagating to
+   `api/main.py`'s generic handler
+3. `storage/chroma_store.py::reset_all()` deletes and recreates the whole
+   Chroma collection (not just its documents — see DECISIONS.md,
+   2026-08-30, "`reset_all()`'s Chroma reset never actually cleared the
+   dimension lock") and returns the fresh `Collection`; this route
+   replaces `request.app.state.collection` with it, since the old object
+   is no longer valid once its underlying collection is deleted — every
+   later request in this process (query, ingestion) reads
+   `app.state.collection` fresh each time, so this swap is what keeps
+   them from hitting a stale/deleted collection
+4. Returns `{"status": "reset"}` on full success
+
+---
+
+## Entry point: `GET /api/graph` (`api/routes/graph.py`)
+
+Extension beyond `docs/API_Specification.docx` — the relationship graph
+wasn't in the original spec. Requested directly for the frontend graph
+view (issue #57). See DECISIONS.md, 2026-08-30.
+
+1. Reads `driver` from `request.app.state`
+2. `agent/graph_view.py::get_graph_snapshot()` — a thin pass-through to
+   `storage/neo4j_store.py::get_full_graph()` (see "Shared: Neo4j storage"
+   above)
+3. `GraphSnapshot` reshaped into `api/schemas.py::GraphResponse`
+   (`nodes: [{id, title, source_type, url}]`, `edges: [{source_id,
+   target_id, label, confidence}]`) and returned — an empty graph (no
+   relationships confirmed yet) returns `{"nodes": [], "edges": []}`, not
+   an error
 
 ---
 
@@ -890,18 +1102,45 @@ development/testing, outside the daily schedule.
 A Vite + React app — see `frontend/README.md` for setup/dev commands.
 `frontend/src/index.jsx` mounts `App.jsx` into `#root`.
 
-1. `App.jsx` holds `view` (`"chat"` | `"settings"`), `sessionId`, and the
-   fetched `sessions` list, and renders `Sidebar.jsx` plus either
-   `ChatWindow.jsx` or `SettingsPanel.jsx` — no router, since the
-   wireframe only needs a "Settings link," not deep-linking (see
-   DECISIONS.md, 2026-08-25). Fetches `getSessions()` on mount and again
-   after every completed turn (`onTurnCompleted`), so the sidebar's list
-   and ordering stay current
+1. `App.jsx` holds `view` (`"chat"` | `"settings"` | `"graph"`), `sessionId`,
+   the fetched `sessions` list, and a `toasts` list, and renders `Toasts.jsx`
+   plus `Sidebar.jsx` plus one of `ChatWindow.jsx`, `SettingsPanel.jsx`, or
+   `GraphView.jsx` — no router, since the wireframe only needs a "Settings
+   link," not deep-linking (see DECISIONS.md, 2026-08-25; the graph view
+   follows the same no-router pattern, see DECISIONS.md, 2026-08-30).
+   Fetches `getSessions()` on mount and again after every completed turn
+   (`onTurnCompleted`), so the sidebar's list and ordering stay current.
+   Also owns `handleTriggerIngestion()`/`handleResetAll()` — passed down to
+   `SettingsPanel.jsx` as props rather than living there, since both need
+   to act (toast a result, in the ingestion case only after polling for
+   completion; clear/refresh chat session state, in the reset case) even
+   if the user has since navigated away from Settings — see DECISIONS.md,
+   2026-08-30. Also holds `ingestionStatus`
+   (`{startedAt, runId, itemsProcessed, status}` — `null` before anything's
+   been triggered this session), set on trigger and updated on every poll
+   inside `pollIngestionCompletion()`, then passed down to
+   `SettingsPanel.jsx` for a persistent "started at HH:MM:SS" + live
+   progress display that survives both the toast's 7s auto-dismiss and
+   navigating away from Settings and back — see DECISIONS.md, 2026-08-30
+   (the live-progress entry)
 2. `Sidebar.jsx` — "New chat" and clicking a real session both bump
    `App.jsx`'s `chatKey`, forcing `ChatWindow` to remount (see DECISIONS.md,
    2026-08-25, for why a remount rather than watching `sessionId` for
    changes). Renders the real session list from `App.jsx`, or "No past
-   conversations yet" if it's empty
+   conversations yet" if it's empty. "Chat", "Graph", and "Settings" sit
+   together in a `.sidebar-footer` at the bottom, sharing one `.nav-link`
+   style — "Chat" (added with the Figma redesign, see DECISIONS.md,
+   2026-08-30) calls a new `onOpenChat` prop that only switches
+   `App.jsx`'s `view`, unlike "New chat"/a session click, which also touch
+   `sessionId`/`chatKey`. Each nav icon is `components/icons/NavIcons.jsx`
+   (`ChatIcon`/`GraphIcon`/`SettingsIcon`) — the exact exported Figma
+   asset's path geometry, inlined as SVG with `fill="currentColor"`, so
+   the same shape renders in either the muted or `--accent-active` color
+   depending on which tab is current, without needing two
+   differently-colored exports per icon. An earlier version used `<img>`
+   + CSS `mask-image` for the same effect directly from the exported SVG
+   files; switched to inlining after the mask-image version didn't
+   render — see DECISIONS.md, 2026-08-30
 3. `ChatWindow.jsx` — on mount, if given an existing `sessionId`, calls
    `api/client.js::getSessionHistory()` once and populates messages from
    it (see DECISIONS.md, 2026-08-25). On submit, appends the user message
@@ -909,19 +1148,125 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    `api/client.js::postQuery(question, sessionId)`, then fills the
    placeholder in with the real answer and `SourceChip.jsx`-rendered
    sources (or an error state) once it resolves, and reports the (possibly
-   new) `session_id` up to `App.jsx` via `onTurnCompleted`
+   new) `session_id` up to `App.jsx` via `onTurnCompleted`. The message
+   list auto-scrolls to the newest message whenever `messages` changes,
+   but only if the reader was already at the bottom (tracked by a ref the
+   scroll handler updates continuously, not a fresh measurement taken
+   after the new message is already in the DOM — see DECISIONS.md,
+   2026-08-30); a floating "↓ Latest" button appears once they've
+   scrolled away from the bottom, for jumping back without hand-scrolling.
+   The empty state (no messages yet) renders the Figma redesign's icon +
+   heading + suggestion chips instead of a plain sentence — clicking a
+   chip fills the input with a related prompt rather than sending it
+   immediately. Also fetches `getSourceConnections()` once on mount for
+   the "Data Source Indicators" pills above the input box: one pill per
+   source whose live status is `"ok"`, not a static hardcoded list — see
+   DECISIONS.md, 2026-08-30
 4. `SettingsPanel.jsx` — on mount, calls `api/client.js::getSettings()`,
    `getSourcesStatus()`, `getSourceConnections()`, and `getSourceConfig()`
-   in parallel; "Save Changes" calls `putSettings()` (provider config) and
-   `putSourceConfig()` (watch folders/Notion scope, parsed from a
-   one-per-line textarea via `linesToList()`) together, updating local
-   state from the responses. Each connected-source card shows the live
-   connection status (`getSourceConnections()`'s cache-or-fresh result)
-   rather than the batch-run status alone; "Reverify" calls
-   `verifySourceConnections()` (force-refreshes, bypassing the cache) and
-   replaces the connections state with the fresh result — see
-   DECISIONS.md, 2026-08-29 and 2026-08-30
-5. `api/client.js` is the only module making network calls (per
+   in parallel, snapshotting the loaded values into `originalRef` — the
+   baseline every later diff compares against. Uses `useConfirm()`
+   (`hooks/useConfirm.jsx`, rendering `ConfirmDialog.jsx` — this project's
+   own centered modal, not the native `window.confirm()`, which looked
+   nothing like the rest of the app and couldn't render a bullet list or a
+   highlighted warning — see DECISIONS.md, 2026-08-30) for both of its
+   confirmations. "Save Changes" (`handleSave()`) first diffs every
+   editable field (`provider_mode`, both generation models,
+   `cloud_embedding_model`, the two source-scope textareas) against that
+   snapshot; if nothing changed it no-ops, else it awaits one `confirm()`
+   call whose `body` is a real `<ul>` of the changed fields plus a
+   separately-styled warning paragraph when `cloud_embedding_model` is
+   among them, and aborts entirely if cancelled. Only on confirm does it
+   call `putSettings()` (now sending all three model fields, including
+   `cloud_embedding_model`) and `putSourceConfig()` together; if the
+   embedding model was part of the
+   diff, it then also calls `onResetAll()` followed by
+   `onTriggerIngestion()` (the same `App.jsx`-owned flows the Danger Zone
+   button and "Run ingestion now" button call directly elsewhere) and
+   re-fetches `getSourcesStatus()`/`getSourceConnections()` — see
+   DECISIONS.md, 2026-08-30 (the un-freeze/confirm-dialog entry). Each
+   connected-source card shows the live connection status
+   (`getSourceConnections()`'s cache-or-fresh result) rather than the
+   batch-run status alone; "Reverify" calls `verifySourceConnections()`
+   (force-refreshes, bypassing the cache) and replaces the connections
+   state with the fresh result — see DECISIONS.md, 2026-08-29 and
+   2026-08-30. The Danger Zone's own "Reset all data" button and "Run
+   ingestion now" each still have their own direct call path (with their
+   own confirm, for the reset button) into the same `onResetAll`/
+   `onTriggerIngestion` props — the Save-Changes-triggered path above is
+   an additional caller, not a replacement. "Browse…" next to the local
+   folders field calls `postBrowseFolder()`; a non-null result is
+   appended as a new line in `watchDirsText` (skipped if already present),
+   composing with manually pasted paths rather than replacing them — see
+   DECISIONS.md, 2026-08-30. The "Data Ingestion" section also renders the
+   `ingestionStatus` prop (from `App.jsx`, see above), when non-null, as a
+   "Started at HH:MM:SS" line plus a progress bar — an indeterminate
+   sliding-segment animation while `status === "running"` (no known total
+   item count to compute a real percentage from — extraction discovers
+   items as it streams through each source), filled solid green/red once
+   the run finishes; the live `items_processed` count is shown as text
+   alongside it. See DECISIONS.md, 2026-08-30 (the live-progress entry).
+   Per the Figma redesign (see DECISIONS.md, 2026-08-30, "screen 2 of
+   3"), the sections render inside two explicit `.settings-column`
+   containers in a real CSS Grid (`.settings-columns`), not an
+   auto-balancing multi-column layout — the design originally grouped
+   *specific* sections into *specific* sides (Generation Provider/Models
+   on the left, Local folders/Notion scope/Data Ingestion/Danger Zone on
+   the right); Danger Zone was later moved into the left column
+   (Generation Provider/Models/Danger Zone) per direct request, so the
+   DOM no longer matches the design's own grouping exactly, but the
+   two-explicit-columns structure itself is unchanged. "Data
+   Ingestion" and "Connected Data Sources" render as one merged card with
+   an internal divider (`.settings-section-header-bordered`) rather than
+   two separate cards — same two handlers/states as before, just one DOM
+   boundary instead of two. "Save Changes" sits in `.settings-header`,
+   top-right next to the page title — moved there (from the bottom of
+   the left column, itself moved from full-width below both columns) per
+   direct request; each move is placement only, `handleSave()` itself is
+   unchanged throughout
+5. `Toasts.jsx` — a pure display component: renders whichever
+   `{id, kind, text}` entries are in `App.jsx`'s `toasts` state as a
+   fixed top-right stack, each auto-removed after 7 seconds
+   (`setTimeout` in `App.jsx::addToast()`) or dismissed early by its own
+   close button. `App.jsx::pollIngestionCompletion()` is the one caller
+   that polls before toasting — every other caller (`handleResetAll()`,
+   `SettingsPanel.jsx`'s own error paths via the `onError` prop) toasts
+   immediately, since those results are already known synchronously. See
+   DECISIONS.md, 2026-08-30
+6. `GraphView.jsx` — on mount, calls `api/client.js::getGraph()`; an empty
+   result (no confirmed relationships yet) renders an explanatory message
+   rather than a blank canvas. A non-empty result drives a **live**
+   `d3-force` simulation (`forceSimulation`/`forceLink`/`forceManyBody`/
+   `forceCenter`, never `.stop()`-ped) — Obsidian-style, not a one-shot
+   static layout (see DECISIONS.md, 2026-08-30, the interactive-graph
+   entry, for why that changed). The canvas fills whatever space is
+   available rather than a fixed 900x600 box: a `ResizeObserver` on the
+   canvas element drives both the SVG `viewBox` and the simulation's
+   `forceCenter`, updated on every resize via a separate effect that
+   nudges the existing simulation (`alpha(0.3)`, not `.restart()`) so
+   nodes drift toward the new center instead of snapping — see
+   DECISIONS.md, 2026-08-30 (the full-screen-graph entry). The
+   simulation's own node/link objects live in `nodesRef`/`linksRef`
+   (mutated in place by both d3's tick loop and the drag handlers below);
+   a `nodes`/`links` **state** pair,
+   shallow-copied from those refs on every `"tick"` event, is what JSX
+   actually renders from — reading a ref directly during render doesn't
+   trigger a re-render and trips this project's `react-hooks/refs` lint
+   rule. Dragging a node (`onPointerDown`/`onPointerMove`/`onPointerUp` on
+   its `<g>`, using pointer capture so the drag tracks even off the small
+   circle) converts the pointer's screen position into the SVG's own
+   `viewBox` coordinate space (`getScreenCTM().inverse()`) and sets that
+   node's `fx`/`fy`, while `simulation.alphaTarget(0.3).restart()`
+   "reheats" the layout so neighbors visibly respond; releasing clears
+   `fx`/`fy` back to `null` and cools the simulation down again
+   (`alphaTarget(0)`). Nodes are colored by `source_type`, edges labeled
+   with their relationship `label`. The legend lists every `source_type`
+   except `browser_history` — that source is excluded from relationship
+   detection entirely (`pipeline/relationships.py`, see CLAUDE.md), so a
+   node for it can never exist on this graph; listing it in the legend
+   would promise something that can never appear. See DECISIONS.md,
+   2026-08-30.
+7. `api/client.js` is the only module making network calls (per
    `docs/Coding_Conventions.docx` section 3) — every function maps
    directly to one `docs/API_Specification.docx` endpoint, talking to
    `http://127.0.0.1:8080/api` (not `localhost` — see DECISIONS.md,

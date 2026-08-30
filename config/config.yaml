@@ -3,9 +3,10 @@
 # Reference: docs/Environment_Config_Reference.docx section 4.
 
 llm:
-  provider_mode: mixed # fully_local | fully_cloud | mixed
-  local_model: llama3:8b # used when provider_mode is fully_local or mixed (ingestion tasks)
-  cloud_model: anthropic/claude-sonnet-4 # used for cloud-routed tasks
+  provider_mode: fully_local # fully_local | fully_cloud -- controls generation only; embedding is always cloud, see below
+  local_generation_model: llama3:8b # used when provider_mode is fully_local
+  cloud_generation_model: anthropic/claude-sonnet-4 # used when provider_mode is fully_cloud
+  cloud_embedding_model: openai/text-embedding-3-small # always used, regardless of provider_mode -- there is no local embedding path. OPENROUTER_API_KEY is required even under fully_local. Changing this needs a full reset + re-ingest -- see DECISIONS.md
   cloud_max_tokens: 4096 # response token cap for cloud calls; unset defaults to the model's own max, which can exceed the account's remaining credit balance
 
 ingestion:
@@ -38,6 +39,3 @@ retrieval:
   relationship_candidate_count: 10
   relationship_confidence_threshold: 0.6 # confirmed relationships below this confidence are discarded
   relationship_candidate_max_distance: 0.6 # candidates farther than this (cosine distance) never reach the LLM; null disables the filter
-
-embedding:
-  model: sentence-transformers/all-MiniLM-L6-v2
