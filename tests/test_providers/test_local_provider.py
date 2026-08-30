@@ -6,10 +6,11 @@ client object — so these run without a live Ollama instance.
 
 from types import SimpleNamespace
 
+import pytest
 from langchain_ollama import ChatOllama
 
-from providers.base import LangChainProvider
-from providers.local_provider import EMBEDDING_DIMENSIONS, create_local_provider
+from providers.base import LangChainProvider, ProviderError
+from providers.local_provider import create_local_provider
 
 
 def fake_settings(
@@ -60,23 +61,17 @@ class TestCreateLocalProvider:
 
         assert provider._provider_name == "ollama:mistral:7b"
 
-    def test_embedding_model_is_not_configurable(self, monkeypatch):
-        """The embedding model is a frozen constant — no way to override it."""
-        monkeypatch.setattr(
-            "providers.local_provider.get_settings", lambda: fake_settings()
-        )
+    def test_has_no_embedding_function(self, monkeypatch):
+        """There is no local embedding path any more.
 
-        provider = create_local_provider()
-
-        assert provider._embed_fn is not None
-
-    def test_embeds_real_text_at_the_frozen_dimensionality(self, monkeypatch):
+        Embedding always goes through OpenRouter
+        (providers/openrouter_provider.py), regardless of provider_mode —
+        a local provider is generation-only.
+        """
         monkeypatch.setattr(
             "providers.local_provider.get_settings", lambda: fake_settings()
         )
         provider = create_local_provider()
 
-        vectors = provider.generate_embeddings(["hello world"])
-
-        assert len(vectors) == 1
-        assert len(vectors[0]) == EMBEDDING_DIMENSIONS
+        with pytest.raises(ProviderError):
+            provider.generate_embeddings(["hello"])

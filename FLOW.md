@@ -184,29 +184,28 @@ only `providers/base.py`'s `get_provider()` and its return type,
 `ProviderInterface`.
 
 1. `get_provider(task)` — `task` is `"metadata"`, `"relationship"`,
-   `"condense"`, `"answer"`, `"eval"`, or `"embedding"`; reads
-   `settings.config.llm.provider_mode` and returns `create_local_provider()`
-   (Ollama + local `sentence-transformers` embedding) for `fully_local`, or
-   `create_openrouter_provider()` (OpenRouter for both generation and
-   embedding) for `fully_cloud` — every task always resolves to the same
-   provider, so `task` itself is currently unused for routing (there is no
-   `mixed` mode any more — removed, see DECISIONS.md, 2026-08-30)
+   `"condense"`, `"answer"`, `"eval"`, or `"embedding"`. For every task
+   except `"embedding"`, reads `settings.config.llm.provider_mode` and
+   returns `create_local_provider()` (Ollama) for `fully_local`, or
+   `create_openrouter_provider()` (OpenRouter) for `fully_cloud` — there is
+   no `mixed` mode (removed — see DECISIONS.md, 2026-08-30). `"embedding"`
+   is a special case: it **always** returns `create_openrouter_provider()`,
+   regardless of `provider_mode` — there is no local embedding path at all
+   (removed — see DECISIONS.md, 2026-08-30, latest entry). This means
+   `OPENROUTER_API_KEY` is required even under `fully_local`, purely for
+   embedding; `fully_local` only means generation is free/offline.
 2. Both concrete providers construct a `LangChainProvider` around a
-   LangChain chat model (`ChatOllama` / `ChatOpenAI`) plus an `embed_fn`
-   callable — this is where every provider call's prompt building, JSON
-   response parsing, and retry-with-backoff actually live, shared by both.
-   Unlike the generation models (config-driven —
-   `llm.local_generation_model`/`llm.cloud_generation_model`), the
-   embedding models are frozen constants, not configurable at all —
-   `create_local_provider()`'s `embed_fn` wraps a cached
-   `sentence-transformers` model (`local_provider.py::EMBEDDING_MODEL`,
-   native 384-dim output); `create_openrouter_provider()`'s wraps a
-   LangChain `OpenAIEmbeddings` pointed at OpenRouter's base URL
-   (`openrouter_provider.py::EMBEDDING_MODEL`, truncated to 384 dimensions
-   via the `dimensions` parameter — verified directly against the real
-   OpenRouter API) — both frozen at the same dimensionality specifically
-   so a `provider_mode` switch can never produce a Chroma vector-size
-   mismatch (see DECISIONS.md, 2026-08-30, both entries). The `ChatOpenAI`
+   LangChain chat model (`ChatOllama` / `ChatOpenAI`) for their prompt
+   building, JSON response parsing, and retry-with-backoff — shared by
+   both. Only `create_openrouter_provider()` also builds an `embed_fn`
+   (wrapping a LangChain `OpenAIEmbeddings` pointed at OpenRouter's base
+   URL, `openrouter_provider.py::EMBEDDING_MODEL`, truncated to 384
+   dimensions via the `dimensions` parameter — verified directly against
+   the real OpenRouter API) — `create_local_provider()` passes no
+   `embed_fn` at all, so calling `generate_embeddings()` on a local
+   provider raises `ProviderError` (never actually reached in practice,
+   since `get_provider("embedding")` never returns one — see
+   DECISIONS.md, 2026-08-30, latest entry). The `ChatOpenAI`
    (OpenRouter) side always passes an explicit
    `max_tokens` (`llm.cloud_max_tokens`, default `4096`) — left unset it
    would default to the routed model's own maximum (64000 for
@@ -255,12 +254,11 @@ only `providers/base.py`'s `get_provider()` and its return type,
    `generate_relationship()` (see DECISIONS.md, 2026-08-29)
 8. `provider.generate_embeddings(texts)` — called by
    `pipeline/embeddings.py::embed_chunks()`/`embed_query()` (see below);
-   returns one vector per input text via the provider's own `embed_fn`.
-   Switching `provider_mode` changes which embedding model this returns
-   vectors from, but never the dimensionality (both frozen at 384 — see
-   DECISIONS.md, 2026-08-30) — a mode switch still calls for a reset +
-   re-ingest since the two remain different embedding spaces despite the
-   matching size
+   returns one vector per input text. Always the OpenRouter provider's
+   `embed_fn` in practice — `get_provider("embedding")` never returns the
+   local provider (see point 1 above) — so `provider_mode` has no effect
+   on embeddings at all any more; only which *generation* provider is
+   used varies by mode (see DECISIONS.md, 2026-08-30, latest entry)
 
 ---
 
@@ -375,9 +373,10 @@ to Chroma directly rather than staying storage-free — see DECISIONS.md,
 2026-08-24, for why the two pipeline stages made opposite choices there.
 Embedding itself is not done here directly any more — both functions
 below call `providers/base.py::get_provider("embedding").
-generate_embeddings()`, so which model actually embeds (local
-`sentence-transformers` or OpenRouter) follows `provider_mode` the same
-way generation does — see DECISIONS.md, 2026-08-30.
+generate_embeddings()`, which always resolves to OpenRouter regardless of
+`provider_mode` (there is no local embedding path — see DECISIONS.md,
+2026-08-30, latest entry), so an ingestion run needs `OPENROUTER_API_KEY`
+configured even under `fully_local`.
 
 - `embed_chunks(collection, item_id, source_type, chunk_texts, *,
   project_name=None, topic=None, created_at=None) -> list[Chunk]` — calls
@@ -803,17 +802,17 @@ See DECISIONS.md, 2026-08-29.
 1. `config/settings.py::get_settings().config.llm` read directly for the
    two generation model fields — no `agent/` intermediary, since `config`
    isn't `storage`/`providers` (see DECISIONS.md, 2026-08-25).
-   `agent/embedding_info.py::get_embedding_model_names()` supplies the two
-   embedding model names for display — these are frozen provider
-   constants, not part of `config`, and `providers/` *is* one of the two
-   layers the API must never reach into directly, so this one field does
-   need the `agent/` thin-wrapper indirection the others don't (see
-   DECISIONS.md, 2026-08-30)
+   `agent/embedding_info.py::get_embedding_model_name()` supplies the
+   (single) embedding model name for display — a frozen provider constant,
+   not part of `config`, and `providers/` *is* one of the two layers the
+   API must never reach into directly, so this one field does need the
+   `agent/` thin-wrapper indirection the others don't (see DECISIONS.md,
+   2026-08-30)
 2. Returns `{"provider_mode", "local_generation_model",
-   "local_embedding_model", "cloud_generation_model",
-   "cloud_embedding_model"}` — extends `docs/API_Specification.docx`
-   section 3.6's original two-field shape (see DECISIONS.md, 2026-08-30,
-   both entries)
+   "cloud_generation_model", "cloud_embedding_model"}` — no
+   `local_embedding_model` at all, since there's no local embedding path
+   any more — extends `docs/API_Specification.docx` section 3.6's original
+   two-field shape (see DECISIONS.md, 2026-08-30, all three entries)
 
 ---
 
@@ -821,19 +820,19 @@ See DECISIONS.md, 2026-08-29.
 
 1. Request body validated against `api/schemas.py::SettingsUpdateRequest`
    (`provider_mode`, `local_generation_model`, `cloud_generation_model` —
-   all optional, a partial update; no embedding-model fields at all, since
-   those are frozen — see DECISIONS.md, 2026-08-30) — an invalid
+   all optional, a partial update; no embedding-model field at all, since
+   it's frozen — see DECISIONS.md, 2026-08-30) — an invalid
    `provider_mode` value is a 422 via the shared validation-error handler
 2. `config/settings.py::update_llm_config()` called with whichever fields
    were given (see "Shared: configuration loading" above for its own
    steps) — a `ConfigError` (bad resulting config, or a file I/O failure)
    is caught by `api/main.py`'s shared handler, mapped to 500
 3. Returns `{"status": "updated", "provider_mode",
-   "local_generation_model", "local_embedding_model",
-   "cloud_generation_model", "cloud_embedding_model"}`, the embedding
-   fields again from `agent/embedding_info.py` (frozen, unaffected by the
-   request body) — reflecting the freshly written-and-reread
-   configuration for everything else
+   "local_generation_model", "cloud_generation_model",
+   "cloud_embedding_model"}`, the embedding field again from
+   `agent/embedding_info.py` (frozen, unaffected by the request body) —
+   reflecting the freshly written-and-reread configuration for everything
+   else
 
 ---
 
@@ -998,12 +997,13 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    in parallel; "Save Changes" calls `putSettings()` (provider mode plus
    the two editable generation model fields —
    `local_generation_model`/`cloud_generation_model`, only the one
-   matching `provider_mode` actually enabled for editing; the two
-   embedding model fields are rendered `disabled`/`readOnly` unconditionally
-   and never sent, since they're frozen — see DECISIONS.md, 2026-08-30,
-   both entries) and `putSourceConfig()` (watch folders/Notion scope,
-   parsed from a one-per-line textarea via `linesToList()`) together,
-   updating local state from the responses. Each connected-source card
+   matching `provider_mode` actually enabled for editing; the single
+   embedding model field is rendered `disabled`/`readOnly` unconditionally
+   and never sent, since it's frozen and always used regardless of
+   `provider_mode` — see DECISIONS.md, 2026-08-30, all three entries) and
+   `putSourceConfig()` (watch folders/Notion scope, parsed from a
+   one-per-line textarea via `linesToList()`) together, updating local
+   state from the responses. Each connected-source card
    shows the live
    connection status (`getSourceConnections()`'s cache-or-fresh result)
    rather than the batch-run status alone; "Reverify" calls

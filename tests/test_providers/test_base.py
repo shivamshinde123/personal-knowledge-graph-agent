@@ -386,7 +386,13 @@ class TestGetProvider:
         assert get_provider("answer") == "CLOUD"
         assert get_provider("relationship") == "CLOUD"
 
-    def test_fully_local_routes_embedding_to_local_too(self, monkeypatch):
+    def test_embedding_always_routes_to_cloud_under_fully_local(self, monkeypatch):
+        """There is no local embedding path.
+
+        "embedding" always resolves to OpenRouter, even under
+        fully_local (see providers/base.py::get_provider()'s own
+        docstring).
+        """
         monkeypatch.setattr(
             "providers.base.get_settings",
             lambda: SimpleNamespace(
@@ -401,9 +407,9 @@ class TestGetProvider:
             lambda: "CLOUD",
         )
 
-        assert get_provider("embedding") == "LOCAL"
+        assert get_provider("embedding") == "CLOUD"
 
-    def test_fully_cloud_routes_embedding_to_cloud_too(self, monkeypatch):
+    def test_embedding_always_routes_to_cloud_under_fully_cloud(self, monkeypatch):
         monkeypatch.setattr(
             "providers.base.get_settings",
             lambda: SimpleNamespace(

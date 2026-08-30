@@ -8,14 +8,13 @@ reopening one per call (see ``storage/chroma_store.py``'s own docstring on
 why it doesn't cache a client itself).
 
 Embedding itself goes through ``providers/base.py::get_provider("embedding")``
-rather than loading a model directly — the local ``sentence-transformers``
-loading this module used to do lives in ``providers/local_provider.py``
-now, alongside the OpenRouter embedding path, so switching
-``provider_mode`` changes which embedding model both this module and
-``embed_query()`` use, with no code here caring which one is active. See
-``DECISIONS.md`` — this is also why ``CLAUDE.md``'s "never bypass the LLM
-Provider abstraction" ground rule now covers embeddings too, not just
-generation.
+rather than loading a model directly. That always resolves to OpenRouter
+regardless of ``provider_mode`` — there is no local embedding path any
+more (removed — see ``providers/openrouter_provider.py``, ``DECISIONS.md``)
+— so an ingestion run under ``fully_local`` still needs
+``OPENROUTER_API_KEY`` configured, purely for this. See ``DECISIONS.md`` —
+this is also why ``CLAUDE.md``'s "never bypass the LLM Provider
+abstraction" ground rule now covers embeddings too, not just generation.
 """
 
 from __future__ import annotations

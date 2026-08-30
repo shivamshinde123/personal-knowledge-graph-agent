@@ -38,11 +38,8 @@ class TestGetSettings:
             ),
         )
         monkeypatch.setattr(
-            "api.routes.settings.get_embedding_model_names",
-            lambda: (
-                "sentence-transformers/all-MiniLM-L6-v2",
-                "openai/text-embedding-3-small",
-            ),
+            "api.routes.settings.get_embedding_model_name",
+            lambda: "openai/text-embedding-3-small",
         )
 
         response = client.get("/api/settings")
@@ -51,12 +48,11 @@ class TestGetSettings:
         assert response.json() == {
             "provider_mode": "fully_local",
             "local_generation_model": "llama3:8b",
-            "local_embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
             "cloud_generation_model": "anthropic/claude-sonnet-4",
             "cloud_embedding_model": "openai/text-embedding-3-small",
         }
 
-    def test_embedding_models_are_not_settable(self, client, monkeypatch):
+    def test_embedding_model_is_not_settable(self, client, monkeypatch):
         """A supplied embedding-model value is silently ignored.
 
         The schema has no field for it, so it never reaches
@@ -68,22 +64,18 @@ class TestGetSettings:
             lambda **kwargs: fake_settings().config,
         )
         monkeypatch.setattr(
-            "api.routes.settings.get_embedding_model_names",
-            lambda: (
-                "sentence-transformers/all-MiniLM-L6-v2",
-                "openai/text-embedding-3-small",
-            ),
+            "api.routes.settings.get_embedding_model_name",
+            lambda: "openai/text-embedding-3-small",
         )
 
         response = client.put(
             "/api/settings",
-            json={"local_embedding_model": "some-other-model"},
+            json={"cloud_embedding_model": "some-other-model"},
         )
 
         assert response.status_code == 200
         assert (
-            response.json()["local_embedding_model"]
-            == "sentence-transformers/all-MiniLM-L6-v2"
+            response.json()["cloud_embedding_model"] == "openai/text-embedding-3-small"
         )
 
 
@@ -109,11 +101,8 @@ class TestPutSettings:
             )
 
         monkeypatch.setattr(
-            "api.routes.settings.get_embedding_model_names",
-            lambda: (
-                "sentence-transformers/all-MiniLM-L6-v2",
-                "openai/text-embedding-3-small",
-            ),
+            "api.routes.settings.get_embedding_model_name",
+            lambda: "openai/text-embedding-3-small",
         )
 
         monkeypatch.setattr("api.routes.settings.update_llm_config", fake_update)

@@ -63,13 +63,11 @@ def anchor_path(value: Path) -> Path:
 class LLMConfig(BaseModel):
     """LLM provider selection and the two *generation* models used on each side.
 
-    Embedding models are deliberately not configurable here — they're
-    frozen constants (``providers/local_provider.py::EMBEDDING_MODEL``,
-    ``providers/openrouter_provider.py::EMBEDDING_MODEL``), matched to the
-    same vector dimensionality (384) specifically so switching
-    ``provider_mode`` can never produce Chroma vectors of two different
-    sizes. Letting the embedding model be freely edited (as it briefly was)
-    would let a user reintroduce that mismatch by hand. See ``DECISIONS.md``.
+    No embedding model field at all — embedding always goes through
+    OpenRouter (``providers/openrouter_provider.py::EMBEDDING_MODEL``),
+    regardless of ``provider_mode``; there is no local embedding path any
+    more. ``provider_mode`` here only ever selects which *generation*
+    model is used. See ``DECISIONS.md``.
     """
 
     provider_mode: ProviderMode = "fully_local"

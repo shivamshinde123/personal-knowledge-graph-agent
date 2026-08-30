@@ -446,8 +446,16 @@ class TestWholeDocumentNarrowing:
             ref="b",
             texts=[
                 boilerplate,
-                "SQLite, Chroma, and Neo4j together form the storage layer "
-                "that persists all ingested items locally.",
+                # Deliberately close in wording to item "a"'s own content
+                # chunk (not just same topic) — this needs to land closer,
+                # by embedding distance, to the source's mean-pooled query
+                # than the boilerplate itself, or narrowing's single
+                # nearest-chunk result could legitimately be either item's
+                # boilerplate copy (byte-identical across a/b/c) instead of
+                # either item's actual content — verified directly against
+                # the real embedding model this suite runs against.
+                "The storage layer uses SQLite, Chroma, and Neo4j for "
+                "local persistence of ingested items, as described here.",
             ],
         )
         ingest_multi(

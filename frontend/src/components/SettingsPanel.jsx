@@ -29,21 +29,20 @@ const PROVIDER_MODES = [
     value: "fully_local",
     label: "Fully Local",
     description:
-      "Runs entirely through Ollama and a local embedding model — no cost, no network dependency.",
+      "Generation runs through Ollama, no cost. Embedding still uses the fixed cloud model below regardless — an OpenRouter API key is required either way.",
   },
   {
     value: "fully_cloud",
     label: "Fully Cloud",
     description:
-      "Routes every generation and embedding call through OpenRouter — highest quality, per-call cost.",
+      "Generation routes through OpenRouter too — highest quality, per-call cost.",
   },
 ];
 
 /**
  * The Settings screen: LLM provider mode, the two editable generation
- * model fields plus the two fixed (display-only) embedding model fields,
- * and connected data source status. Per docs/UIUX_Wireframes.docx
- * section 3.
+ * model fields, the one fixed (display-only) embedding model field, and
+ * connected data source status. Per docs/UIUX_Wireframes.docx section 3.
  *
  * @param {object} props
  * @param {() => Promise<void>} props.onTriggerIngestion - starts a batch
@@ -224,14 +223,11 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
       <section className="settings-section">
         <h2>Models</h2>
         <p className="settings-field-hint">
-          Generation models: only the one matching the provider mode above is
+          Generation: only the model matching the provider mode above is
           actually used — both are kept here so switching modes doesn't lose the
-          other side's value. Embedding models are fixed and can't be edited:
-          they're matched to the same vector size (384 dimensions) on both
-          sides, so switching provider mode never breaks the vector store with a
-          size mismatch. The two are still different embedding spaces though, so
-          switching modes still calls for "Reset all data" below and a
-          re-ingestion run afterward.
+          other side's value. Embedding always uses the fixed cloud model below,
+          regardless of provider mode — there's no local embedding option, so
+          this needs an OpenRouter API key configured even under Fully Local.
         </p>
 
         <div className="model-field">
@@ -249,21 +245,6 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
               }))
             }
             placeholder="e.g. llama3:8b"
-          />
-        </div>
-
-        <div className="model-field">
-          <label htmlFor="local-embedding-model">
-            Local embedding model{" "}
-            <span className="model-field-fixed">(fixed)</span>
-          </label>
-          <input
-            id="local-embedding-model"
-            className="model-select"
-            type="text"
-            disabled
-            value={settings.local_embedding_model}
-            readOnly
           />
         </div>
 
@@ -286,12 +267,12 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
         </div>
 
         <div className="model-field">
-          <label htmlFor="cloud-embedding-model">
-            Cloud embedding model{" "}
-            <span className="model-field-fixed">(fixed)</span>
+          <label htmlFor="embedding-model">
+            Embedding model{" "}
+            <span className="model-field-fixed">(fixed, always cloud)</span>
           </label>
           <input
-            id="cloud-embedding-model"
+            id="embedding-model"
             className="model-select"
             type="text"
             disabled
