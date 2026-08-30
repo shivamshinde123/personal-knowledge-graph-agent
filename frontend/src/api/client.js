@@ -92,15 +92,18 @@ export function putSettings(payload) {
 
 /**
  * Current source-scope configuration (local watch folders, Notion page
- * scope). Extension beyond API_Specification.docx — see DECISIONS.md.
+ * scope, GitHub repo scope, Gmail/GitHub date ranges). Extension beyond
+ * API_Specification.docx — see DECISIONS.md.
  */
 export function getSourceConfig() {
   return request("/settings/sources");
 }
 
 /**
- * Update the source-scope configuration (partial update).
- * @param {{local_files_watch_dirs?: string[], notion_page_ids?: string[]}} payload
+ * Update the source-scope configuration (partial update). The four
+ * date-range fields are plain "YYYY-MM-DD" strings (an empty string
+ * clears the field) — matching an <input type="date">'s value directly.
+ * @param {{local_files_watch_dirs?: string[], notion_page_ids?: string[], github_repos?: string[], gmail_date_range_start?: string, gmail_date_range_end?: string, github_date_range_start?: string, github_date_range_end?: string}} payload
  */
 export function putSourceConfig(payload) {
   return request("/settings/sources", {

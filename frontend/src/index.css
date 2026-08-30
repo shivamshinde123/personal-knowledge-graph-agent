@@ -968,6 +968,39 @@ a {
   border-color: var(--accent);
 }
 
+.date-range-fields {
+  display: flex;
+  gap: 12px;
+}
+
+.date-range-fields label {
+  flex: 1;
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--text-h);
+}
+
+.date-range-fields input[type="date"] {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 13px 17px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-h);
+  font-size: 14px;
+  font-family: var(--mono);
+  color-scheme: dark;
+}
+
+.date-range-fields input[type="date"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .settings-section-header {
   display: flex;
   align-items: flex-start;

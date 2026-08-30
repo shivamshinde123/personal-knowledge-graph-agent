@@ -76,6 +76,11 @@ function SettingsPanel({
   const [connections, setConnections] = useState(null);
   const [watchDirsText, setWatchDirsText] = useState("");
   const [notionPageIdsText, setNotionPageIdsText] = useState("");
+  const [githubReposText, setGithubReposText] = useState("");
+  const [gmailDateRangeStart, setGmailDateRangeStart] = useState("");
+  const [gmailDateRangeEnd, setGmailDateRangeEnd] = useState("");
+  const [githubDateRangeStart, setGithubDateRangeStart] = useState("");
+  const [githubDateRangeEnd, setGithubDateRangeEnd] = useState("");
   const [loadError, setLoadError] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null);
@@ -100,15 +105,30 @@ function SettingsPanel({
         ([settingsResult, sourcesResult, connectionsResult, sourceConfig]) => {
           const watchDirs = sourceConfig.local_files_watch_dirs.join("\n");
           const notionPageIds = sourceConfig.notion_page_ids.join("\n");
+          const githubRepos = sourceConfig.github_repos.join("\n");
+          const gmailStart = sourceConfig.gmail_date_range_start ?? "";
+          const gmailEnd = sourceConfig.gmail_date_range_end ?? "";
+          const githubStart = sourceConfig.github_date_range_start ?? "";
+          const githubEnd = sourceConfig.github_date_range_end ?? "";
           setSettings(settingsResult);
           setSources(sourcesResult);
           setConnections(connectionsResult);
           setWatchDirsText(watchDirs);
           setNotionPageIdsText(notionPageIds);
+          setGithubReposText(githubRepos);
+          setGmailDateRangeStart(gmailStart);
+          setGmailDateRangeEnd(gmailEnd);
+          setGithubDateRangeStart(githubStart);
+          setGithubDateRangeEnd(githubEnd);
           originalRef.current = {
             ...settingsResult,
             watchDirsText: watchDirs,
             notionPageIdsText: notionPageIds,
+            githubReposText: githubRepos,
+            gmailDateRangeStart: gmailStart,
+            gmailDateRangeEnd: gmailEnd,
+            githubDateRangeStart: githubStart,
+            githubDateRangeEnd: githubEnd,
           };
         },
       )
@@ -206,6 +226,21 @@ function SettingsPanel({
     if (notionPageIdsText !== original.notionPageIdsText) {
       changes.push("Notion page scope");
     }
+    if (githubReposText !== original.githubReposText) {
+      changes.push("GitHub repository scope");
+    }
+    if (
+      gmailDateRangeStart !== original.gmailDateRangeStart ||
+      gmailDateRangeEnd !== original.gmailDateRangeEnd
+    ) {
+      changes.push("Gmail date range");
+    }
+    if (
+      githubDateRangeStart !== original.githubDateRangeStart ||
+      githubDateRangeEnd !== original.githubDateRangeEnd
+    ) {
+      changes.push("GitHub date range");
+    }
 
     if (changes.length === 0) {
       setSaveStatus({ ok: true, text: "Nothing changed." });
@@ -249,6 +284,11 @@ function SettingsPanel({
         putSourceConfig({
           local_files_watch_dirs: linesToList(watchDirsText),
           notion_page_ids: linesToList(notionPageIdsText),
+          github_repos: linesToList(githubReposText),
+          gmail_date_range_start: gmailDateRangeStart,
+          gmail_date_range_end: gmailDateRangeEnd,
+          github_date_range_start: githubDateRangeStart,
+          github_date_range_end: githubDateRangeEnd,
         }),
       ]);
       setSettings(settingsResult);
@@ -256,6 +296,11 @@ function SettingsPanel({
         ...settingsResult,
         watchDirsText,
         notionPageIdsText,
+        githubReposText,
+        gmailDateRangeStart,
+        gmailDateRangeEnd,
+        githubDateRangeStart,
+        githubDateRangeEnd,
       };
       setSaveStatus({ ok: true, text: "Saved." });
 
@@ -526,6 +571,79 @@ function SettingsPanel({
               onChange={(event) => setNotionPageIdsText(event.target.value)}
               placeholder="e.g. 1a2b3c4d5e6f7890abcd1234ef567890"
             />
+          </section>
+
+          <section className="settings-section">
+            <h2>GitHub repository scope</h2>
+            <p className="settings-field-hint">
+              One <code>owner/repo</code> per line. Leave empty to ingest every
+              repository the token can access.
+            </p>
+            <textarea
+              className="source-scope-textarea"
+              rows={3}
+              value={githubReposText}
+              onChange={(event) => setGithubReposText(event.target.value)}
+              placeholder="e.g. octocat/hello-world"
+            />
+          </section>
+
+          <section className="settings-section">
+            <h2>Gmail date range</h2>
+            <p className="settings-field-hint">
+              Only ingest messages within this range. Leave either side empty
+              for no floor/ceiling.
+            </p>
+            <div className="date-range-fields">
+              <label>
+                From
+                <input
+                  type="date"
+                  value={gmailDateRangeStart}
+                  onChange={(event) =>
+                    setGmailDateRangeStart(event.target.value)
+                  }
+                />
+              </label>
+              <label>
+                To
+                <input
+                  type="date"
+                  value={gmailDateRangeEnd}
+                  onChange={(event) => setGmailDateRangeEnd(event.target.value)}
+                />
+              </label>
+            </div>
+          </section>
+
+          <section className="settings-section">
+            <h2>GitHub date range</h2>
+            <p className="settings-field-hint">
+              Only ingest commits, PRs, issues, and stars within this range.
+              Leave either side empty for no floor/ceiling.
+            </p>
+            <div className="date-range-fields">
+              <label>
+                From
+                <input
+                  type="date"
+                  value={githubDateRangeStart}
+                  onChange={(event) =>
+                    setGithubDateRangeStart(event.target.value)
+                  }
+                />
+              </label>
+              <label>
+                To
+                <input
+                  type="date"
+                  value={githubDateRangeEnd}
+                  onChange={(event) =>
+                    setGithubDateRangeEnd(event.target.value)
+                  }
+                />
+              </label>
+            </div>
           </section>
 
           <section className="settings-section">
