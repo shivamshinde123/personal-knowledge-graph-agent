@@ -11,7 +11,7 @@
 // port-forward) is already listening on ::1:8080 — silently talking to the
 // wrong service instead of this API. 127.0.0.1 is unambiguous. See
 // DECISIONS.md.
-const API_BASE_URL = "http://127.0.0.1:8081/api";
+const API_BASE_URL = "http://127.0.0.1:8080/api";
 
 class ApiError extends Error {
   constructor(status, body) {
@@ -105,6 +105,14 @@ export function putSourceConfig(payload) {
     method: "PUT",
     body: JSON.stringify(payload),
   });
+}
+
+/**
+ * The whole relationship graph (every item node, every confirmed edge).
+ * Extension beyond API_Specification.docx — see DECISIONS.md.
+ */
+export function getGraph() {
+  return request("/graph");
 }
 
 /** List past conversation sessions, most recently active first. Per section 3.4. */

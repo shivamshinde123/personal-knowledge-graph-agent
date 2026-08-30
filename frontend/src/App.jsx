@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { getSessions } from "./api/client.js";
 import ChatWindow from "./components/ChatWindow.jsx";
+import GraphView from "./components/GraphView.jsx";
 import SettingsPanel from "./components/SettingsPanel.jsx";
 import Sidebar from "./components/Sidebar.jsx";
 
 /**
- * Top-level layout: sidebar plus either the chat window (Screen 1) or the
- * settings panel (Screen 2). Per docs/UIUX_Wireframes.docx.
+ * Top-level layout: sidebar plus one of the chat window (Screen 1), the
+ * settings panel (Screen 2), or the relationship graph view (Screen 3 —
+ * extension beyond docs/UIUX_Wireframes.docx, see DECISIONS.md).
  *
- * There's no router — just two screens, switched via local state, per the
+ * There's no router — just screens switched via local state, per the
  * wireframe's "Settings link" navigation (no deep-linking requirement).
  */
 function App() {
@@ -60,16 +62,17 @@ function App() {
         onNewChat={handleNewChat}
         onSelectSession={handleSelectSession}
         onOpenSettings={() => setView("settings")}
+        onOpenGraph={() => setView("graph")}
       />
-      {view === "chat" ? (
+      {view === "chat" && (
         <ChatWindow
           key={chatKey}
           sessionId={sessionId}
           onTurnCompleted={handleTurnCompleted}
         />
-      ) : (
-        <SettingsPanel />
       )}
+      {view === "settings" && <SettingsPanel />}
+      {view === "graph" && <GraphView />}
     </div>
   );
 }

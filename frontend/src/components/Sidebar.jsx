@@ -3,12 +3,13 @@
  * Per docs/UIUX_Wireframes.docx section 2.1.
  *
  * @param {object} props
- * @param {"chat" | "settings"} props.view
+ * @param {"chat" | "settings" | "graph"} props.view
  * @param {Array<{session_id: string, title: string | null, updated_at: string}>} props.sessions
  * @param {string | null} props.activeSessionId
  * @param {() => void} props.onNewChat
  * @param {(sessionId: string) => void} props.onSelectSession
  * @param {() => void} props.onOpenSettings
+ * @param {() => void} props.onOpenGraph
  */
 function Sidebar({
   view,
@@ -17,6 +18,7 @@ function Sidebar({
   onNewChat,
   onSelectSession,
   onOpenSettings,
+  onOpenGraph,
 }) {
   return (
     <nav className="sidebar">
@@ -44,6 +46,32 @@ function Sidebar({
           ))
         )}
       </div>
+      <button
+        type="button"
+        className="settings-link"
+        onClick={onOpenGraph}
+        aria-current={view === "graph" ? "page" : undefined}
+      >
+        <svg
+          className="settings-link-icon"
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <circle cx="5" cy="6" r="3" />
+          <circle cx="19" cy="6" r="3" />
+          <circle cx="12" cy="18" r="3" />
+          <path d="M7.5 7.5 10 16" />
+          <path d="M16.5 7.5 14 16" />
+        </svg>
+        Graph
+      </button>
       <button
         type="button"
         className="settings-link"
