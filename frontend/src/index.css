@@ -2,44 +2,57 @@
    docs/Coding_Conventions.docx section 3 ("Component styling uses plain
    CSS modules or a single shared stylesheet"). */
 
-:root {
-  --text: #3f3d46;
-  --text-h: #16151a;
-  --text-muted: #8b8896;
-  --bg: #ffffff;
-  --bg-sidebar: #f7f6f9;
-  --bg-bubble-agent: #f1f0f4;
-  --bg-bubble-user: #6b4fd6;
-  --text-bubble-user: #ffffff;
-  --border: #e5e4e9;
-  --accent: #6b4fd6;
-  --accent-hover: #5a3fc0;
-  --danger: #c0392b;
-  --ok: #1f9d55;
+/* Self-hosted (not a Google Fonts CDN link) — this is a local-first app
+   with no other runtime network dependency, and a CDN font would add one.
+   Sourced from the official `geist` npm package (frontend/package.json),
+   with the variable-weight file copied into src/assets/fonts/ since the
+   package's own font loader is Next.js-specific and doesn't apply to a
+   plain Vite app. See DECISIONS.md. */
+@font-face {
+  font-family: "Geist";
+  src: url("./assets/fonts/Geist-Variable.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
 
-  --sans: system-ui, "Segoe UI", Roboto, sans-serif;
+/* Redesign (see DECISIONS.md — Figma-based visual overhaul, rolling out
+   one screen at a time starting with Chat): a fixed dark theme, matching
+   the design exactly rather than adapting to the OS light/dark
+   preference — the design has no light variant, so inventing one would
+   be guessing. This replaces the previous light/adaptive-dark palette
+   outright: any not-yet-redesigned screen inherits these token *values*
+   immediately (same variable names, new colors), which reads as "further
+   along" rather than jarring, and there is nothing left for a
+   prefers-color-scheme override to meaningfully diverge from until every
+   screen's own redesign lands. */
+:root {
+  --text: #cbc3d7;
+  --text-h: #dae2fd;
+  --text-muted: rgba(203, 195, 215, 0.5);
+  --bg: #020617;
+  --bg-elevated: rgba(15, 23, 42, 0.7);
+  --bg-sidebar: rgba(19, 27, 46, 0.8);
+  --bg-bubble-agent: rgba(15, 23, 42, 0.7);
+  --bg-bubble-user: #8b5cf6;
+  --text-bubble-user: #ffffff;
+  --border: rgba(255, 255, 255, 0.1);
+  --border-subtle: rgba(73, 68, 84, 0.1);
+  --accent: #8b5cf6;
+  --accent-hover: #a78bfa;
+  --accent-active: #d0bcff;
+  --accent-active-bg: rgba(160, 120, 255, 0.1);
+  --danger: #ef4444;
+  --ok: #10b981;
+  --info-blue: #3b82f6;
+
+  --sans: "Geist", system-ui, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, Consolas, monospace;
 
-  color-scheme: light dark;
+  color-scheme: dark;
   font-family: var(--sans);
   color: var(--text);
   background: var(--bg);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #d3d1d9;
-    --text-h: #f4f3f6;
-    --text-muted: #8b8896;
-    --bg: #17161c;
-    --bg-sidebar: #1e1d24;
-    --bg-bubble-agent: #26252d;
-    --bg-bubble-user: #7c5ff0;
-    --text-bubble-user: #ffffff;
-    --border: #2e2d36;
-    --accent: #7c5ff0;
-    --accent-hover: #8f76f5;
-  }
 }
 
 * {
@@ -68,44 +81,92 @@ a {
 .app {
   display: flex;
   height: 100%;
+  position: relative;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+/* Two soft, blurred ellipses behind everything — purely decorative, from
+   the Figma "Background Ambient Glows" / "Overlay+Blur" layers. Fixed to
+   the viewport corners rather than the (fixed 1280x1024) canvas position
+   Figma specifies, since this app's layout is responsive. */
+.app::before,
+.app::after {
+  content: "";
+  position: fixed;
+  border-radius: 9999px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.app::before {
+  top: -100px;
+  left: -128px;
+  width: 512px;
+  height: 410px;
+  background: rgba(208, 188, 255, 0.05);
+  filter: blur(60px);
+}
+
+.app::after {
+  bottom: -100px;
+  right: -128px;
+  width: 640px;
+  height: 512px;
+  background: rgba(79, 49, 156, 0.1);
+  filter: blur(75px);
 }
 
 /* ---- Sidebar ---- */
 
 .sidebar {
-  width: 260px;
+  width: 256px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
+  gap: 8px;
   background: var(--bg-sidebar);
-  border-right: 1px solid var(--border);
-  padding: 16px;
+  backdrop-filter: blur(12px);
+  border-right: 1px solid var(--border-subtle);
+  padding: 24px 25px 24px 24px;
+  position: relative;
+  z-index: 1;
 }
 
 .sidebar-header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 32px;
 }
 
 .sidebar-title {
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.3;
   color: var(--text-h);
+  margin: 0;
+}
+
+.sidebar-subtitle {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--text);
   margin: 0;
 }
 
 .new-chat-button {
   width: 100%;
-  padding: 10px 12px;
+  padding: 13px 17px;
   border-radius: 8px;
   border: 1px solid var(--border);
-  background: var(--bg);
+  background: transparent;
   color: var(--text-h);
   font-size: 14px;
   font-weight: 500;
-  text-align: left;
+  letter-spacing: 0.02em;
+  text-align: center;
 }
 
 .new-chat-button:hover {
@@ -115,78 +176,117 @@ a {
 .session-list {
   flex: 1;
   overflow-y: auto;
-  margin-top: 16px;
+  padding: 24px 8px 24px 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
+.session-list-label {
+  opacity: 0.7;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text);
+  margin: 0 0 4px;
+}
+
 .session-list-empty {
   color: var(--text-muted);
   font-size: 13px;
-  padding: 8px 4px;
+  padding: 8px 12px;
 }
 
 .session-item {
-  padding: 8px 10px;
+  padding: 8px 12px;
   border-radius: 6px;
   border: none;
   background: none;
   text-align: left;
   font-size: 14px;
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-item:hover {
-  background: var(--bg-bubble-agent);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .session-item.active {
-  background: var(--bg-bubble-agent);
+  background: rgba(255, 255, 255, 0.05);
   color: var(--text-h);
   font-weight: 500;
 }
 
 .sidebar-footer {
   margin-top: auto;
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
+  padding-top: 17.5px;
+  border-top: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
 }
 
 .nav-link {
-  padding: 8px 6px;
-  border-radius: 6px;
+  padding: 12px 14px 12px 12px;
+  border-radius: 8px;
   border: none;
+  border-right: 2px solid transparent;
   background: none;
   text-align: left;
   font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
   color: var(--text);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
 }
 
 .nav-link:hover {
-  background: var(--bg-bubble-agent);
-  color: var(--accent);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .nav-link[aria-current="page"] {
-  color: var(--accent);
-  font-weight: 500;
+  background: var(--accent-active-bg);
+  border-right-color: var(--accent-active);
+  color: var(--accent-active);
 }
 
 .nav-link-icon {
   flex-shrink: 0;
+  display: block;
+  width: 20px;
+  height: 20px;
+  /* The exported Figma icon asset (chat/graph/settings), recolored via
+     currentColor -- same technique the previous inline stroke SVGs used.
+     Figma only exported one fixed fill color per icon (matching its
+     shown state), but each icon needs to render in either the muted
+     (inactive) or --accent-active (active) color depending on the
+     current view, so this masks the asset's shape and paints it with
+     background-color instead of relying on its baked-in fill -- the
+     geometry is the exact exported asset, unmodified; only the paint
+     color is applied via CSS. mask-size: contain preserves each icon's
+     own aspect ratio (20x20, 20x18, 20.1x20) within the fixed box rather
+     than stretching every icon to the same shape. */
+  background-color: currentColor;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
 }
 
 /* ---- Chat window ---- */
 
 .chat-window {
   position: relative;
+  z-index: 1;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -200,7 +300,9 @@ a {
      scrolled away from the latest message — see ChatWindow.jsx. */
   position: absolute;
   left: 50%;
-  bottom: 88px;
+  /* Above the (now taller, Figma-style) bottom-docked input area: its
+     pill row + textarea + disclaimer run roughly 190px tall. */
+  bottom: 200px;
   transform: translateX(-50%);
   display: inline-flex;
   align-items: center;
@@ -208,12 +310,13 @@ a {
   padding: 8px 16px;
   border-radius: 999px;
   border: 1px solid var(--border);
-  background: var(--bg-bubble-agent);
+  background: var(--bg-elevated);
+  backdrop-filter: blur(10px);
   color: var(--text-h);
   font-size: 13px;
   font-family: inherit;
   cursor: pointer;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
   z-index: 5;
 }
 
@@ -224,10 +327,110 @@ a {
 .message-list {
   flex: 1;
   overflow-y: auto;
-  padding: 24px;
+  /* Extra bottom padding so the last real message clears the absolutely
+     positioned, bottom-docked input area (see .chat-input-area) rather
+     than sitting underneath it. */
+  padding: 24px 24px 220px;
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+/* ---- Empty state (Figma "Empty State / Placeholder") ---- */
+
+.empty-state {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 15px;
+  max-width: 672px;
+  padding: 0 16px;
+  text-align: center;
+}
+
+.empty-state-icon-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  background: var(--bg-elevated);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: 0 20px 40px 0 rgba(139, 92, 246, 0.1);
+}
+
+.empty-state-icon {
+  width: 22.5px;
+  height: 25px;
+}
+
+.empty-state-heading {
+  margin: 8px 0 0;
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-h);
+}
+
+.empty-state-subtext {
+  margin: 0;
+  max-width: 512px;
+  font-size: 18px;
+  line-height: 1.6;
+  opacity: 0.8;
+  color: var(--text);
+}
+
+.suggestion-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 16px;
+  max-width: 768px;
+  padding-top: 17px;
+}
+
+.suggestion-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 17px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: var(--bg-elevated);
+  backdrop-filter: blur(10px);
+  text-align: left;
+}
+
+.suggestion-chip:hover {
+  border-color: var(--border);
+}
+
+.suggestion-chip-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent-active);
+}
+
+.suggestion-chip:nth-child(2) .suggestion-chip-label {
+  color: var(--ok);
+}
+
+.suggestion-chip-icon {
+  width: 13.5px;
+  height: 13.5px;
+}
+
+.suggestion-chip-text {
+  font-size: 16px;
+  color: var(--text);
 }
 
 .message-list-empty {
@@ -268,6 +471,8 @@ a {
 
 .message-bubble.agent {
   background: var(--bg-bubble-agent);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
   color: var(--text-h);
   border-bottom-left-radius: 4px;
 }
@@ -399,38 +604,116 @@ a {
   letter-spacing: 0.04em;
 }
 
+/* ---- Input area (Figma "Input Area (Bottom docked)") ---- */
+
+.chat-input-area {
+  /* Docked over the message list rather than taking its own row in
+     .chat-window's flex column (Figma docks it as an overlay with a
+     gradient fade, not a bordered footer bar) — .message-list's extra
+     bottom padding keeps real messages clear of it. */
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  justify-content: center;
+  padding: 24px 64px 32px;
+  background: linear-gradient(
+    to top,
+    var(--bg) 0%,
+    rgba(2, 6, 23, 0.9) 50%,
+    rgba(2, 6, 23, 0) 100%
+  );
+}
+
+.chat-input-area-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 896px;
+}
+
+.data-source-indicators {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 8px;
+}
+
+.data-source-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.data-source-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
 .chat-input-form {
   display: flex;
-  gap: 8px;
-  padding: 16px 24px;
-  border-top: 1px solid var(--border);
+  align-items: flex-end;
+  padding: 9px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: #0f172a;
+  backdrop-filter: blur(10px);
 }
 
 .chat-input {
   flex: 1;
-  padding: 12px 16px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text);
-  font-size: 15px;
+  min-height: 56px;
+  max-height: 192px;
+  padding: 16px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-h);
+  font-size: 16px;
   font-family: inherit;
   resize: none;
+  overflow-y: auto;
+}
+
+.chat-input::placeholder {
+  color: var(--text-muted);
 }
 
 .chat-input:focus {
   outline: none;
-  border-color: var(--accent);
 }
 
 .send-button {
-  padding: 0 20px;
-  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-end;
+  margin-bottom: 8px;
+  padding: 0 16px;
+  height: 40px;
+  min-width: 80px;
+  justify-content: center;
+  border-radius: 12px;
   border: none;
   background: var(--accent);
   color: #fff;
   font-size: 14px;
   font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.send-button-icon {
+  width: 15.8px;
+  height: 13.3px;
 }
 
 .send-button:hover:not(:disabled) {
@@ -440,6 +723,13 @@ a {
 .send-button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.chat-input-disclaimer {
+  margin: 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 /* ---- Settings panel ---- */
@@ -709,8 +999,13 @@ a {
   padding: 10px 12px;
   border-radius: 8px;
   border: 1px solid var(--border);
-  background: var(--bg);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  /* Not var(--bg) -- that's the same near-black as the page background
+     under the redesign's dark-only palette, which would leave a toast
+     with barely a visible border. Same translucent-card + blur treatment
+     as the rest of the redesign so it actually stands out. */
+  background: var(--bg-elevated);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
   font-size: 13px;
   color: var(--text);
 }

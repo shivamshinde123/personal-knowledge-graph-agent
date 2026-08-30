@@ -1,6 +1,42 @@
 import { useEffect, useRef, useState } from "react";
-import { getSessionHistory, postQuery } from "../api/client.js";
+import {
+  getSessionHistory,
+  getSourceConnections,
+  postQuery,
+} from "../api/client.js";
+import { SOURCE_TYPE_COLORS } from "../constants/sourceColors.js";
 import MessageBubble from "./MessageBubble.jsx";
+import emptyStateIcon from "../assets/icons/empty-state-icon.svg";
+import summarizeIcon from "../assets/icons/chip-summarize.svg";
+import findIcon from "../assets/icons/chip-find.svg";
+import sendIcon from "../assets/icons/send-icon.svg";
+
+const SOURCE_TYPE_LABELS = {
+  local_file: "Local files",
+  notion: "Notion",
+  gmail: "Gmail",
+  github: "GitHub",
+  google_calendar: "Calendar",
+  browser_history: "Browser history",
+};
+
+// Example starter prompts, per the Figma "Suggestion Chips" — clicking one
+// fills the input rather than sending immediately, so the reader can edit
+// it first.
+const SUGGESTION_CHIPS = [
+  {
+    icon: summarizeIcon,
+    label: "Summarize",
+    text: "Recent project commits and emails",
+    prompt: "Summarize my recent project commits and emails.",
+  },
+  {
+    icon: findIcon,
+    label: "Find",
+    text: "That presentation from last week",
+    prompt: "Find that presentation from last week.",
+  },
+];
 
 /**
  * The active conversation: message history plus the input box pinned to
@@ -26,8 +62,14 @@ function ChatWindow({ sessionId: initialSessionId, onTurnCompleted }) {
   const [isSending, setIsSending] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(!!initialSessionId);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  // Which sources are actually connected right now, for the input area's
+  // "Data Source Indicators" pills (Figma). Fetched once — this is a
+  // lightweight, already-cached status check (see agent/connection_check.py),
+  // not worth re-fetching on every keystroke or render.
+  const [connectedSources, setConnectedSources] = useState([]);
   const nextMessageId = useRef(0);
   const messageListRef = useRef(null);
+  const textareaRef = useRef(null);
   // Tracks whether the reader was at the bottom *before* the message list's
   // content just changed — updated continuously by the scroll handler, so
   // it reflects the scroll position from before a new message was appended,
@@ -78,6 +120,25 @@ function ChatWindow({ sessionId: initialSessionId, onTurnCompleted }) {
     if (wasAtBottomRef.current) scrollToBottom("auto");
     else setShowScrollToBottom(true);
   }, [messages, isLoadingHistory]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getSourceConnections()
+      .then((result) => {
+        if (cancelled) return;
+        setConnectedSources(
+          result.connections
+            .filter((connection) => connection.status === "ok")
+            .map((connection) => connection.source_type),
+        );
+      })
+      .catch(() => {
+        // Not worth its own error state -- the pills just stay empty.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!initialSessionId) {
@@ -175,10 +236,39 @@ function ChatWindow({ sessionId: initialSessionId, onTurnCompleted }) {
       >
         {isLoadingHistory && <p className="message-list-empty">Loading…</p>}
         {!isLoadingHistory && messages.length === 0 && (
-          <p className="message-list-empty">
-            Ask a question about your notes, emails, commits, calendar, files,
-            or browsing history.
-          </p>
+          <div className="empty-state">
+            <div className="empty-state-icon-box">
+              <img src={emptyStateIcon} alt="" className="empty-state-icon" />
+            </div>
+            <h2 className="empty-state-heading">How can I help you today?</h2>
+            <p className="empty-state-subtext">
+              Ask a question about your notes, emails, commits, calendar, files,
+              or browsing history.
+            </p>
+            <div className="suggestion-chips">
+              {SUGGESTION_CHIPS.map((chip) => (
+                <button
+                  key={chip.label}
+                  type="button"
+                  className="suggestion-chip"
+                  onClick={() => {
+                    setInput(chip.prompt);
+                    textareaRef.current?.focus();
+                  }}
+                >
+                  <span className="suggestion-chip-label">
+                    <img
+                      src={chip.icon}
+                      alt=""
+                      className="suggestion-chip-icon"
+                    />
+                    {chip.label}
+                  </span>
+                  <span className="suggestion-chip-text">{chip.text}</span>
+                </button>
+              ))}
+            </div>
+          </div>
         )}
         {messages.map((message) => (
           <MessageBubble key={message.id} message={message} />
@@ -194,28 +284,50 @@ function ChatWindow({ sessionId: initialSessionId, onTurnCompleted }) {
           ↓ Latest
         </button>
       )}
-      <form className="chat-input-form" onSubmit={handleSubmit}>
-        <textarea
-          className="chat-input"
-          rows={1}
-          placeholder="Ask a question…"
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              handleSubmit(event);
-            }
-          }}
-        />
-        <button
-          type="submit"
-          className="send-button"
-          disabled={isSending || !input.trim()}
-        >
-          Send
-        </button>
-      </form>
+      <div className="chat-input-area">
+        <div className="chat-input-area-inner">
+          {connectedSources.length > 0 && (
+            <div className="data-source-indicators">
+              {connectedSources.map((sourceType) => (
+                <span key={sourceType} className="data-source-pill">
+                  <span
+                    className="data-source-dot"
+                    style={{ backgroundColor: SOURCE_TYPE_COLORS[sourceType] }}
+                  />
+                  {SOURCE_TYPE_LABELS[sourceType] ?? sourceType}
+                </span>
+              ))}
+            </div>
+          )}
+          <form className="chat-input-form" onSubmit={handleSubmit}>
+            <textarea
+              ref={textareaRef}
+              className="chat-input"
+              rows={1}
+              placeholder="Ask a question…"
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  handleSubmit(event);
+                }
+              }}
+            />
+            <button
+              type="submit"
+              className="send-button"
+              disabled={isSending || !input.trim()}
+            >
+              Send
+              <img src={sendIcon} alt="" className="send-button-icon" />
+            </button>
+          </form>
+          <p className="chat-input-disclaimer">
+            Knowledge Agent may produce inaccurate information.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

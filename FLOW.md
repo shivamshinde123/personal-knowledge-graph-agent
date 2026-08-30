@@ -1060,8 +1060,16 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    `App.jsx`'s `chatKey`, forcing `ChatWindow` to remount (see DECISIONS.md,
    2026-08-25, for why a remount rather than watching `sessionId` for
    changes). Renders the real session list from `App.jsx`, or "No past
-   conversations yet" if it's empty. "Graph" and "Settings" sit together in
-   a `.sidebar-footer` at the bottom, sharing one `.nav-link` style
+   conversations yet" if it's empty. "Chat", "Graph", and "Settings" sit
+   together in a `.sidebar-footer` at the bottom, sharing one `.nav-link`
+   style — "Chat" (added with the Figma redesign, see DECISIONS.md,
+   2026-08-30) calls a new `onOpenChat` prop that only switches
+   `App.jsx`'s `view`, unlike "New chat"/a session click, which also touch
+   `sessionId`/`chatKey`. Each nav icon is the exact exported Figma asset
+   (`assets/icons/nav-*.svg`), applied via CSS `mask-image` so the same
+   shape can render in either the muted or `--accent-active` color
+   depending on which tab is current, rather than needing two
+   differently-colored exports per icon — see DECISIONS.md, 2026-08-30
 3. `ChatWindow.jsx` — on mount, if given an existing `sessionId`, calls
    `api/client.js::getSessionHistory()` once and populates messages from
    it (see DECISIONS.md, 2026-08-25). On submit, appends the user message
@@ -1075,7 +1083,14 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    scroll handler updates continuously, not a fresh measurement taken
    after the new message is already in the DOM — see DECISIONS.md,
    2026-08-30); a floating "↓ Latest" button appears once they've
-   scrolled away from the bottom, for jumping back without hand-scrolling
+   scrolled away from the bottom, for jumping back without hand-scrolling.
+   The empty state (no messages yet) renders the Figma redesign's icon +
+   heading + suggestion chips instead of a plain sentence — clicking a
+   chip fills the input with a related prompt rather than sending it
+   immediately. Also fetches `getSourceConnections()` once on mount for
+   the "Data Source Indicators" pills above the input box: one pill per
+   source whose live status is `"ok"`, not a static hardcoded list — see
+   DECISIONS.md, 2026-08-30
 4. `SettingsPanel.jsx` — on mount, calls `api/client.js::getSettings()`,
    `getSourcesStatus()`, `getSourceConnections()`, and `getSourceConfig()`
    in parallel, snapshotting the loaded values into `originalRef` — the

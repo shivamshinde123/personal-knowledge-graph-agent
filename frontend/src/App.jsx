@@ -196,6 +196,7 @@ function App() {
         activeSessionId={sessionId}
         onNewChat={handleNewChat}
         onSelectSession={handleSelectSession}
+        onOpenChat={() => setView("chat")}
         onOpenSettings={() => setView("settings")}
         onOpenGraph={() => setView("graph")}
       />
