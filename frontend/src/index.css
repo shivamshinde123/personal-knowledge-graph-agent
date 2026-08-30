@@ -610,6 +610,62 @@ a {
   opacity: 0.5;
 }
 
+/* ---- Toasts ---- */
+
+.toast-stack {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 360px;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  font-size: 13px;
+  color: var(--text);
+}
+
+.toast-success {
+  border-color: var(--ok);
+}
+
+.toast-error {
+  border-color: var(--danger);
+}
+
+.toast-info {
+  border-color: var(--accent);
+}
+
+.toast span {
+  flex: 1;
+}
+
+.toast-dismiss {
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.toast-dismiss:hover {
+  color: var(--text-h);
+}
+
 .save-status {
   margin-left: 12px;
   font-size: 13px;

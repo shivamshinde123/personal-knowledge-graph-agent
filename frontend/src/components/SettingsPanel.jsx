@@ -4,8 +4,6 @@ import {
   getSourceConfig,
   getSourceConnections,
   getSourcesStatus,
-  postAdminReset,
-  postIngestTrigger,
   putSettings,
   putSourceConfig,
   verifySourceConnections,
@@ -49,8 +47,17 @@ const PROVIDER_MODES = [
 /**
  * The Settings screen: LLM provider mode, cloud model, and connected data
  * source status. Per docs/UIUX_Wireframes.docx section 3.
+ *
+ * @param {object} props
+ * @param {() => Promise<void>} props.onTriggerIngestion - starts a batch
+ *   run and polls for completion; owned by App.jsx so the "done" toast
+ *   still shows up if the user has navigated away from Settings by then.
+ * @param {() => Promise<void>} props.onResetAll - wipes all data; owned by
+ *   App.jsx since it also clears the active chat session.
+ * @param {(text: string) => void} props.onError - surfaces a failure from
+ *   either action as a toast.
  */
-function SettingsPanel() {
+function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
   const [settings, setSettings] = useState(null);
   const [sources, setSources] = useState(null);
   const [connections, setConnections] = useState(null);
@@ -61,9 +68,7 @@ function SettingsPanel() {
   const [saveStatus, setSaveStatus] = useState(null);
   const [isVerifying, setIsVerifying] = useState(false);
   const [isTriggeringIngest, setIsTriggeringIngest] = useState(false);
-  const [ingestStatus, setIngestStatus] = useState(null);
   const [isResetting, setIsResetting] = useState(false);
-  const [resetStatus, setResetStatus] = useState(null);
 
   useEffect(() => {
     Promise.all([
@@ -97,15 +102,10 @@ function SettingsPanel() {
 
   async function handleTriggerIngestion() {
     setIsTriggeringIngest(true);
-    setIngestStatus(null);
     try {
-      const result = await postIngestTrigger();
-      setIngestStatus({
-        ok: true,
-        text: `Started (${result.run_id}). Check back here in a few minutes for updated counts.`,
-      });
+      await onTriggerIngestion();
     } catch (error) {
-      setIngestStatus({ ok: false, text: error.message });
+      onError(`Could not start ingestion: ${error.message}`);
     } finally {
       setIsTriggeringIngest(false);
     }
@@ -120,18 +120,16 @@ function SettingsPanel() {
     if (!confirmed) return;
 
     setIsResetting(true);
-    setResetStatus(null);
     try {
-      await postAdminReset();
+      await onResetAll();
       const [sourcesResult, connectionsResult] = await Promise.all([
         getSourcesStatus(),
         getSourceConnections(),
       ]);
       setSources(sourcesResult);
       setConnections(connectionsResult);
-      setResetStatus({ ok: true, text: "All data has been reset." });
     } catch (error) {
-      setResetStatus({ ok: false, text: error.message });
+      onError(`Could not reset data: ${error.message}`);
     } finally {
       setIsResetting(false);
     }
@@ -270,13 +268,9 @@ function SettingsPanel() {
         <p className="settings-field-hint">
           Normally runs once a day on a schedule. This starts a run immediately,
           outside the schedule — useful right after changing the folders/pages
-          above.
+          above. A notification appears once it finishes, even from another
+          screen.
         </p>
-        {ingestStatus && (
-          <span className={`save-status ${ingestStatus.ok ? "" : "error"}`}>
-            {ingestStatus.text}
-          </span>
-        )}
       </section>
 
       <section className="settings-section">
@@ -343,11 +337,6 @@ function SettingsPanel() {
         >
           {isResetting ? "Resetting…" : "Reset all data"}
         </button>
-        {resetStatus && (
-          <span className={`save-status ${resetStatus.ok ? "" : "error"}`}>
-            {resetStatus.text}
-          </span>
-        )}
       </section>
 
       <button

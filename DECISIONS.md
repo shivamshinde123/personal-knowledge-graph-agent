@@ -8,6 +8,18 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-30 — Toast notifications for ingestion completion and reset
+
+**Context**: "Run ingestion now" only confirmed the run had *started* — there was no way to tell when it actually finished, or whether it succeeded, without manually re-checking Settings. Requested directly.
+
+**Decision**: Added a small toast-notification system (`frontend/src/components/Toasts.jsx`), owned by `App.jsx` rather than `SettingsPanel.jsx`, for two reasons: (1) a triggered ingestion run finishes well after the triggering request returns — `POST /api/ingest/trigger` spawns a background process and responds immediately (per `docs/API_Specification.docx` section 3.8) — so something needs to poll for completion and show the result even if the user has since navigated to Chat or the Graph view; only `App.jsx` is guaranteed to stay mounted for that. (2) A reset also wipes conversation history (`sessions`/`messages`, not just ingested items — see `storage/sqlite_store.py::reset_all()`), which only `App.jsx`'s own session state can react to (clearing the active chat, refreshing the now-empty sidebar).
+
+There's no way to look up a specific triggered run by its display label (`agent/ingest_trigger.py`'s own docstring notes this — the label is independent of the internal run UUID), so completion detection is approximate: `App.jsx` polls `GET /api/sources/status` every 4 seconds, watching for a `last_run` whose `started_at` is at or after the trigger timestamp (with 2s slack for clock comparison) and whose `status` is no longer `"running"`. Gives up after ~6 minutes (90 attempts) with an informational toast rather than polling forever — a local, single-item-at-a-time ingestion run is expected to finish well inside that window.
+
+**Affects**: `frontend/src/App.jsx`, `frontend/src/components/Toasts.jsx` (new), `frontend/src/components/SettingsPanel.jsx`, `frontend/src/index.css`
+
+---
+
 ## 2026-08-30 — Full data reset: `POST /api/admin/reset`
 
 **Context**: No way existed to wipe all ingested data and start over — useful for recovering from a bad ingestion run or restarting a demo from a clean slate, requested directly for the Settings screen.

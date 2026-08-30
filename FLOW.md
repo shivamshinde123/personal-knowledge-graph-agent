@@ -913,13 +913,19 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
 `frontend/src/index.jsx` mounts `App.jsx` into `#root`.
 
 1. `App.jsx` holds `view` (`"chat"` | `"settings"` | `"graph"`), `sessionId`,
-   and the fetched `sessions` list, and renders `Sidebar.jsx` plus one of
-   `ChatWindow.jsx`, `SettingsPanel.jsx`, or `GraphView.jsx` — no router,
-   since the wireframe only needs a "Settings link," not deep-linking (see
-   DECISIONS.md, 2026-08-25; the graph view follows the same no-router
-   pattern, see DECISIONS.md, 2026-08-30). Fetches `getSessions()` on mount
-   and again after every completed turn (`onTurnCompleted`), so the
-   sidebar's list and ordering stay current
+   the fetched `sessions` list, and a `toasts` list, and renders `Toasts.jsx`
+   plus `Sidebar.jsx` plus one of `ChatWindow.jsx`, `SettingsPanel.jsx`, or
+   `GraphView.jsx` — no router, since the wireframe only needs a "Settings
+   link," not deep-linking (see DECISIONS.md, 2026-08-25; the graph view
+   follows the same no-router pattern, see DECISIONS.md, 2026-08-30).
+   Fetches `getSessions()` on mount and again after every completed turn
+   (`onTurnCompleted`), so the sidebar's list and ordering stay current.
+   Also owns `handleTriggerIngestion()`/`handleResetAll()` — passed down to
+   `SettingsPanel.jsx` as props rather than living there, since both need
+   to act (toast a result, in the ingestion case only after polling for
+   completion; clear/refresh chat session state, in the reset case) even
+   if the user has since navigated away from Settings — see DECISIONS.md,
+   2026-08-30
 2. `Sidebar.jsx` — "New chat" and clicking a real session both bump
    `App.jsx`'s `chatKey`, forcing `ChatWindow` to remount (see DECISIONS.md,
    2026-08-25, for why a remount rather than watching `sessionId` for
@@ -944,15 +950,25 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    rather than the batch-run status alone; "Reverify" calls
    `verifySourceConnections()` (force-refreshes, bypassing the cache) and
    replaces the connections state with the fresh result — see
-   DECISIONS.md, 2026-08-29 and 2026-08-30. "Run ingestion now" calls
-   `postIngestTrigger()` (the same manual-override endpoint
-   `POST /api/ingest/trigger` already exposed — see below — just not
-   previously wired to any UI). "Reset all data" (in its own visually
-   separated Danger Zone section) shows a native `window.confirm()` prompt
-   before calling `postAdminReset()`, then re-fetches
-   `getSourcesStatus()`/`getSourceConnections()` so the displayed counts
-   reflect the wipe immediately — see DECISIONS.md, 2026-08-30
-5. `GraphView.jsx` — on mount, calls `api/client.js::getGraph()`; an empty
+   DECISIONS.md, 2026-08-29 and 2026-08-30. "Run ingestion now" and "Reset
+   all data" (in its own visually separated Danger Zone section, behind a
+   native `window.confirm()` prompt) call the `onTriggerIngestion`/
+   `onResetAll` props from `App.jsx` (see above) rather than the endpoints
+   directly — `SettingsPanel.jsx` only tracks its own button-disabled
+   state and re-fetches `getSourcesStatus()`/`getSourceConnections()`
+   afterward so the displayed counts reflect the change immediately; the
+   completion toast itself is `App.jsx`'s responsibility, not
+   `SettingsPanel.jsx`'s — see DECISIONS.md, 2026-08-30
+5. `Toasts.jsx` — a pure display component: renders whichever
+   `{id, kind, text}` entries are in `App.jsx`'s `toasts` state as a
+   fixed top-right stack, each auto-removed after 7 seconds
+   (`setTimeout` in `App.jsx::addToast()`) or dismissed early by its own
+   close button. `App.jsx::pollIngestionCompletion()` is the one caller
+   that polls before toasting — every other caller (`handleResetAll()`,
+   `SettingsPanel.jsx`'s own error paths via the `onError` prop) toasts
+   immediately, since those results are already known synchronously. See
+   DECISIONS.md, 2026-08-30
+6. `GraphView.jsx` — on mount, calls `api/client.js::getGraph()`; an empty
    result (no confirmed relationships yet) renders an explanatory message
    rather than a blank canvas. A non-empty result is laid out once via
    `d3-force` (`forceSimulation`/`forceLink`/`forceManyBody`/`forceCenter`,
@@ -961,7 +977,7 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    `storage/neo4j_store.py::get_full_graph()`'s own note) and rendered as a
    static SVG: nodes colored by `source_type`, edges labeled with their
    relationship `label`. See DECISIONS.md, 2026-08-30
-6. `api/client.js` is the only module making network calls (per
+7. `api/client.js` is the only module making network calls (per
    `docs/Coding_Conventions.docx` section 3) — every function maps
    directly to one `docs/API_Specification.docx` endpoint, talking to
    `http://127.0.0.1:8080/api` (not `localhost` — see DECISIONS.md,
