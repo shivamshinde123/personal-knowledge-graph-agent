@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from storage.chroma_store import VectorChunk, upsert_chunks
+from storage.chroma_store import VectorChunk, get_collection, upsert_chunks
 from storage.neo4j_store import ItemNode, Relationship, write_relationship
 from storage.sqlite_store import Item, get_item, insert_item
 
@@ -49,7 +49,7 @@ class TestResetAllRoute:
         assert response.json()["error"] == "confirmation_required"
 
     def test_wipes_all_three_stores_when_confirmed(
-        self, client, conn, collection, driver
+        self, client, conn, collection, chroma_persist_dir, driver
     ):
         insert_item(conn, make_sqlite_item())
         upsert_chunks(
@@ -76,7 +76,11 @@ class TestResetAllRoute:
         assert response.status_code == 200
         assert response.json() == {"status": "reset"}
         assert get_item(conn, "item-1") is None
-        assert collection.count() == 0
+        # Resetting Chroma deletes and recreates the collection (see
+        # storage/chroma_store.py::reset_all()) -- the `collection` fixture's
+        # object no longer refers to a live collection, so re-open it fresh
+        # from the same persist dir instead of reusing that reference.
+        assert get_collection(chroma_persist_dir).count() == 0
 
         graph_response = client.get("/api/graph")
         assert graph_response.json() == {"nodes": [], "edges": []}

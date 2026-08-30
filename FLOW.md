@@ -212,6 +212,17 @@ module only persists and searches vectors already produced elsewhere.
    averaging rather than re-embedding text; used by
    `pipeline/relationships.py`'s candidate narrowing (see DECISIONS.md,
    2026-08-24)
+6. `reset_all(persist_dir=None)` — **deletes and recreates the whole
+   collection** (`client.delete_collection()` +
+   `client.get_or_create_collection()`), not just its documents; deleting
+   documents alone leaves the dimension lock from step 2 in place, which
+   defeats the entire point of resetting before switching embedding
+   models. Returns the freshly created `Collection` — callers holding a
+   long-lived reference (`api/main.py`'s `app.state.collection`) must
+   replace it with the return value, since the old object is invalid once
+   its underlying collection is deleted. See DECISIONS.md, 2026-08-30
+   ("`reset_all()`'s Chroma reset never actually cleared the dimension
+   lock").
 
 ---
 
@@ -739,7 +750,13 @@ actually serves.
    (`storage/neo4j_store.py::get_driver()`), and stores them on
    `app.state.conn`/`collection`/`driver` for the process's lifetime —
    route handlers read them from `request.app.state` rather than via
-   `Depends()` (see DECISIONS.md, 2026-08-25)
+   `Depends()` (see DECISIONS.md, 2026-08-25). Also stores
+   `app.state.chroma_persist_dir` (the same directory `get_collection()`
+   just opened) so `POST /api/admin/reset` can later reset Chroma against
+   the exact directory this process is using, rather than re-deriving it
+   from `get_settings()` directly — the latter would break test isolation,
+   since tests point Chroma at an isolated `tmp_path` (see DECISIONS.md,
+   2026-08-30)
 2. On shutdown, the driver and connection are closed
 3. Tests substitute a no-op `lifespan_fn` and set `app.state` directly to
    test doubles (`tests/test_api/conftest.py`), so a test run never opens
@@ -928,15 +945,25 @@ reverse full-database wipe. See DECISIONS.md, 2026-08-30.
    directly as `JSONResponse({"error": "confirmation_required", ...})`,
    same "shaped like every other error" reasoning as `GET
    /api/sessions/{id}`'s 404, not via `HTTPException`
-2. `agent/admin.py::reset_all_data()`, reading `conn`/`collection`/`driver`
-   from `request.app.state` — wipes SQLite, Chroma, and Neo4j (see "Shared"
+2. `agent/admin.py::reset_all_data()`, reading `conn`/`driver` and
+   `chroma_persist_dir` (not `collection` — see step 3) from
+   `request.app.state` — wipes SQLite, Chroma, and Neo4j (see "Shared"
    sections above for each store's own `reset_all()`)
 
    **Branch point**: a partial failure (`AdminError`) is caught here and
    returned as a 500 `JSONResponse({"error": "admin_error", "detail":
    ...})` naming exactly which store(s) failed, rather than propagating to
    `api/main.py`'s generic handler
-3. Returns `{"status": "reset"}` on full success
+3. `storage/chroma_store.py::reset_all()` deletes and recreates the whole
+   Chroma collection (not just its documents — see DECISIONS.md,
+   2026-08-30, "`reset_all()`'s Chroma reset never actually cleared the
+   dimension lock") and returns the fresh `Collection`; this route
+   replaces `request.app.state.collection` with it, since the old object
+   is no longer valid once its underlying collection is deleted — every
+   later request in this process (query, ingestion) reads
+   `app.state.collection` fresh each time, so this swap is what keeps
+   them from hitting a stale/deleted collection
+4. Returns `{"status": "reset"}` on full success
 
 ---
 

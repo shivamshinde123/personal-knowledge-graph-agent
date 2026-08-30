@@ -16,6 +16,7 @@ slate). See ``DECISIONS.md``.
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 import neo4j
 from chromadb.api.models.Collection import Collection
@@ -41,15 +42,27 @@ class AdminError(Exception):
 
 
 def reset_all_data(
-    conn: sqlite3.Connection, collection: Collection, driver: neo4j.Driver
-) -> None:
+    conn: sqlite3.Connection,
+    chroma_persist_dir: Path | str,
+    driver: neo4j.Driver,
+) -> Collection | None:
     """Wipe SQLite, Chroma, and Neo4j back to empty.
 
     Args:
         conn: An open SQLite connection from ``storage/sqlite_store.py::connect()``.
-        collection: An open Chroma collection from
-            ``storage/chroma_store.py::get_collection()``.
+        chroma_persist_dir: The Chroma persist directory to reset — passed
+            through to ``storage/chroma_store.py::reset_all()``, not an
+            already-open ``Collection``: resetting Chroma means deleting
+            and recreating the collection itself (see that function's
+            docstring), which invalidates any previously-open ``Collection``
+            object, so this operates at the persist-directory level instead.
         driver: An open Neo4j driver from ``storage/neo4j_store.py::get_driver()``.
+
+    Returns:
+        The freshly recreated Chroma collection, or ``None`` if the Chroma
+        reset itself failed (see ``failures`` handling below). Callers
+        holding a long-lived collection reference (``api/main.py``'s
+        ``app.state.collection``) must replace it with this return value.
 
     Raises:
         AdminError: If one or more stores failed to reset. Every store is
@@ -63,8 +76,9 @@ def reset_all_data(
     except StorageError as exc:
         failures.append(f"sqlite: {exc}")
 
+    new_collection: Collection | None = None
     try:
-        reset_chroma(collection)
+        new_collection = reset_chroma(chroma_persist_dir)
     except VectorStoreError as exc:
         failures.append(f"chroma: {exc}")
 
@@ -75,3 +89,5 @@ def reset_all_data(
 
     if failures:
         raise AdminError("Reset did not fully succeed — " + "; ".join(failures))
+
+    return new_collection

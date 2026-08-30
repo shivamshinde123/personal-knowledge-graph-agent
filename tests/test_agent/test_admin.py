@@ -79,8 +79,13 @@ def conn():
 
 
 @pytest.fixture
-def collection(tmp_path):
-    return get_collection(tmp_path / "chroma")
+def chroma_persist_dir(tmp_path):
+    return tmp_path / "chroma"
+
+
+@pytest.fixture
+def collection(chroma_persist_dir):
+    return get_collection(chroma_persist_dir)
 
 
 def make_item(**overrides) -> ItemNode:
@@ -90,7 +95,7 @@ def make_item(**overrides) -> ItemNode:
 
 
 class TestResetAllData:
-    def test_wipes_all_three_stores(self, conn, collection, driver):
+    def test_wipes_all_three_stores(self, conn, collection, chroma_persist_dir, driver):
         insert_item(
             conn,
             Item(
@@ -125,17 +130,19 @@ class TestResetAllData:
         a, b = make_item(id="a"), make_item(id="b")
         write_relationship(driver, a, b, Relationship(label="implements"))
 
-        reset_all_data(conn, collection, driver)
+        new_collection = reset_all_data(conn, chroma_persist_dir, driver)
 
         assert get_sqlite_item(conn, "item-1") is None
-        assert collection.count() == 0
+        assert new_collection.count() == 0
         assert get_graph_item(driver, "a") is None
 
-    def test_a_broken_sqlite_store_raises_admin_error(self, conn, collection, driver):
+    def test_a_broken_sqlite_store_raises_admin_error(
+        self, conn, chroma_persist_dir, driver
+    ):
         # A missing table is a stand-in for any real reset_all() failure —
         # simplest way to make the SQLite side fail without also breaking
         # conn.rollback() itself (a closed connection can't even roll back).
         conn.execute("DROP TABLE items")
 
         with pytest.raises(AdminError, match="sqlite"):
-            reset_all_data(conn, collection, driver)
+            reset_all_data(conn, chroma_persist_dir, driver)

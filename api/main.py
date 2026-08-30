@@ -23,7 +23,7 @@ from fastapi.responses import JSONResponse
 
 from agent.tracing import enable_tracing
 from api.routes import admin, graph, health, ingest, query, sessions, settings, sources
-from config.settings import ConfigError
+from config.settings import ConfigError, get_settings
 from providers.base import ProviderError
 from storage.chroma_store import VectorStoreError, get_collection
 from storage.neo4j_store import GraphStoreError, get_driver
@@ -43,7 +43,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     enable_tracing()
     app.state.conn = connect()
-    app.state.collection = get_collection()
+    # Held alongside the collection itself (not just re-derived from
+    # settings on demand) so POST /api/admin/reset can reset Chroma
+    # against the exact same directory this process opened it from --
+    # storage/chroma_store.py::reset_all() deletes and recreates the
+    # collection, which tests point at an isolated tmp_path instead of the
+    # real settings-derived directory (see tests/test_api/conftest.py).
+    app.state.chroma_persist_dir = get_settings().env.chroma_persist_dir
+    app.state.collection = get_collection(app.state.chroma_persist_dir)
     app.state.driver = get_driver()
     try:
         yield

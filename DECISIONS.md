@@ -8,6 +8,20 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-30 — `reset_all()`'s Chroma reset never actually cleared the dimension lock
+
+**Context**: While verifying the previous entry's fix live (real reset via `POST /api/admin/reset`, then a real ingestion run), the run failed again with the exact same `Collection expecting embedding with dimension of 384, got 1536` error — on the very first item, right after a confirmed reset. So the earlier "fix" (reset, documented below) had not actually fixed anything; it only looked like it had because the run happened to be re-checked via `GET /api/sources/status` returning zero, which reset does guarantee (SQLite/Neo4j/Chroma document counts all go to zero) — but zero *document count* is not the same as a cleared *dimension lock*.
+
+**Root cause**: `storage/chroma_store.py::reset_all()` fetched every document id and called `collection.delete(ids=...)` — clearing every stored vector, but leaving the collection's underlying HNSW index (and the embedding dimension it locked in on its very first write, ever) completely untouched. Confirmed directly: the collection's on-disk index directory was unchanged across the reset, and a controlled reproduction (upsert at dim 3, `reset_all()`, upsert at dim 10) failed with the same "expecting dimension" error even though `collection.count()` read 0 in between.
+
+**Decision**: `reset_all()` now deletes and recreates the whole collection (`client.delete_collection()` + `client.get_or_create_collection()`) instead of deleting its documents — matching how `get_collection()` creates it in the first place, so a fresh collection has no dimension locked in until the next write. This changes its signature: it now takes a `persist_dir` (defaulting to `settings.env.chroma_persist_dir`, same convention as `get_collection()`) and *returns* the newly created `Collection`, rather than taking an already-open one and mutating it in place — deleting a collection invalidates any `Collection` object a caller already held, so there is no way to "reset in place" safely; every caller holding a long-lived reference must swap it for the return value. `agent/admin.py::reset_all_data()` and `api/routes/admin.py` were updated accordingly: the route now replaces `app.state.collection` with the fresh one after a successful reset — otherwise every later request in that same process (query, ingestion, another reset) would keep using the stale, already-deleted collection object. `api/main.py`'s lifespan now also stores `app.state.chroma_persist_dir` alongside the collection itself, so the route can reset against the exact directory this process opened from without re-deriving it from global settings (which would break test isolation — tests point Chroma at an isolated `tmp_path`, not the real settings-derived directory).
+
+**Verified against real data**: real reset via the live backend; direct Python check against the real persist directory confirmed a 1536-dim write succeeds immediately after (previously failed identically to the original bug report); a real ingestion run's first `local_file` items embedded successfully (3/3, `status: "ok"`) where the prior run had failed on its very first item. New regression test (`test_clears_a_dimension_lock_left_by_the_previous_reset_approach`) reproduces the exact scenario. Full backend suite passes except the same two pre-existing, unrelated failures noted in the entries below.
+
+**Affects**: `storage/chroma_store.py`, `agent/admin.py`, `api/main.py`, `api/routes/admin.py`, `tests/test_storage/test_chroma_store.py`, `tests/test_agent/test_admin.py`, `tests/test_api/conftest.py`, `tests/test_api/test_admin_route.py`
+
+---
+
 ## 2026-08-30 — Two real, live bugs found while investigating a stuck ingestion run: Chroma dimension lock, and a trailing-backslash `.env` corruption
 
 **Context**: "Check the embedding mechanism — ingestion started 3:37, still not done at 3:51." Investigated directly against the real `ingestion_runs` table and found two separate, real, currently-live bugs — not a hang.

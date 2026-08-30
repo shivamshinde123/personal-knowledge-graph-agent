@@ -219,7 +219,9 @@ class TestDeleteByItem:
 
 
 class TestResetAll:
-    def test_removes_every_chunk(self, collection):
+    def test_removes_every_chunk(self, tmp_path):
+        persist_dir = tmp_path / "chroma"
+        collection = get_collection(persist_dir)
         upsert_chunks(
             collection,
             [
@@ -228,11 +230,30 @@ class TestResetAll:
             ],
         )
 
-        reset_all(collection)
+        new_collection = reset_all(persist_dir)
 
-        assert collection.count() == 0
+        assert new_collection.count() == 0
 
-    def test_no_op_on_an_already_empty_collection(self, collection):
-        reset_all(collection)  # doesn't raise
+    def test_no_op_on_an_already_empty_collection(self, tmp_path):
+        reset_all(tmp_path / "chroma")  # doesn't raise -- nothing to delete yet
 
-        assert collection.count() == 0
+    def test_clears_a_dimension_lock_left_by_the_previous_reset_approach(
+        self, tmp_path
+    ):
+        """Regression: deleting documents alone didn't clear the dimension.
+
+        An earlier version of reset_all() only deleted every document,
+        leaving the collection's HNSW index -- and the dimension it locked
+        in on first write -- untouched, so a write of a different-sized
+        embedding kept failing right after a "reset". Verified directly
+        against a real occurrence. See DECISIONS.md.
+        """
+        persist_dir = tmp_path / "chroma"
+        collection = get_collection(persist_dir)
+        upsert_chunks(collection, [make_chunk(embedding=[0.1, 0.2, 0.3])])
+
+        new_collection = reset_all(persist_dir)
+
+        # A write at a different dimension must now succeed.
+        upsert_chunks(new_collection, [make_chunk(id="emb-2", embedding=[0.1] * 10)])
+        assert new_collection.count() == 1

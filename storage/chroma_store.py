@@ -216,24 +216,49 @@ def delete_by_item(collection: Collection, item_id: str) -> None:
         ) from exc
 
 
-def reset_all(collection: Collection) -> None:
-    """Delete every chunk vector in the collection.
+def reset_all(persist_dir: Path | str | None = None) -> Collection:
+    """Delete and recreate the collection, clearing any embedding-dimension lock.
 
-    Chroma's own ``delete()`` requires ``ids`` or a ``where`` filter — there
-    is no "delete everything" call — so this fetches every id first, then
-    deletes them in one call. A no-op on an already-empty collection. See
-    ``agent/admin.py``, ``DECISIONS.md``.
+    An earlier version of this function only deleted every document
+    inside the collection (via ``collection.get()`` + ``collection.delete()``).
+    That leaves the collection's underlying HNSW index — and the vector
+    dimension it locked in on its first-ever write — untouched, so a
+    later ingest at a different dimension kept failing with "expecting
+    embedding with dimension of X, got Y" even right after a "reset".
+    Verified directly: a real reset left the collection's on-disk index
+    directory unchanged, and the very next ingestion run failed on its
+    first item with that exact error. Deleting the whole collection and
+    recreating it (matching how :func:`get_collection` creates it in the
+    first place) clears the lock too. See ``DECISIONS.md``.
 
     Args:
-        collection: An open collection from :func:`get_collection`.
+        persist_dir: Directory Chroma persists to. Defaults to
+            ``settings.env.chroma_persist_dir``.
+
+    Returns:
+        The freshly created, empty collection. Callers holding a
+        long-lived reference to the old collection (``api/main.py``'s
+        ``app.state.collection``) must replace it with this return
+        value — the old object is no longer valid once its underlying
+        collection has been deleted.
 
     Raises:
-        VectorStoreError: If the fetch or delete fails.
+        VectorStoreError: If the delete or recreate fails.
     """
+    target: Path | str = (
+        get_settings().env.chroma_persist_dir if persist_dir is None else persist_dir
+    )
     try:
-        all_ids = collection.get(include=[])["ids"]
-        if all_ids:
-            collection.delete(ids=all_ids)
+        client = chromadb.PersistentClient(path=str(target))
+        try:
+            client.delete_collection(COLLECTION_NAME)
+        except Exception:
+            pass  # nothing to delete yet -- get_or_create below still works
+        return client.get_or_create_collection(
+            COLLECTION_NAME,
+            embedding_function=None,
+            metadata={"hnsw:space": "cosine"},
+        )
     except Exception as exc:
         raise VectorStoreError(f"Could not reset the vector store: {exc}") from exc
 

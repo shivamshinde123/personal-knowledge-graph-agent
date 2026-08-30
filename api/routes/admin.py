@@ -37,10 +37,18 @@ def reset_all_route(payload: AdminResetRequest, request: Request):
         )
     state = request.app.state
     try:
-        reset_all_data(state.conn, state.collection, state.driver)
+        new_collection = reset_all_data(
+            state.conn, state.chroma_persist_dir, state.driver
+        )
     except AdminError as exc:
         return JSONResponse(
             status_code=500,
             content={"error": "admin_error", "detail": str(exc)},
         )
+    # Resetting Chroma deletes and recreates the collection (see
+    # storage/chroma_store.py::reset_all()) -- the old Collection object
+    # this process opened at startup is no longer valid, so it must be
+    # replaced with the fresh one or every later request in this process
+    # (query, ingestion) would keep using a stale/deleted collection.
+    state.collection = new_collection
     return AdminResetResponse(status="reset")
