@@ -170,9 +170,9 @@ function SettingsPanel() {
         )}
         <div className="sources-grid">
           {connections.connections.map((connection) => {
-            const itemsProcessed = sources.sources.find(
+            const sourceCounts = sources.sources.find(
               (source) => source.source_type === connection.source_type,
-            )?.items_processed;
+            );
             return (
               <div
                 className="source-status-card"
@@ -183,12 +183,15 @@ function SettingsPanel() {
                 <span className="source-status-value">
                   <span className={`status-dot ${connection.status}`} />
                   {CONNECTION_LABELS[connection.status] ?? connection.status}
-                  {connection.status === "ok" &&
-                    itemsProcessed !== undefined && (
-                      <span className="source-item-count">
-                        ({itemsProcessed} ingested)
-                      </span>
-                    )}
+                  {connection.status === "ok" && sourceCounts !== undefined && (
+                    <span className="source-item-count">
+                      ({sourceCounts.total_items} total
+                      {sourceCounts.items_processed > 0
+                        ? `, ${sourceCounts.items_processed} new`
+                        : ""}
+                      )
+                    </span>
+                  )}
                 </span>
               </div>
             );

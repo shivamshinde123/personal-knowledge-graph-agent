@@ -54,6 +54,27 @@ class TestGetSourcesStatus:
         assert notion["items_processed"] == 1
         assert notion["status"] == "ok"
 
+    def test_total_items_reflects_items_from_before_the_latest_run(self, conn, client):
+        insert_item(
+            conn,
+            Item(
+                id="item-1",
+                source_type="notion",
+                source_ref_id="page-1",
+                ingested_at=datetime(2020, 1, 1, tzinfo=UTC),
+            ),
+        )
+        run_id = start_ingestion_run(conn)
+        complete_ingestion_run(conn, run_id, status="success", items_processed=0)
+
+        response = client.get("/api/sources/status")
+
+        notion = next(
+            s for s in response.json()["sources"] if s["source_type"] == "notion"
+        )
+        assert notion["items_processed"] == 0
+        assert notion["total_items"] == 1
+
 
 class TestGetConnections:
     def test_reports_gmail_github_calendar_as_not_configured(self, monkeypatch, client):

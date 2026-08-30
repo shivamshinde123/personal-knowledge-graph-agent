@@ -30,10 +30,11 @@ _SOURCE_TYPES = (
 
 @dataclass(frozen=True, slots=True)
 class SourceStatus:
-    """One source's outcome in the most recent run."""
+    """One source's outcome in the most recent run, plus its running total."""
 
     source_type: str
     items_processed: int
+    total_items: int
     status: Literal["ok", "error"]
 
 
@@ -53,23 +54,32 @@ def get_sources_status(conn: sqlite3.Connection) -> SourcesStatus:
 
     Returns:
         ``last_run`` is ``None`` if the batch has never run, in which case
-        every source reports 0 items and ``"ok"`` (nothing has failed —
-        nothing has run yet, either). Otherwise, each source's
+        every source reports 0 for both counts and ``"ok"`` (nothing has
+        failed — nothing has run yet, either). Otherwise, each source's
         ``items_processed`` is the count of items with that ``source_type``
-        ingested during the run's window (``ingested_at`` between
-        ``run_started_at`` and ``run_completed_at``, or through now if the
-        run is still in progress), and ``status`` is ``"error"`` if the
-        run's ``error_log`` mentions that source by name, else ``"ok"`` —
-        an approximation, not a stored per-source breakdown, since
-        ``ingestion_runs`` only tracks a single aggregate count and error
-        log across all sources (see DECISIONS.md).
+        ingested during the *most recent run's* window (``ingested_at``
+        between ``run_started_at`` and ``run_completed_at``, or through now
+        if the run is still in progress) — legitimately 0 whenever a run
+        finds nothing new to ingest, which is not itself a problem, but
+        reads as "nothing has ever been ingested" without ``total_items``
+        alongside it for context (see DECISIONS.md). ``status`` is
+        ``"error"`` if the run's ``error_log`` mentions that source by
+        name, else ``"ok"`` — an approximation, not a stored per-source
+        breakdown, since ``ingestion_runs`` only tracks a single aggregate
+        count and error log across all sources (see DECISIONS.md,
+        2026-08-25).
     """
     last_run = get_last_ingestion_run(conn)
     if last_run is None:
         return SourcesStatus(
             last_run=None,
             sources=[
-                SourceStatus(source_type=source_type, items_processed=0, status="ok")
+                SourceStatus(
+                    source_type=source_type,
+                    items_processed=0,
+                    total_items=_count_total_items(conn, source_type),
+                    status="ok",
+                )
                 for source_type in _SOURCE_TYPES
             ],
         )
@@ -78,11 +88,19 @@ def get_sources_status(conn: sqlite3.Connection) -> SourcesStatus:
         SourceStatus(
             source_type=source_type,
             items_processed=_count_items_in_window(conn, source_type, last_run),
+            total_items=_count_total_items(conn, source_type),
             status=_source_status(source_type, last_run),
         )
         for source_type in _SOURCE_TYPES
     ]
     return SourcesStatus(last_run=last_run, sources=sources)
+
+
+def _count_total_items(conn: sqlite3.Connection, source_type: str) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) AS c FROM items WHERE source_type = ?", (source_type,)
+    ).fetchone()
+    return row["c"]
 
 
 def _count_items_in_window(

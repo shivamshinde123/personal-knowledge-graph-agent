@@ -47,6 +47,7 @@ class TestNoRunYet:
             "browser_history",
         }
         assert all(s.items_processed == 0 for s in result.sources)
+        assert all(s.total_items == 0 for s in result.sources)
         assert all(s.status == "ok" for s in result.sources)
 
 
@@ -122,3 +123,37 @@ class TestAfterARun:
 
         by_type = {s.source_type: s.items_processed for s in result.sources}
         assert by_type["notion"] == 0
+
+    def test_total_items_reflects_everything_ever_ingested_not_just_this_run(
+        self, conn
+    ):
+        # Real scenario this fixes: a source has real items from a past
+        # run, but the *latest* run found nothing new — items_processed is
+        # legitimately 0, but total_items should still show the real count
+        # rather than reading as "nothing has ever been ingested."
+        insert_item(
+            conn,
+            make_item(
+                id="old-1",
+                source_type="notion",
+                source_ref_id="p1",
+                ingested_at=datetime(2020, 1, 1, tzinfo=UTC),
+            ),
+        )
+        insert_item(
+            conn,
+            make_item(
+                id="old-2",
+                source_type="notion",
+                source_ref_id="p2",
+                ingested_at=datetime(2020, 1, 2, tzinfo=UTC),
+            ),
+        )
+        run_id = start_ingestion_run(conn)
+        complete_ingestion_run(conn, run_id, status="success", items_processed=0)
+
+        result = get_sources_status(conn)
+
+        notion = next(s for s in result.sources if s.source_type == "notion")
+        assert notion.items_processed == 0
+        assert notion.total_items == 2
