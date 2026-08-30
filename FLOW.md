@@ -721,7 +721,12 @@ DECISIONS.md, 2026-08-25.
 2. `agent/sources_status.py::get_sources_status()` — see DECISIONS.md,
    2026-08-25, for how per-source `items_processed`/`status` are derived
    (not stored) from `storage/sqlite_store.py::get_last_ingestion_run()`
-   plus a per-`source_type` `items` count within that run's window
+   plus a per-`source_type` `items` count within that run's window.
+   `total_items` (a plain `COUNT(*)` per `source_type`, independent of any
+   run window) is also included — `items_processed` alone is legitimately
+   `0` whenever the latest run finds nothing new, which reads as "nothing
+   has ever been ingested" without `total_items` alongside it (see
+   DECISIONS.md, 2026-08-30)
 3. Returns `{"last_run": {...} | null, "sources": [...]}` per
    `docs/API_Specification.docx` section 3.3 — `last_run` is `null` and
    every source reports 0 items/`"ok"` if the batch has never run

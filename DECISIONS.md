@@ -8,6 +8,18 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-30 — `SourceStatus` reports a running total, not just the last run's count
+
+**Context**: `agent/sources_status.py::get_sources_status()`'s `items_processed` is, by design, the count ingested during the *most recent run's window* — legitimately `0` whenever a run finds nothing new (nothing changed since last time). Flagged directly from real use of the running Settings screen: 16 real items existed across three sources, but the screen showed "0 ingested" for all of them, because the most recent run happened to process nothing new. Technically correct, but reads as "nothing has ever been ingested," which isn't true.
+
+**Decision**: Added `SourceStatus.total_items` — a straight `COUNT(*)` per `source_type`, independent of any run window. The Settings screen now shows both (e.g. "12 total, 3 new"), so a source with real historical data reads correctly even when the latest run had nothing to do.
+
+**Verified against real data**: the real `GET /api/sources/status` response, against the real 16-item database, returned `local_file: total_items=12`, `notion: total_items=2`, `browser_history: total_items=2` — matching the real counts — with `items_processed: 0` for all three, correctly reflecting that the most recent run found nothing new.
+
+**Affects**: `agent/sources_status.py`, `api/schemas.py`, `api/routes/sources.py`, `frontend/src/components/SettingsPanel.jsx`
+
+---
+
 ## 2026-08-29 — Live, cached connection checks for the Settings screen
 
 **Context**: The Settings screen's "Connected Data Sources" section (`agent/sources_status.py`) reports the *last daily batch run's* outcome per source — before this fix, that meant every source, including the three with no extractor built yet (Gmail, GitHub, Calendar), showed a green "OK" the moment nothing had ever run or failed, which reads as "verified working" when it actually means "nothing has been checked." Flagged directly from using the running frontend against real data.

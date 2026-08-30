@@ -67,10 +67,11 @@ class LastRunResponse(BaseModel):
 
 
 class SourceStatusResponse(BaseModel):
-    """One source's outcome in the most recent run."""
+    """One source's outcome in the most recent run, plus its running total."""
 
     source_type: str
     items_processed: int
+    total_items: int
     status: ServiceStatus
 
 

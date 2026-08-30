@@ -43,6 +43,7 @@ def get_sources_status_route(request: Request) -> SourcesStatusResponse:
             SourceStatusResponse(
                 source_type=source.source_type,
                 items_processed=source.items_processed,
+                total_items=source.total_items,
                 status=source.status,
             )
             for source in result.sources
