@@ -57,8 +57,13 @@ def conn():
 
 
 @pytest.fixture
-def collection(tmp_path):
-    return get_collection(tmp_path / "chroma")
+def chroma_persist_dir(tmp_path):
+    return tmp_path / "chroma"
+
+
+@pytest.fixture
+def collection(chroma_persist_dir):
+    return get_collection(chroma_persist_dir)
 
 
 @pytest.fixture
@@ -89,10 +94,11 @@ def configured_llm_provider(monkeypatch):
 
 
 @pytest.fixture
-def client(conn, collection, driver):
+def client(conn, collection, chroma_persist_dir, driver):
     app = create_app(lifespan_fn=_noop_lifespan)
     app.state.conn = conn
     app.state.collection = collection
+    app.state.chroma_persist_dir = chroma_persist_dir
     app.state.driver = driver
     # raise_server_exceptions=False: an unhandled exception should exercise
     # api/main.py's registered Exception handler and come back as a real

@@ -58,12 +58,19 @@ class ErrorResponse(BaseModel):
 
 
 class LastRunResponse(BaseModel):
-    """The most recent daily batch run, within a ``SourcesStatusResponse``."""
+    """The most recent daily batch run, within a ``SourcesStatusResponse``.
+
+    ``items_processed`` updates live while ``status`` is still
+    ``"running"`` — ``scheduler/daily_batch.py`` persists it after every
+    item, not just once at completion — so polling this gives a real,
+    live progress count, not just a start/stop signal. See DECISIONS.md.
+    """
 
     run_id: str
     started_at: datetime
     completed_at: datetime | None
     status: str
+    items_processed: int
 
 
 class SourceStatusResponse(BaseModel):
@@ -98,19 +105,31 @@ class ConnectionsResponse(BaseModel):
 
 
 class SettingsResponse(BaseModel):
-    """``GET /api/settings`` response body."""
+    """``GET /api/settings`` response body.
+
+    Two *generation* model fields (follow ``provider_mode``) plus one
+    *embedding* model field (always cloud, regardless of ``provider_mode``
+    — there is no local embedding path). All three are settable. Changing
+    ``cloud_embedding_model`` is a bigger deal than the other two — it
+    changes which embedding space every future vector lands in — but
+    nothing here enforces a reset when it changes; that's the frontend's
+    job (a confirm prompt, then an automatic reset + re-ingest). See
+    ``DECISIONS.md``.
+    """
 
     provider_mode: ProviderMode
-    local_model: str
-    cloud_model: str
+    local_generation_model: str
+    cloud_generation_model: str
+    cloud_embedding_model: str
 
 
 class SettingsUpdateRequest(BaseModel):
     """``PUT /api/settings`` request body — every field is optional (partial update)."""
 
     provider_mode: ProviderMode | None = None
-    local_model: str | None = None
-    cloud_model: str | None = None
+    local_generation_model: str | None = None
+    cloud_generation_model: str | None = None
+    cloud_embedding_model: str | None = None
 
 
 class SettingsUpdateResponse(BaseModel):
@@ -118,8 +137,9 @@ class SettingsUpdateResponse(BaseModel):
 
     status: Literal["updated"]
     provider_mode: ProviderMode
-    local_model: str
-    cloud_model: str
+    local_generation_model: str
+    cloud_generation_model: str
+    cloud_embedding_model: str
 
 
 class SourceConfigResponse(BaseModel):
@@ -127,17 +147,42 @@ class SourceConfigResponse(BaseModel):
 
     Extension beyond ``docs/API_Specification.docx`` — configurable
     ingestion scope, not just credentials. See ``DECISIONS.md``.
+
+    The four date-range fields are plain ``YYYY-MM-DD`` strings (or
+    ``None``), not a ``date`` type — this matches an HTML
+    ``<input type="date">``'s value directly, so the frontend needs no
+    parsing/formatting boundary. See ``DECISIONS.md``.
     """
 
     local_files_watch_dirs: list[str]
     notion_page_ids: list[str]
+    github_repos: list[str]
+    gmail_date_range_start: str | None
+    gmail_date_range_end: str | None
+    github_date_range_start: str | None
+    github_date_range_end: str | None
 
 
 class SourceConfigUpdateRequest(BaseModel):
-    """``PUT /api/settings/sources`` request body — both fields optional."""
+    """``PUT /api/settings/sources`` request body — every field optional."""
 
     local_files_watch_dirs: list[str] | None = None
     notion_page_ids: list[str] | None = None
+    github_repos: list[str] | None = None
+    gmail_date_range_start: str | None = None
+    gmail_date_range_end: str | None = None
+    github_date_range_start: str | None = None
+    github_date_range_end: str | None = None
+
+
+class BrowseFolderResponse(BaseModel):
+    """``POST /api/settings/browse-folder`` response body.
+
+    Extension beyond ``docs/API_Specification.docx`` — see
+    ``agent/browse.py``, ``DECISIONS.md``.
+    """
+
+    path: str | None
 
 
 class SessionSummary(BaseModel):
@@ -175,3 +220,49 @@ class IngestTriggerResponse(BaseModel):
 
     status: Literal["started"]
     run_id: str
+
+
+class AdminResetRequest(BaseModel):
+    """``POST /api/admin/reset`` request body.
+
+    ``confirm`` must be explicitly ``true`` — a cheap guard against an
+    accidental call to a destructive, hard-to-reverse endpoint. Extension
+    beyond ``docs/API_Specification.docx`` — see ``DECISIONS.md``.
+    """
+
+    confirm: bool
+
+
+class AdminResetResponse(BaseModel):
+    """``POST /api/admin/reset`` response body."""
+
+    status: Literal["reset"]
+
+
+class GraphNodeResponse(BaseModel):
+    """One item, within a ``GraphResponse``."""
+
+    id: str
+    title: str | None
+    source_type: str
+    url: str | None
+
+
+class GraphEdgeResponse(BaseModel):
+    """One relationship edge, within a ``GraphResponse``."""
+
+    source_id: str
+    target_id: str
+    label: str
+    confidence: float | None
+
+
+class GraphResponse(BaseModel):
+    """``GET /api/graph`` response body.
+
+    Extension beyond ``docs/API_Specification.docx`` — a graph view wasn't
+    in the original spec. See ``DECISIONS.md``.
+    """
+
+    nodes: list[GraphNodeResponse]
+    edges: list[GraphEdgeResponse]

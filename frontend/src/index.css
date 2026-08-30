@@ -2,44 +2,57 @@
    docs/Coding_Conventions.docx section 3 ("Component styling uses plain
    CSS modules or a single shared stylesheet"). */
 
-:root {
-  --text: #3f3d46;
-  --text-h: #16151a;
-  --text-muted: #8b8896;
-  --bg: #ffffff;
-  --bg-sidebar: #f7f6f9;
-  --bg-bubble-agent: #f1f0f4;
-  --bg-bubble-user: #6b4fd6;
-  --text-bubble-user: #ffffff;
-  --border: #e5e4e9;
-  --accent: #6b4fd6;
-  --accent-hover: #5a3fc0;
-  --danger: #c0392b;
-  --ok: #1f9d55;
+/* Self-hosted (not a Google Fonts CDN link) — this is a local-first app
+   with no other runtime network dependency, and a CDN font would add one.
+   Sourced from the official `geist` npm package (frontend/package.json),
+   with the variable-weight file copied into src/assets/fonts/ since the
+   package's own font loader is Next.js-specific and doesn't apply to a
+   plain Vite app. See DECISIONS.md. */
+@font-face {
+  font-family: "Geist";
+  src: url("./assets/fonts/Geist-Variable.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
 
-  --sans: system-ui, "Segoe UI", Roboto, sans-serif;
+/* Redesign (see DECISIONS.md — Figma-based visual overhaul, rolling out
+   one screen at a time starting with Chat): a fixed dark theme, matching
+   the design exactly rather than adapting to the OS light/dark
+   preference — the design has no light variant, so inventing one would
+   be guessing. This replaces the previous light/adaptive-dark palette
+   outright: any not-yet-redesigned screen inherits these token *values*
+   immediately (same variable names, new colors), which reads as "further
+   along" rather than jarring, and there is nothing left for a
+   prefers-color-scheme override to meaningfully diverge from until every
+   screen's own redesign lands. */
+:root {
+  --text: #cbc3d7;
+  --text-h: #dae2fd;
+  --text-muted: rgba(203, 195, 215, 0.5);
+  --bg: #020617;
+  --bg-elevated: rgba(15, 23, 42, 0.7);
+  --bg-sidebar: rgba(19, 27, 46, 0.8);
+  --bg-bubble-agent: rgba(15, 23, 42, 0.7);
+  --bg-bubble-user: #8b5cf6;
+  --text-bubble-user: #ffffff;
+  --border: rgba(255, 255, 255, 0.1);
+  --border-subtle: rgba(73, 68, 84, 0.1);
+  --accent: #8b5cf6;
+  --accent-hover: #a78bfa;
+  --accent-active: #d0bcff;
+  --accent-active-bg: rgba(160, 120, 255, 0.1);
+  --danger: #ef4444;
+  --ok: #10b981;
+  --info-blue: #3b82f6;
+
+  --sans: "Geist", system-ui, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, Consolas, monospace;
 
-  color-scheme: light dark;
+  color-scheme: dark;
   font-family: var(--sans);
   color: var(--text);
   background: var(--bg);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #d3d1d9;
-    --text-h: #f4f3f6;
-    --text-muted: #8b8896;
-    --bg: #17161c;
-    --bg-sidebar: #1e1d24;
-    --bg-bubble-agent: #26252d;
-    --bg-bubble-user: #7c5ff0;
-    --text-bubble-user: #ffffff;
-    --border: #2e2d36;
-    --accent: #7c5ff0;
-    --accent-hover: #8f76f5;
-  }
 }
 
 * {
@@ -68,44 +81,92 @@ a {
 .app {
   display: flex;
   height: 100%;
+  position: relative;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+/* Two soft, blurred ellipses behind everything — purely decorative, from
+   the Figma "Background Ambient Glows" / "Overlay+Blur" layers. Fixed to
+   the viewport corners rather than the (fixed 1280x1024) canvas position
+   Figma specifies, since this app's layout is responsive. */
+.app::before,
+.app::after {
+  content: "";
+  position: fixed;
+  border-radius: 9999px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.app::before {
+  top: -100px;
+  left: -128px;
+  width: 512px;
+  height: 410px;
+  background: rgba(208, 188, 255, 0.05);
+  filter: blur(60px);
+}
+
+.app::after {
+  bottom: -100px;
+  right: -128px;
+  width: 640px;
+  height: 512px;
+  background: rgba(79, 49, 156, 0.1);
+  filter: blur(75px);
 }
 
 /* ---- Sidebar ---- */
 
 .sidebar {
-  width: 260px;
+  width: 256px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
+  gap: 8px;
   background: var(--bg-sidebar);
-  border-right: 1px solid var(--border);
-  padding: 16px;
+  backdrop-filter: blur(12px);
+  border-right: 1px solid var(--border-subtle);
+  padding: 24px 25px 24px 24px;
+  position: relative;
+  z-index: 1;
 }
 
 .sidebar-header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 32px;
 }
 
 .sidebar-title {
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.3;
   color: var(--text-h);
+  margin: 0;
+}
+
+.sidebar-subtitle {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--text);
   margin: 0;
 }
 
 .new-chat-button {
   width: 100%;
-  padding: 10px 12px;
+  padding: 13px 17px;
   border-radius: 8px;
   border: 1px solid var(--border);
-  background: var(--bg);
+  background: transparent;
   color: var(--text-h);
   font-size: 14px;
   font-weight: 500;
-  text-align: left;
+  letter-spacing: 0.02em;
+  text-align: center;
 }
 
 .new-chat-button:hover {
@@ -115,78 +176,253 @@ a {
 .session-list {
   flex: 1;
   overflow-y: auto;
-  margin-top: 16px;
+  padding: 24px 8px 24px 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
+.session-list-label {
+  opacity: 0.7;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text);
+  margin: 0 0 4px;
+}
+
 .session-list-empty {
   color: var(--text-muted);
   font-size: 13px;
-  padding: 8px 4px;
+  padding: 8px 12px;
 }
 
 .session-item {
-  padding: 8px 10px;
+  padding: 8px 12px;
   border-radius: 6px;
   border: none;
   background: none;
   text-align: left;
   font-size: 14px;
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-item:hover {
-  background: var(--bg-bubble-agent);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .session-item.active {
-  background: var(--bg-bubble-agent);
+  background: rgba(255, 255, 255, 0.05);
   color: var(--text-h);
   font-weight: 500;
 }
 
-.settings-link {
+.sidebar-footer {
   margin-top: auto;
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
+  padding-top: 17.5px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.nav-link {
+  padding: 12px 14px 12px 12px;
+  border-radius: 8px;
+  border: none;
+  border-right: 2px solid transparent;
   background: none;
-  border-left: none;
-  border-right: none;
-  border-bottom: none;
   text-align: left;
   font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
   color: var(--text);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
 }
 
-.settings-link:hover {
-  color: var(--accent);
+.nav-link:hover {
+  background: rgba(255, 255, 255, 0.05);
 }
 
-.settings-link-icon {
+.nav-link[aria-current="page"] {
+  background: var(--accent-active-bg);
+  border-right-color: var(--accent-active);
+  color: var(--accent-active);
+}
+
+.nav-link-icon {
   flex-shrink: 0;
+  display: block;
+  width: 20px;
+  height: 20px;
+  /* Inline SVG components (components/icons/NavIcons.jsx), same path
+     geometry as the exported Figma assets, with fill="currentColor" on
+     the path -- so each icon renders in whichever color .nav-link's own
+     `color` resolves to (muted by default, --accent-active when this
+     tab is the current view), same as the app's other icons. An earlier
+     version used <img> + CSS mask-image to get the same effect from the
+     plain exported SVG files; inlining is the more foolproof approach.
+     preserveAspectRatio isn't set (defaults to "xMidYMid meet"), so each
+     icon's own aspect ratio (20x20, 20x18, 20.1x20) is preserved within
+     the fixed box rather than stretching every icon to the same shape. */
 }
 
 /* ---- Chat window ---- */
 
 .chat-window {
+  position: relative;
+  z-index: 1;
   flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
 
+.scroll-to-bottom-button {
+  /* Floats just above the input form rather than taking its own row in
+     .chat-window's flex column, so it doesn't shift the message list's
+     height when it appears/disappears. Shown only once the reader has
+     scrolled away from the latest message — see ChatWindow.jsx. */
+  position: absolute;
+  left: 50%;
+  /* Above the (now taller, Figma-style) bottom-docked input area: its
+     pill row + textarea + disclaimer run roughly 190px tall. */
+  bottom: 200px;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  backdrop-filter: blur(10px);
+  color: var(--text-h);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+  z-index: 5;
+}
+
+.scroll-to-bottom-button:hover {
+  background: var(--bg-bubble-user);
+}
+
 .message-list {
   flex: 1;
   overflow-y: auto;
-  padding: 24px;
+  /* Extra bottom padding so the last real message clears the absolutely
+     positioned, bottom-docked input area (see .chat-input-area) rather
+     than sitting underneath it. */
+  padding: 24px 24px 220px;
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+/* ---- Empty state (Figma "Empty State / Placeholder") ---- */
+
+.empty-state {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 15px;
+  max-width: 672px;
+  padding: 0 16px;
+  text-align: center;
+}
+
+.empty-state-icon-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  background: var(--bg-elevated);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: 0 20px 40px 0 rgba(139, 92, 246, 0.1);
+}
+
+.empty-state-icon {
+  width: 22.5px;
+  height: 25px;
+}
+
+.empty-state-heading {
+  margin: 8px 0 0;
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-h);
+}
+
+.empty-state-subtext {
+  margin: 0;
+  max-width: 512px;
+  font-size: 18px;
+  line-height: 1.6;
+  opacity: 0.8;
+  color: var(--text);
+}
+
+.suggestion-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 16px;
+  max-width: 768px;
+  padding-top: 17px;
+}
+
+.suggestion-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 17px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: var(--bg-elevated);
+  backdrop-filter: blur(10px);
+  text-align: left;
+}
+
+.suggestion-chip:hover {
+  border-color: var(--border);
+}
+
+.suggestion-chip-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent-active);
+}
+
+.suggestion-chip:nth-child(2) .suggestion-chip-label {
+  color: var(--ok);
+}
+
+.suggestion-chip-icon {
+  width: 13.5px;
+  height: 13.5px;
+}
+
+.suggestion-chip-text {
+  font-size: 16px;
+  color: var(--text);
 }
 
 .message-list-empty {
@@ -227,6 +463,8 @@ a {
 
 .message-bubble.agent {
   background: var(--bg-bubble-agent);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
   color: var(--text-h);
   border-bottom-left-radius: 4px;
 }
@@ -307,7 +545,22 @@ a {
 
 .message-bubble.pending {
   color: var(--text-muted);
-  font-style: italic;
+  /* .message-bubble isn't a direct flex item (MessageBubble.jsx wraps it
+     in a plain <div> that's the actual flex item), so its box isn't
+     reliably shrink-wrapped to its own content -- combined with
+     `max-width: 65%` (a percentage against an ancestor with no definite
+     width of its own), the browser could size the box narrower than the
+     text and then either wrap it mid-word or, with plain nowrap alone,
+     let the text overflow the box instead of growing it. `inline-block`
+     makes this element size to its own content directly, independent of
+     that ambiguity, and nowrap keeps the short placeholder on one line.
+     No font-style: italic here (that was the previous look) -- a slanted
+     glyph's ink extends past the upright metrics the box was sized from,
+     so the last character or two visibly overhangs the right edge right
+     up against the padding. Muted color alone still reads as "pending"
+     without that overhang. */
+  display: inline-block;
+  white-space: nowrap;
 }
 
 .message-sources {
@@ -343,38 +596,116 @@ a {
   letter-spacing: 0.04em;
 }
 
+/* ---- Input area (Figma "Input Area (Bottom docked)") ---- */
+
+.chat-input-area {
+  /* Docked over the message list rather than taking its own row in
+     .chat-window's flex column (Figma docks it as an overlay with a
+     gradient fade, not a bordered footer bar) — .message-list's extra
+     bottom padding keeps real messages clear of it. */
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  justify-content: center;
+  padding: 24px 64px 32px;
+  background: linear-gradient(
+    to top,
+    var(--bg) 0%,
+    rgba(2, 6, 23, 0.9) 50%,
+    rgba(2, 6, 23, 0) 100%
+  );
+}
+
+.chat-input-area-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 896px;
+}
+
+.data-source-indicators {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 8px;
+}
+
+.data-source-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.data-source-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
 .chat-input-form {
   display: flex;
-  gap: 8px;
-  padding: 16px 24px;
-  border-top: 1px solid var(--border);
+  align-items: flex-end;
+  padding: 9px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: #0f172a;
+  backdrop-filter: blur(10px);
 }
 
 .chat-input {
   flex: 1;
-  padding: 12px 16px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text);
-  font-size: 15px;
+  min-height: 56px;
+  max-height: 192px;
+  padding: 16px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-h);
+  font-size: 16px;
   font-family: inherit;
   resize: none;
+  overflow-y: auto;
+}
+
+.chat-input::placeholder {
+  color: var(--text-muted);
 }
 
 .chat-input:focus {
   outline: none;
-  border-color: var(--accent);
 }
 
 .send-button {
-  padding: 0 20px;
-  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-end;
+  margin-bottom: 8px;
+  padding: 0 16px;
+  height: 40px;
+  min-width: 80px;
+  justify-content: center;
+  border-radius: 12px;
   border: none;
   background: var(--accent);
   color: #fff;
   font-size: 14px;
   font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.send-button-icon {
+  width: 15.8px;
+  height: 13.3px;
 }
 
 .send-button:hover:not(:disabled) {
@@ -386,59 +717,226 @@ a {
   cursor: default;
 }
 
+.chat-input-disclaimer {
+  margin: 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 /* ---- Settings panel ---- */
 
 .settings-panel {
+  position: relative;
+  z-index: 1;
   flex: 1;
   overflow-y: auto;
-  padding: 32px;
-  max-width: 640px;
+  padding: 80px;
+}
+
+.settings-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  max-width: 1440px;
+  margin: 0 0 48px;
 }
 
 .settings-panel h1 {
-  font-size: 22px;
+  font-size: 48px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
   color: var(--text-h);
-  margin: 0 0 24px;
+  margin: 0 0 7px;
+}
+
+.settings-subtitle {
+  margin: 0;
+  font-size: 18px;
+  color: var(--text);
+}
+
+.settings-columns {
+  /* Two explicit columns, not an auto-balancing masonry layout — the
+     design groups specific sections into specific sides (engine settings
+     on the left, data sources/scope on the right), not just "whichever
+     column is shorter" (see DECISIONS.md, 2026-08-30). */
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 48px;
+  max-width: 1440px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .settings-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-header {
+    flex-direction: column;
+  }
+
+  .save-action {
+    align-items: flex-start;
+  }
+}
+
+.settings-column {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
 }
 
 .settings-section {
-  margin-bottom: 32px;
+  width: 100%;
+  padding: 25px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: var(--bg-elevated);
+  backdrop-filter: blur(10px);
 }
 
 .settings-section h2 {
-  font-size: 15px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 24px;
+  font-weight: 500;
   color: var(--text-h);
-  margin: 0 0 12px;
+  margin: 0 0 4px;
+}
+
+.settings-section h3 {
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--text-h);
+  margin: 0;
 }
 
 .radio-option {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border);
+  gap: 16px;
+  padding: 17px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  margin-top: 16px;
+  cursor: pointer;
 }
 
-.radio-option label {
+.radio-option.selected {
+  background: rgba(139, 92, 246, 0.05);
+  border-color: rgba(139, 92, 246, 0.3);
+}
+
+.radio-option-dot {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.radio-option-dot img {
+  width: 20px;
+  height: 20px;
+}
+
+.radio-option.selected .radio-option-dot {
+  border: none;
+  background: var(--accent);
+}
+
+.radio-option-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.radio-option-label {
+  font-size: 14px;
   font-weight: 500;
+  letter-spacing: 0.02em;
   color: var(--text-h);
-  display: block;
+}
+
+.radio-option.selected .radio-option-label {
+  color: var(--accent);
+}
+
+.radio-option input[type="radio"] {
+  /* The dot itself is the styled .radio-option-dot span next to it — this
+     input stays for real radio semantics/keyboard behavior, visually
+     hidden rather than removed. */
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
 }
 
 .radio-option p {
-  margin: 2px 0 0;
-  font-size: 13px;
-  color: var(--text-muted);
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.model-field {
+  margin-bottom: 16px;
+}
+
+.model-field label {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--text-h);
+  margin-bottom: 8px;
+}
+
+.model-field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.model-field-label-row label {
+  margin-bottom: 0;
+}
+
+.model-field-fixed {
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(139, 92, 246, 0.1);
+  color: var(--accent);
+  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
 }
 
 .model-select {
+  /* A plain free-text input, not a real <select> -- model identifiers
+     are arbitrary strings the user types (any Ollama tag, any
+     OpenRouter model slug), not a fixed enum, so no dropdown affordance
+     belongs here. An earlier version added a decorative chevron
+     matching the design's "Options" box look, which read as a real
+     dropdown and was misleading about what the field actually does —
+     removed. See DECISIONS.md. */
   width: 100%;
-  padding: 8px 10px;
+  padding: 13px 17px;
   border-radius: 8px;
   border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text);
-  font-size: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-h);
+  font-size: 16px;
 }
 
 .model-select:disabled {
@@ -446,19 +944,21 @@ a {
 }
 
 .settings-field-hint {
-  margin: 0 0 8px;
+  margin: 0 0 16px;
   font-size: 12px;
-  color: var(--text-muted);
+  line-height: 1.6;
+  color: var(--text);
 }
 
 .source-scope-textarea {
   width: 100%;
-  padding: 8px 10px;
+  min-height: 128px;
+  padding: 17px;
   border-radius: 8px;
   border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text);
-  font-size: 13px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-h);
+  font-size: 14px;
   font-family: var(--mono);
   resize: vertical;
 }
@@ -468,97 +968,202 @@ a {
   border-color: var(--accent);
 }
 
+.date-range-fields {
+  display: flex;
+  gap: 12px;
+}
+
+.date-range-fields label {
+  flex: 1;
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--text-h);
+}
+
+.date-range-fields input[type="date"] {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 13px 17px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-h);
+  font-size: 14px;
+  font-family: var(--mono);
+  color-scheme: dark;
+}
+
+.date-range-fields input[type="date"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .settings-section-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  margin-bottom: 4px;
+  gap: 16px;
+  margin-bottom: 16px;
 }
 
 .settings-section-header h2 {
-  margin: 0;
+  margin: 0 0 4px;
 }
 
-.reverify-button {
-  padding: 6px 12px;
+.settings-section-header-bordered {
+  padding-bottom: 17px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.settings-ghost-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 9px 17px;
   border-radius: 8px;
   border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text);
-  font-size: 13px;
+  background: var(--bg-elevated);
+  color: var(--text-h);
+  font-size: 12px;
+  font-weight: 500;
 }
 
-.reverify-button:hover:not(:disabled) {
+.settings-ghost-button img {
+  width: 10px;
+  height: auto;
+}
+
+.settings-ghost-button:hover:not(:disabled) {
   border-color: var(--accent);
+}
+
+.settings-ghost-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.settings-text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: none;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.settings-text-button img {
+  width: 11px;
+  height: auto;
+}
+
+.settings-text-button:hover:not(:disabled) {
   color: var(--accent);
 }
 
-.reverify-button:disabled {
+.settings-text-button:disabled {
   opacity: 0.5;
   cursor: default;
 }
 
 .connections-checked-at {
-  margin: 0 0 12px;
+  margin: 0 0 16px;
   font-size: 12px;
-  color: var(--text-muted);
+  color: var(--text);
 }
 
 .sources-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: 12px;
 }
 
 .source-status-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
+  padding: 13px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  font-size: 13px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--text-h);
+  text-transform: capitalize;
+}
+
+.source-status-card.dim {
+  opacity: 0.6;
 }
 
 .source-status-value {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
+  font-weight: 500;
+  color: var(--text);
+  text-transform: none;
 }
 
 .source-item-count {
-  color: var(--text-muted);
-  font-size: 11px;
+  display: block;
+  opacity: 0.6;
+  font-size: 10px;
 }
 
 .status-dot {
   display: inline-block;
+  flex-shrink: 0;
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  margin-right: 6px;
 }
 
 .status-dot.not_configured {
-  background: var(--text-muted);
+  background: var(--border-subtle);
 }
 
 .status-dot.ok {
   background: var(--ok);
+  box-shadow: 0 0 8px 0 rgba(16, 185, 129, 0.5);
 }
 
 .status-dot.error {
   background: var(--danger);
+  box-shadow: 0 0 8px 0 rgba(239, 68, 68, 0.5);
+}
+
+.save-action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .save-button {
-  padding: 10px 20px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 32px;
   border-radius: 8px;
   border: none;
   background: var(--accent);
   color: #fff;
   font-size: 14px;
   font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.save-button img {
+  width: 13.5px;
+  height: 13.5px;
 }
 
 .save-button:hover:not(:disabled) {
@@ -569,12 +1174,357 @@ a {
   opacity: 0.5;
 }
 
+.danger-zone {
+  background: rgba(147, 0, 10, 0.05);
+  border-color: rgba(255, 180, 171, 0.2);
+}
+
+.danger-zone h2 {
+  color: #ffb4ab;
+}
+
+.danger-zone h2 img {
+  width: 18.3px;
+  height: 15.8px;
+}
+
+.danger-zone .settings-field-hint {
+  opacity: 0.8;
+  font-size: 16px;
+  color: var(--text);
+}
+
+.danger-button {
+  margin-top: 8px;
+  padding: 9px 25px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 180, 171, 0.5);
+  background: none;
+  color: #ffb4ab;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.danger-button:hover:not(:disabled) {
+  background: rgba(255, 180, 171, 0.1);
+}
+
+.danger-button:disabled {
+  opacity: 0.5;
+}
+
+/* ---- Toasts ---- */
+
+.toast-stack {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 360px;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  /* Not var(--bg) -- that's the same near-black as the page background
+     under the redesign's dark-only palette, which would leave a toast
+     with barely a visible border. Same translucent-card + blur treatment
+     as the rest of the redesign so it actually stands out. */
+  background: var(--bg-elevated);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  font-size: 13px;
+  color: var(--text);
+}
+
+.toast-success {
+  border-color: var(--ok);
+}
+
+.toast-error {
+  border-color: var(--danger);
+}
+
+.toast-info {
+  border-color: var(--accent);
+}
+
+.toast span {
+  flex: 1;
+}
+
+.toast-dismiss {
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.toast-dismiss:hover {
+  color: var(--text-h);
+}
+
 .save-status {
-  margin-left: 12px;
   font-size: 13px;
   color: var(--text-muted);
 }
 
 .save-status.error {
   color: var(--danger);
+}
+
+/* ---- Graph view ---- */
+
+.graph-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.graph-view-loading,
+.graph-view-error,
+.graph-view-empty {
+  margin: auto;
+  max-width: 420px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.graph-view-error {
+  color: var(--danger);
+}
+
+.graph-view-hint {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.graph-view-canvas {
+  /* Fills whatever space is left after the hint line and legend — measured
+     by GraphView.jsx's ResizeObserver and used as both the simulation's
+     center point and the SVG's viewBox, so the graph genuinely spreads
+     across the available screen rather than being visually stretched
+     inside a fixed 900x600 coordinate space. Requested directly. */
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
+.graph-view-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.graph-node:active {
+  cursor: grabbing;
+}
+
+.graph-edge {
+  stroke: var(--border);
+  stroke-width: 1.5;
+}
+
+.graph-edge-label {
+  fill: var(--text-muted);
+  font-size: 10px;
+  text-anchor: middle;
+}
+
+.graph-node-label {
+  fill: var(--text);
+  font-size: 12px;
+}
+
+.graph-view-legend {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 16px 0 0;
+  padding: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.graph-view-legend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.graph-view-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+/* ---- Confirm dialog ---- */
+
+.confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.confirm-dialog {
+  width: 100%;
+  max-width: 420px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+  padding: 20px;
+}
+
+.confirm-dialog-title {
+  margin: 0 0 12px;
+  font-size: 16px;
+  color: var(--text-h);
+}
+
+.confirm-dialog-body {
+  font-size: 14px;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.confirm-dialog-list {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+
+.confirm-dialog-list li {
+  margin-bottom: 2px;
+}
+
+.confirm-dialog-warning {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.confirm-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.confirm-dialog-cancel {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.confirm-dialog-cancel:hover {
+  border-color: var(--accent);
+}
+
+.confirm-dialog-confirm {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.confirm-dialog-confirm:hover {
+  background: var(--accent-hover);
+}
+
+.confirm-dialog-confirm.danger {
+  background: var(--danger);
+}
+
+.confirm-dialog-confirm.danger:hover {
+  background: #a52f22;
+}
+
+/* ---- Ingestion progress ---- */
+
+.ingestion-progress {
+  margin: 12px 0 24px;
+}
+
+.ingestion-progress-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.ingestion-progress-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-bubble-agent);
+  overflow: hidden;
+}
+
+/* No known total item count (extraction discovers items as it streams
+   in), so this is an honest indeterminate bar while running — a sliding
+   segment, not a fake percentage — rather than a specific fill amount. */
+.ingestion-progress-bar.running .ingestion-progress-bar-fill {
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: var(--accent);
+  border-radius: 3px;
+  animation: ingestion-progress-slide 1.4s ease-in-out infinite;
+}
+
+.ingestion-progress-bar.success .ingestion-progress-bar-fill {
+  width: 100%;
+  height: 100%;
+  background: var(--ok);
+}
+
+.ingestion-progress-bar.partial_failure .ingestion-progress-bar-fill,
+.ingestion-progress-bar.failed .ingestion-progress-bar-fill {
+  width: 100%;
+  height: 100%;
+  background: var(--danger);
+}
+
+@keyframes ingestion-progress-slide {
+  0% {
+    left: -40%;
+  }
+  100% {
+    left: 100%;
+  }
 }

@@ -23,7 +23,9 @@ from storage.sqlite_store import (
     list_sessions,
     record_conversation_turn,
     replace_chunks,
+    reset_all,
     start_ingestion_run,
+    update_ingestion_run_progress,
 )
 
 
@@ -244,6 +246,38 @@ class TestIngestionRuns:
         assert get_last_run_timestamp(conn) >= first_ts
 
 
+class TestUpdateIngestionRunProgress:
+    def test_updates_items_processed_while_still_running(self, conn):
+        run_id = start_ingestion_run(conn)
+
+        update_ingestion_run_progress(conn, run_id, 3)
+
+        run = get_last_ingestion_run(conn)
+        assert run.items_processed == 3
+        assert run.status == "running"
+        assert run.run_completed_at is None
+
+    def test_can_be_called_multiple_times_before_completion(self, conn):
+        run_id = start_ingestion_run(conn)
+
+        update_ingestion_run_progress(conn, run_id, 1)
+        update_ingestion_run_progress(conn, run_id, 2)
+        update_ingestion_run_progress(conn, run_id, 3)
+
+        assert get_last_ingestion_run(conn).items_processed == 3
+
+    def test_does_not_affect_status_or_completion(self, conn):
+        run_id = start_ingestion_run(conn)
+        update_ingestion_run_progress(conn, run_id, 5)
+
+        complete_ingestion_run(conn, run_id, status="success", items_processed=10)
+
+        run = get_last_ingestion_run(conn)
+        assert run.status == "success"
+        assert run.items_processed == 10
+        assert run.run_completed_at is not None
+
+
 class TestGetLastIngestionRun:
     def test_none_before_any_run(self, conn):
         assert get_last_ingestion_run(conn) is None
@@ -401,3 +435,25 @@ class TestGetMessagesForSession:
         messages = get_messages_for_session(conn, "sess-a")
 
         assert [m.text for m in messages] == ["Q-a", "A-a"]
+
+
+class TestResetAll:
+    def test_wipes_every_table(self, conn):
+        insert_item(conn, make_item())
+        replace_chunks(conn, "item-1", [make_chunk()])
+        run_id = start_ingestion_run(conn)
+        complete_ingestion_run(conn, run_id, status="success", items_processed=1)
+        record_conversation_turn(conn, "sess-1", "Q", "A", None)
+
+        reset_all(conn)
+
+        assert get_item(conn, "item-1") is None
+        assert get_chunks_for_item(conn, "item-1") == []
+        assert get_last_ingestion_run(conn) is None
+        assert list_sessions(conn) == []
+        assert get_messages_for_session(conn, "sess-1") == []
+
+    def test_no_op_on_an_already_empty_database(self, conn):
+        reset_all(conn)  # doesn't raise
+
+        assert list_sessions(conn) == []

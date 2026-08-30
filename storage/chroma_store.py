@@ -9,9 +9,20 @@ time it's called, so callers that want a single client for a process's
 lifetime (as ``api/main.py`` startup does) must call it once and hold onto
 the returned collection themselves.
 
-Embeddings are computed elsewhere (``pipeline/embeddings.py``, using the
-local sentence-transformers model configured in ``config.yaml``) and passed
-in already-computed; this module never invokes an embedding model itself.
+Embeddings are computed elsewhere (``pipeline/embeddings.py``, via
+``providers/base.py::get_provider("embedding")`` — always the configured
+cloud model, see DECISIONS.md) and passed in already-computed; this module
+never invokes an embedding model itself.
+
+A Chroma collection is locked to whatever vector dimensionality its first
+write used — a later write of a different size (e.g. after
+``llm.cloud_embedding_model`` changes to a model with a different native
+output width) fails outright, for every item, not just the changed ones.
+``upsert_chunks()`` below detects this specific failure and raises a
+``VectorStoreError`` naming the real fix (reset all data, then
+re-ingest) rather than a generic "could not upsert" message — verified
+directly against a real, systemic occurrence of this exact failure. See
+``DECISIONS.md``.
 
 Typical use::
 
@@ -154,7 +165,10 @@ def upsert_chunks(collection: Collection, chunks: Iterable[VectorChunk]) -> None
             overwritten in place.
 
     Raises:
-        VectorStoreError: If the write fails.
+        VectorStoreError: If the write fails. A dimension mismatch (the
+            collection was created with a different-sized embedding model
+            than the one currently configured) gets its own clearer
+            message — see the module docstring.
     """
     chunks = list(chunks)
     if not chunks:
@@ -167,6 +181,14 @@ def upsert_chunks(collection: Collection, chunks: Iterable[VectorChunk]) -> None
             metadatas=[_to_metadata(c) for c in chunks],
         )
     except Exception as exc:
+        if "expecting embedding with dimension" in str(exc):
+            raise VectorStoreError(
+                f"Could not upsert {len(chunks)} chunk(s): the vector store "
+                "was created with a different-sized embedding model than "
+                "the one currently configured (llm.cloud_embedding_model). "
+                "Use Settings > Danger Zone > 'Reset all data', then "
+                f"re-run ingestion. Original error: {exc}"
+            ) from exc
         raise VectorStoreError(
             f"Could not upsert {len(chunks)} chunk(s): {exc}"
         ) from exc
@@ -192,6 +214,53 @@ def delete_by_item(collection: Collection, item_id: str) -> None:
         raise VectorStoreError(
             f"Could not delete chunks for item {item_id!r}: {exc}"
         ) from exc
+
+
+def reset_all(persist_dir: Path | str | None = None) -> Collection:
+    """Delete and recreate the collection, clearing any embedding-dimension lock.
+
+    An earlier version of this function only deleted every document
+    inside the collection (via ``collection.get()`` + ``collection.delete()``).
+    That leaves the collection's underlying HNSW index — and the vector
+    dimension it locked in on its first-ever write — untouched, so a
+    later ingest at a different dimension kept failing with "expecting
+    embedding with dimension of X, got Y" even right after a "reset".
+    Verified directly: a real reset left the collection's on-disk index
+    directory unchanged, and the very next ingestion run failed on its
+    first item with that exact error. Deleting the whole collection and
+    recreating it (matching how :func:`get_collection` creates it in the
+    first place) clears the lock too. See ``DECISIONS.md``.
+
+    Args:
+        persist_dir: Directory Chroma persists to. Defaults to
+            ``settings.env.chroma_persist_dir``.
+
+    Returns:
+        The freshly created, empty collection. Callers holding a
+        long-lived reference to the old collection (``api/main.py``'s
+        ``app.state.collection``) must replace it with this return
+        value — the old object is no longer valid once its underlying
+        collection has been deleted.
+
+    Raises:
+        VectorStoreError: If the delete or recreate fails.
+    """
+    target: Path | str = (
+        get_settings().env.chroma_persist_dir if persist_dir is None else persist_dir
+    )
+    try:
+        client = chromadb.PersistentClient(path=str(target))
+        try:
+            client.delete_collection(COLLECTION_NAME)
+        except Exception:
+            pass  # nothing to delete yet -- get_or_create below still works
+        return client.get_or_create_collection(
+            COLLECTION_NAME,
+            embedding_function=None,
+            metadata={"hnsw:space": "cosine"},
+        )
+    except Exception as exc:
+        raise VectorStoreError(f"Could not reset the vector store: {exc}") from exc
 
 
 def get_item_embeddings(collection: Collection, item_id: str) -> list[list[float]]:

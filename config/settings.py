@@ -16,6 +16,9 @@ Typical use::
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -30,11 +33,53 @@ CONFIG_DIR = PROJECT_ROOT / "config"
 DEFAULT_CONFIG_PATH = CONFIG_DIR / "config.yaml"
 DEFAULT_ENV_PATH = CONFIG_DIR / ".env"
 
-ProviderMode = Literal["fully_local", "fully_cloud", "mixed"]
+ProviderMode = Literal["fully_local", "fully_cloud"]
 
 
 class ConfigError(Exception):
     """Raised when configuration is missing, unreadable, or invalid."""
+
+
+_FILE_WRITE_RETRY_ATTEMPTS = 5
+_FILE_WRITE_RETRY_BASE_DELAY_SECONDS = 0.1
+
+
+def _retry_on_transient_permission_error[T](call: Callable[[], T]) -> T:
+    """Retry a file-write call a few times on a transient permission error.
+
+    Windows can transiently deny a file rename/replace — the mechanism
+    both ``update_llm_config()`` and ``update_source_config()`` use to
+    write their target file — if another process has briefly opened it,
+    even just for reading (a real-time antivirus scanner, the search
+    indexer, an editor's file-watcher). This surfaces as a
+    ``PermissionError`` (WinError 5 on Windows) that clears itself within
+    milliseconds once that other process releases its handle; verified
+    directly — the exact same write that failed once succeeded
+    immediately on retry, both called directly and through the real
+    running API. See ``DECISIONS.md``.
+
+    Args:
+        call: A zero-argument callable performing one write attempt.
+
+    Returns:
+        The result of the first successful attempt.
+
+    Raises:
+        PermissionError: If every attempt fails — the caller's own
+            ``except OSError`` (``PermissionError`` is a subclass) still
+            catches this and wraps it in ``ConfigError`` as before.
+    """
+    last_exc: PermissionError | None = None
+    for attempt in range(_FILE_WRITE_RETRY_ATTEMPTS):
+        try:
+            return call()
+        except PermissionError as exc:
+            last_exc = exc
+            if attempt == _FILE_WRITE_RETRY_ATTEMPTS - 1:
+                break
+            time.sleep(_FILE_WRITE_RETRY_BASE_DELAY_SECONDS * (attempt + 1))
+    assert last_exc is not None  # loop always assigns before breaking
+    raise last_exc
 
 
 def anchor_path(value: Path) -> Path:
@@ -61,11 +106,23 @@ def anchor_path(value: Path) -> Path:
 
 
 class LLMConfig(BaseModel):
-    """LLM provider selection and the models used on each side."""
+    """LLM provider selection: two *generation* models, one *embedding* model.
 
-    provider_mode: ProviderMode = "mixed"
-    local_model: str = "llama3:8b"
-    cloud_model: str = "anthropic/claude-sonnet-4"
+    ``provider_mode`` only ever selects which *generation* model is used
+    (``local_generation_model`` vs ``cloud_generation_model``) — embedding
+    always goes through OpenRouter regardless of mode; there is no local
+    embedding path. ``cloud_embedding_model`` is user-editable like the
+    generation models, but changing it is a bigger deal: it changes which
+    embedding space every future vector lands in, so existing ones stop
+    being comparable to new ones. Nothing here enforces a reset when it
+    changes — that's the frontend's job (a confirm prompt, then an
+    automatic reset + re-ingest). See ``DECISIONS.md``.
+    """
+
+    provider_mode: ProviderMode = "fully_local"
+    local_generation_model: str = "llama3:8b"
+    cloud_generation_model: str = "anthropic/claude-sonnet-4"
+    cloud_embedding_model: str = "openai/text-embedding-3-small"
     cloud_max_tokens: int = 4096
 
 
@@ -116,21 +173,20 @@ class RetrievalConfig(BaseModel):
     relationship_candidate_max_distance: float | None = 0.6
 
 
-class EmbeddingConfig(BaseModel):
-    """Local embedding model selection."""
-
-    model: str = "sentence-transformers/all-MiniLM-L6-v2"
-
-
 class AppConfig(BaseModel):
-    """Full contents of ``config/config.yaml``."""
+    """Full contents of ``config/config.yaml``.
+
+    No separate ``embedding`` section — the embedding model selection
+    lives on ``LLMConfig`` alongside the generation models, since which
+    embedding model is active is driven by the same ``provider_mode``
+    toggle. See ``DECISIONS.md``.
+    """
 
     llm: LLMConfig = Field(default_factory=LLMConfig)
     ingestion: IngestionConfig = Field(default_factory=IngestionConfig)
     filters: FiltersConfig = Field(default_factory=FiltersConfig)
     chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
-    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +213,16 @@ class EnvSettings(BaseSettings):
     notion_api_key: str | None = None
     notion_page_ids: str = ""
     gmail_credentials_path: Path | None = None
+    # A fixed ingestion window, not just a backfill cap: `_start` also
+    # floors every future run's incremental `since` (via `max()`), and
+    # `_end`, if set, keeps excluding anything newer on every run, not
+    # just the first. See DECISIONS.md.
+    gmail_date_range_start: date | None = None
+    gmail_date_range_end: date | None = None
     github_token: str | None = None
+    github_repos: str = ""
+    github_date_range_start: date | None = None
+    github_date_range_end: date | None = None
     google_calendar_credentials_path: Path | None = None
     browser_history_path: Path | None = None
     local_files_watch_dirs: str = ""
@@ -236,6 +301,20 @@ class EnvSettings(BaseSettings):
             part.strip() for part in self.notion_page_ids.split(",") if part.strip()
         ]
 
+    @property
+    def github_repos_list(self) -> list[str]:
+        """Parse ``GITHUB_REPOS`` into a list of ``owner/repo`` full names.
+
+        Returns:
+            The configured repos, empty if the variable is unset — an
+            empty list means "no scope configured," which
+            ``extractors/github.py`` treats as "every repository the
+            token can access" (owned, collaborator, and organization
+            repos), not "nothing." Same convention as
+            :attr:`notion_page_ids_list`.
+        """
+        return [part.strip() for part in self.github_repos.split(",") if part.strip()]
+
 
 class Settings(BaseModel):
     """Both configuration sources, resolved together."""
@@ -270,8 +349,9 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
 def update_llm_config(
     *,
     provider_mode: ProviderMode | None = None,
-    local_model: str | None = None,
-    cloud_model: str | None = None,
+    local_generation_model: str | None = None,
+    cloud_generation_model: str | None = None,
+    cloud_embedding_model: str | None = None,
     path: Path = DEFAULT_CONFIG_PATH,
 ) -> AppConfig:
     """Update ``config.yaml``'s ``llm`` section on disk, in place.
@@ -283,10 +363,19 @@ def update_llm_config(
     every comment in the file, including the ones documenting each
     setting's valid values — see ``DECISIONS.md``).
 
+    This function itself doesn't treat ``cloud_embedding_model`` specially
+    — the "changing it needs a reset + re-ingest" requirement is enforced
+    by the frontend (a confirm prompt before calling this), not here. See
+    ``LLMConfig``'s docstring, ``DECISIONS.md``.
+
     Args:
         provider_mode: New provider mode, or ``None`` to leave unchanged.
-        local_model: New local model tag, or ``None`` to leave unchanged.
-        cloud_model: New cloud model id, or ``None`` to leave unchanged.
+        local_generation_model: New local generation model tag, or
+            ``None`` to leave unchanged.
+        cloud_generation_model: New cloud generation model id, or ``None``
+            to leave unchanged.
+        cloud_embedding_model: New cloud embedding model id, or ``None``
+            to leave unchanged.
         path: Path to the YAML configuration file. Defaults to the real
             configuration file; passing a different path (tests) writes
             there instead and leaves the process-wide ``get_settings()``
@@ -317,10 +406,12 @@ def update_llm_config(
     updated = dict(llm_section)
     if provider_mode is not None:
         updated["provider_mode"] = provider_mode
-    if local_model is not None:
-        updated["local_model"] = local_model
-    if cloud_model is not None:
-        updated["cloud_model"] = cloud_model
+    if local_generation_model is not None:
+        updated["local_generation_model"] = local_generation_model
+    if cloud_generation_model is not None:
+        updated["cloud_generation_model"] = cloud_generation_model
+    if cloud_embedding_model is not None:
+        updated["cloud_embedding_model"] = cloud_embedding_model
 
     try:
         LLMConfig.model_validate(updated)
@@ -331,9 +422,12 @@ def update_llm_config(
         llm_section[key] = value
     data["llm"] = llm_section
 
-    try:
+    def write() -> None:
         with path.open("w", encoding="utf-8") as f:
             yaml_rt.dump(data, f)
+
+    try:
+        _retry_on_transient_permission_error(write)
     except OSError as exc:
         raise ConfigError(f"Could not write {path}: {exc}") from exc
 
@@ -351,6 +445,11 @@ def update_source_config(
     *,
     local_files_watch_dirs: list[str] | None = None,
     notion_page_ids: list[str] | None = None,
+    github_repos: list[str] | None = None,
+    gmail_date_range_start: str | None = None,
+    gmail_date_range_end: str | None = None,
+    github_date_range_start: str | None = None,
+    github_date_range_end: str | None = None,
     path: Path = DEFAULT_ENV_PATH,
 ) -> EnvSettings:
     """Update ``config/.env``'s source-scope variables on disk, in place.
@@ -370,6 +469,17 @@ def update_source_config(
             ingestion to, or ``None`` to leave unchanged. An empty list
             clears the setting (falls back to "every page the integration
             can see" — see ``extractors/notion.py``).
+        github_repos: New list of ``owner/repo`` full names to scope
+            ingestion to, or ``None`` to leave unchanged. An empty list
+            clears the setting (falls back to "every accessible repo" —
+            see ``extractors/github.py``).
+        gmail_date_range_start: New ISO ``YYYY-MM-DD`` floor for Gmail
+            ingestion, ``""`` to clear it, or ``None`` to leave unchanged.
+        gmail_date_range_end: Same, but the ceiling.
+        github_date_range_start: Same as ``gmail_date_range_start``, for
+            GitHub.
+        github_date_range_end: Same as ``gmail_date_range_end``, for
+            GitHub.
         path: Path to the ``.env`` file. Defaults to the real one; passing
             a different path (tests) writes there instead and leaves the
             process-wide ``get_settings()`` cache untouched.
@@ -385,9 +495,45 @@ def update_source_config(
 
     try:
         if local_files_watch_dirs is not None:
-            set_key(path, "LOCAL_FILES_WATCH_DIRS", ",".join(local_files_watch_dirs))
+            # A path ending in a trailing "\" (very easy to end up with on
+            # Windows — e.g. a folder picker returning a drive/project
+            # root) breaks python-dotenv's own write-then-read round trip:
+            # it single-quotes the value but only escapes literal quote
+            # characters, not backslashes, so a trailing "\" lands right
+            # before the closing quote and its *parser* reads that as an
+            # escaped quote instead of the string ending — corrupting not
+            # just this line but every line after it in the file (verified
+            # directly: a real .env with this shape silently dropped 12
+            # keys, including OPENROUTER_API_KEY, until the trailing
+            # backslash was removed). A trailing separator is meaningless
+            # for a directory path anyway, so stripping it is always safe.
+            # See DECISIONS.md.
+            cleaned_dirs = [d.rstrip("\\/") for d in local_files_watch_dirs]
+            _retry_on_transient_permission_error(
+                lambda: set_key(path, "LOCAL_FILES_WATCH_DIRS", ",".join(cleaned_dirs))
+            )
         if notion_page_ids is not None:
-            set_key(path, "NOTION_PAGE_IDS", ",".join(notion_page_ids))
+            _retry_on_transient_permission_error(
+                lambda: set_key(path, "NOTION_PAGE_IDS", ",".join(notion_page_ids))
+            )
+        if github_repos is not None:
+            _retry_on_transient_permission_error(
+                lambda: set_key(path, "GITHUB_REPOS", ",".join(github_repos))
+            )
+        # Date fields: "" (matching an emptied <input type="date">) clears
+        # the setting; None leaves it untouched. A real "YYYY-MM-DD" value
+        # is written as-is — EnvSettings parses it back into a date.
+        date_fields = {
+            "GMAIL_DATE_RANGE_START": gmail_date_range_start,
+            "GMAIL_DATE_RANGE_END": gmail_date_range_end,
+            "GITHUB_DATE_RANGE_START": github_date_range_start,
+            "GITHUB_DATE_RANGE_END": github_date_range_end,
+        }
+        for key, value in date_fields.items():
+            if value is not None:
+                _retry_on_transient_permission_error(
+                    lambda key=key, value=value: set_key(path, key, value)
+                )
     except OSError as exc:
         raise ConfigError(f"Could not write {path}: {exc}") from exc
 

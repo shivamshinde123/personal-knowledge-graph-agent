@@ -37,7 +37,7 @@ from config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
-Task = Literal["metadata", "relationship", "answer", "condense", "eval"]
+Task = Literal["metadata", "relationship", "answer", "condense", "eval", "embedding"]
 EvalCriterion = Literal["faithfulness", "relevance"]
 
 _MAX_RETRIES = 3
@@ -218,6 +218,31 @@ class ProviderInterface(ABC):
         Returns:
             A score in ``[0.0, 1.0]`` (higher is better) with a short
             explanation.
+
+        Raises:
+            ProviderError: If the call fails after retries are exhausted.
+        """
+
+    @abstractmethod
+    def generate_embeddings(self, texts: Sequence[str]) -> list[list[float]]:
+        """Embed a batch of texts into vectors.
+
+        Unlike generation, embedding does not follow ``provider_mode`` —
+        ``get_provider("embedding")`` always resolves to OpenRouter,
+        regardless of mode (see ``get_provider()``'s own docstring). There
+        is only one embedding model in play at any time
+        (``settings.config.llm.cloud_embedding_model``), user-editable —
+        so a mode switch can never mismatch vectors the way switching
+        between two separate models could, but changing the embedding
+        model itself still can; the frontend confirms with the user and
+        triggers a reset + re-ingest when it changes. Requires
+        ``OPENROUTER_API_KEY`` even under ``fully_local``.
+
+        Args:
+            texts: The texts to embed, in the order results are returned.
+
+        Returns:
+            One embedding vector per input text, same order, same length.
 
         Raises:
             ProviderError: If the call fails after retries are exhausted.
@@ -475,16 +500,31 @@ class LangChainProvider(ProviderInterface):
     the interface — see the module docstring.
     """
 
-    def __init__(self, chat_model: BaseChatModel, *, provider_name: str) -> None:
+    def __init__(
+        self,
+        chat_model: BaseChatModel,
+        *,
+        provider_name: str,
+        embed_fn: Callable[[Sequence[str]], list[list[float]]] | None = None,
+    ) -> None:
         """Initialize the provider.
 
         Args:
             chat_model: The LangChain chat model to route calls through.
             provider_name: Identifies this provider/model in error messages
                 and retry logs (e.g. ``"ollama:llama3:8b"``).
+            embed_fn: Embeds a batch of texts, backing
+                :meth:`generate_embeddings`. Not a LangChain ``Embeddings``
+                object directly — ``create_local_provider()`` wraps
+                ``sentence-transformers``, ``create_openrouter_provider()``
+                wraps a LangChain ``OpenAIEmbeddings`` — so this stays a
+                plain callable rather than committing to one shape.
+                ``None`` for a provider that never embeds (e.g. tests
+                exercising only the chat-model methods).
         """
         self._chat_model = chat_model
         self._provider_name = provider_name
+        self._embed_fn = embed_fn
 
     def generate_metadata(self, texts: Sequence[str]) -> list[ItemMetadata]:
         """See :meth:`ProviderInterface.generate_metadata`."""
@@ -556,24 +596,40 @@ class LangChainProvider(ProviderInterface):
 
         return _retry_with_backoff(call, provider_name=self._provider_name)
 
+    def generate_embeddings(self, texts: Sequence[str]) -> list[list[float]]:
+        """See :meth:`ProviderInterface.generate_embeddings`."""
+        if not texts:
+            return []
+        if self._embed_fn is None:
+            raise ProviderError(
+                f"{self._provider_name} was constructed without an embedding function"
+            )
+
+        def call() -> list[list[float]]:
+            return self._embed_fn(texts)
+
+        return _retry_with_backoff(call, provider_name=self._provider_name)
+
 
 def get_provider(task: Task) -> ProviderInterface:
     """Select the configured provider for a given task.
 
-    Reads ``settings.config.llm.provider_mode``:
+    ``"embedding"`` always resolves to OpenRouter, regardless of
+    ``provider_mode`` — there is no local embedding path any more (removed
+    — see DECISIONS.md). This means embedding calls need
+    ``OPENROUTER_API_KEY`` configured even under ``fully_local``, which is
+    otherwise meant to have no network dependency; ingestion (which always
+    embeds) will fail for every item under `fully_local` without that key
+    set. This is a deliberate trade-off, not an oversight — a single,
+    cloud-only embedding model can never have a mode-driven dimension
+    mismatch to worry about at all, which was worth more than preserving
+    `fully_local`'s previous "zero network calls" property. See
+    DECISIONS.md.
 
-    - ``fully_local``: every task runs through Ollama.
-    - ``fully_cloud``: every task runs through OpenRouter.
-    - ``mixed``: the low-frequency, quality-sensitive ``"answer"`` task runs
-      through OpenRouter, as does ``"eval"`` — judging answer quality
-      deserves the same caliber of model as generating them, and eval runs
-      are infrequent (only ``eval/run_evaluation.py``, not the query path)
-      so the extra cost is acceptable. The cheaper, high-frequency
-      ``"metadata"`` and ``"relationship"`` ingestion tasks run through
-      Ollama, as does ``"condense"`` — it runs on every follow-up question,
-      and a rough rewrite that still improves retrieval over the raw
-      follow-up is good enough; the final answer is what actually needs
-      the better model. See ``DECISIONS.md``.
+    Every other task reads ``settings.config.llm.provider_mode`` —
+    ``fully_local``: generation runs through Ollama. ``fully_cloud``:
+    generation runs through OpenRouter. There is no ``mixed`` mode
+    (removed — see DECISIONS.md).
 
     Args:
         task: Which kind of call the returned provider will be used for.
@@ -583,18 +639,16 @@ def get_provider(task: Task) -> ProviderInterface:
 
     Raises:
         ProviderError: If the resolved provider is misconfigured (e.g. no
-            OpenRouter API key set while cloud access is required).
+            OpenRouter API key set while cloud access is required — always
+            required for ``"embedding"``, only required for other tasks
+            under ``fully_cloud``).
     """
     from providers.local_provider import create_local_provider
     from providers.openrouter_provider import create_openrouter_provider
 
+    if task == "embedding":
+        return create_openrouter_provider()
     mode = get_settings().config.llm.provider_mode
-    if mode == "fully_local":
-        return create_local_provider()
     if mode == "fully_cloud":
         return create_openrouter_provider()
-    return (
-        create_openrouter_provider()
-        if task in ("answer", "eval")
-        else create_local_provider()
-    )
+    return create_local_provider()

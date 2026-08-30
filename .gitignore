@@ -5,6 +5,9 @@ config/.env
 *.pem
 *credentials*.json
 *token*.json
+# Google Cloud Console's own default filename for a downloaded OAuth
+# client (Gmail/Calendar setup) — doesn't match *credentials*.json above.
+client_secret*.json
 
 # --- Local data stores ---------------------------------------------------
 # All three stores hold personal data and are rebuilt by the daily batch.

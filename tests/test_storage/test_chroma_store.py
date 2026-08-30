@@ -12,6 +12,7 @@ from storage.chroma_store import (
     get_item_chunk_vectors,
     get_item_embeddings,
     query,
+    reset_all,
     upsert_chunks,
 )
 
@@ -88,6 +89,19 @@ class TestUpsertChunks:
         upsert_chunks(collection, [])
 
         assert collection.count() == 0
+
+    def test_a_dimension_mismatch_raises_a_clear_actionable_error(self, collection):
+        """Real-world regression: the embedding model's output width changed.
+
+        (llm.cloud_embedding_model config change, or a dropped forced-
+        truncation), but the collection was already locked to the old
+        dimension — every subsequent write failed with Chroma's own
+        generic message. Verified directly against a real occurrence.
+        """
+        upsert_chunks(collection, [make_chunk(embedding=[0.1, 0.2, 0.3])])
+
+        with pytest.raises(VectorStoreError, match="Reset all data"):
+            upsert_chunks(collection, [make_chunk(id="emb-2", embedding=[0.1] * 10)])
 
 
 class TestQuery:
@@ -202,3 +216,44 @@ class TestDeleteByItem:
         delete_by_item(collection, "does-not-exist")
 
         assert collection.count() == 0
+
+
+class TestResetAll:
+    def test_removes_every_chunk(self, tmp_path):
+        persist_dir = tmp_path / "chroma"
+        collection = get_collection(persist_dir)
+        upsert_chunks(
+            collection,
+            [
+                make_chunk(id="a", item_id="item-1"),
+                make_chunk(id="b", item_id="item-2"),
+            ],
+        )
+
+        new_collection = reset_all(persist_dir)
+
+        assert new_collection.count() == 0
+
+    def test_no_op_on_an_already_empty_collection(self, tmp_path):
+        reset_all(tmp_path / "chroma")  # doesn't raise -- nothing to delete yet
+
+    def test_clears_a_dimension_lock_left_by_the_previous_reset_approach(
+        self, tmp_path
+    ):
+        """Regression: deleting documents alone didn't clear the dimension.
+
+        An earlier version of reset_all() only deleted every document,
+        leaving the collection's HNSW index -- and the dimension it locked
+        in on first write -- untouched, so a write of a different-sized
+        embedding kept failing right after a "reset". Verified directly
+        against a real occurrence. See DECISIONS.md.
+        """
+        persist_dir = tmp_path / "chroma"
+        collection = get_collection(persist_dir)
+        upsert_chunks(collection, [make_chunk(embedding=[0.1, 0.2, 0.3])])
+
+        new_collection = reset_all(persist_dir)
+
+        # A write at a different dimension must now succeed.
+        upsert_chunks(new_collection, [make_chunk(id="emb-2", embedding=[0.1] * 10)])
+        assert new_collection.count() == 1
