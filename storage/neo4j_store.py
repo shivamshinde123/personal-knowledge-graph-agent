@@ -451,3 +451,22 @@ def delete_item(driver: neo4j.Driver, item_id: str) -> None:
             session.run("MATCH (i:Item {id: $id}) DETACH DELETE i", id=item_id)
     except _NEO4J_ERRORS as exc:
         raise GraphStoreError(f"Could not delete item {item_id!r}: {exc}") from exc
+
+
+def reset_all(driver: neo4j.Driver) -> None:
+    """Delete every node and relationship in the graph.
+
+    A no-op on an already-empty graph. See ``agent/admin.py``,
+    ``DECISIONS.md``.
+
+    Args:
+        driver: An open driver from :func:`get_driver`.
+
+    Raises:
+        GraphStoreError: If the delete fails.
+    """
+    try:
+        with driver.session() as session:
+            session.run("MATCH (n) DETACH DELETE n")
+    except _NEO4J_ERRORS as exc:
+        raise GraphStoreError(f"Could not reset the graph: {exc}") from exc

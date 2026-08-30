@@ -822,6 +822,28 @@ provider config. See DECISIONS.md, 2026-08-30.
 
 ---
 
+## Entry point: `POST /api/admin/reset` (`api/routes/admin.py`)
+
+Extension beyond `docs/API_Specification.docx` — a destructive, hard-to-
+reverse full-database wipe. See DECISIONS.md, 2026-08-30.
+
+1. Request body validated against `api/schemas.py::AdminResetRequest`
+   (`confirm: bool`) — `confirm: false` (or omitted) returns a 422
+   directly as `JSONResponse({"error": "confirmation_required", ...})`,
+   same "shaped like every other error" reasoning as `GET
+   /api/sessions/{id}`'s 404, not via `HTTPException`
+2. `agent/admin.py::reset_all_data()`, reading `conn`/`collection`/`driver`
+   from `request.app.state` — wipes SQLite, Chroma, and Neo4j (see "Shared"
+   sections above for each store's own `reset_all()`)
+
+   **Branch point**: a partial failure (`AdminError`) is caught here and
+   returned as a 500 `JSONResponse({"error": "admin_error", "detail":
+   ...})` naming exactly which store(s) failed, rather than propagating to
+   `api/main.py`'s generic handler
+3. Returns `{"status": "reset"}` on full success
+
+---
+
 ## Entry point: `GET /api/graph` (`api/routes/graph.py`)
 
 Extension beyond `docs/API_Specification.docx` — the relationship graph
@@ -890,18 +912,20 @@ development/testing, outside the daily schedule.
 A Vite + React app — see `frontend/README.md` for setup/dev commands.
 `frontend/src/index.jsx` mounts `App.jsx` into `#root`.
 
-1. `App.jsx` holds `view` (`"chat"` | `"settings"`), `sessionId`, and the
-   fetched `sessions` list, and renders `Sidebar.jsx` plus either
-   `ChatWindow.jsx` or `SettingsPanel.jsx` — no router, since the
-   wireframe only needs a "Settings link," not deep-linking (see
-   DECISIONS.md, 2026-08-25). Fetches `getSessions()` on mount and again
-   after every completed turn (`onTurnCompleted`), so the sidebar's list
-   and ordering stay current
+1. `App.jsx` holds `view` (`"chat"` | `"settings"` | `"graph"`), `sessionId`,
+   and the fetched `sessions` list, and renders `Sidebar.jsx` plus one of
+   `ChatWindow.jsx`, `SettingsPanel.jsx`, or `GraphView.jsx` — no router,
+   since the wireframe only needs a "Settings link," not deep-linking (see
+   DECISIONS.md, 2026-08-25; the graph view follows the same no-router
+   pattern, see DECISIONS.md, 2026-08-30). Fetches `getSessions()` on mount
+   and again after every completed turn (`onTurnCompleted`), so the
+   sidebar's list and ordering stay current
 2. `Sidebar.jsx` — "New chat" and clicking a real session both bump
    `App.jsx`'s `chatKey`, forcing `ChatWindow` to remount (see DECISIONS.md,
    2026-08-25, for why a remount rather than watching `sessionId` for
    changes). Renders the real session list from `App.jsx`, or "No past
-   conversations yet" if it's empty
+   conversations yet" if it's empty. "Graph" and "Settings" sit together in
+   a `.sidebar-footer` at the bottom, sharing one `.nav-link` style
 3. `ChatWindow.jsx` — on mount, if given an existing `sessionId`, calls
    `api/client.js::getSessionHistory()` once and populates messages from
    it (see DECISIONS.md, 2026-08-25). On submit, appends the user message
@@ -920,8 +944,24 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    rather than the batch-run status alone; "Reverify" calls
    `verifySourceConnections()` (force-refreshes, bypassing the cache) and
    replaces the connections state with the fresh result — see
-   DECISIONS.md, 2026-08-29 and 2026-08-30
-5. `api/client.js` is the only module making network calls (per
+   DECISIONS.md, 2026-08-29 and 2026-08-30. "Run ingestion now" calls
+   `postIngestTrigger()` (the same manual-override endpoint
+   `POST /api/ingest/trigger` already exposed — see below — just not
+   previously wired to any UI). "Reset all data" (in its own visually
+   separated Danger Zone section) shows a native `window.confirm()` prompt
+   before calling `postAdminReset()`, then re-fetches
+   `getSourcesStatus()`/`getSourceConnections()` so the displayed counts
+   reflect the wipe immediately — see DECISIONS.md, 2026-08-30
+5. `GraphView.jsx` — on mount, calls `api/client.js::getGraph()`; an empty
+   result (no confirmed relationships yet) renders an explanatory message
+   rather than a blank canvas. A non-empty result is laid out once via
+   `d3-force` (`forceSimulation`/`forceLink`/`forceManyBody`/`forceCenter`,
+   run synchronously to convergence via `simulation.tick()` in a loop, not
+   a live/animated simulation — the graph stays small by construction, see
+   `storage/neo4j_store.py::get_full_graph()`'s own note) and rendered as a
+   static SVG: nodes colored by `source_type`, edges labeled with their
+   relationship `label`. See DECISIONS.md, 2026-08-30
+6. `api/client.js` is the only module making network calls (per
    `docs/Coding_Conventions.docx` section 3) — every function maps
    directly to one `docs/API_Specification.docx` endpoint, talking to
    `http://127.0.0.1:8080/api` (not `localhost` — see DECISIONS.md,

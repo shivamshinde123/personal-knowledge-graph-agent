@@ -26,6 +26,7 @@ from storage.neo4j_store import (
     get_item,
     get_related_items,
     has_any_relationship,
+    reset_all,
     write_relationship,
 )
 
@@ -298,3 +299,19 @@ class TestHasAnyRelationship:
 
         assert has_any_relationship(driver, "a", "c") is False
         assert has_any_relationship(driver, "b", "c") is False
+
+
+class TestResetAll:
+    def test_removes_every_node_and_relationship(self, driver):
+        a, b = make_item(id="a"), make_item(id="b")
+        write_relationship(driver, a, b, Relationship(label="implements"))
+
+        reset_all(driver)
+
+        assert get_item(driver, "a") is None
+        assert get_item(driver, "b") is None
+
+    def test_no_op_on_an_already_empty_graph(self, driver):
+        reset_all(driver)  # doesn't raise
+
+        assert get_item(driver, "a") is None

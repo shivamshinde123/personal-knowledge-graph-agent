@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from agent.tracing import enable_tracing
-from api.routes import graph, health, ingest, query, sessions, settings, sources
+from api.routes import admin, graph, health, ingest, query, sessions, settings, sources
 from config.settings import ConfigError
 from providers.base import ProviderError
 from storage.chroma_store import VectorStoreError, get_collection
@@ -83,6 +83,7 @@ def create_app(*, lifespan_fn=lifespan) -> FastAPI:
     app.include_router(sessions.router, prefix="/api")
     app.include_router(ingest.router, prefix="/api")
     app.include_router(graph.router, prefix="/api")
+    app.include_router(admin.router, prefix="/api")
     _register_exception_handlers(app)
     return app
 

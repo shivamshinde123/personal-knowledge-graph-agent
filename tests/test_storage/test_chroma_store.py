@@ -12,6 +12,7 @@ from storage.chroma_store import (
     get_item_chunk_vectors,
     get_item_embeddings,
     query,
+    reset_all,
     upsert_chunks,
 )
 
@@ -200,5 +201,25 @@ class TestDeleteByItem:
 
     def test_deleting_a_nonexistent_item_is_harmless(self, collection):
         delete_by_item(collection, "does-not-exist")
+
+        assert collection.count() == 0
+
+
+class TestResetAll:
+    def test_removes_every_chunk(self, collection):
+        upsert_chunks(
+            collection,
+            [
+                make_chunk(id="a", item_id="item-1"),
+                make_chunk(id="b", item_id="item-2"),
+            ],
+        )
+
+        reset_all(collection)
+
+        assert collection.count() == 0
+
+    def test_no_op_on_an_already_empty_collection(self, collection):
+        reset_all(collection)  # doesn't raise
 
         assert collection.count() == 0

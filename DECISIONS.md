@@ -8,6 +8,18 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-30 — Full data reset: `POST /api/admin/reset`
+
+**Context**: No way existed to wipe all ingested data and start over — useful for recovering from a bad ingestion run or restarting a demo from a clean slate, requested directly for the Settings screen.
+
+**Decision**: Added a `reset_all()` function to each storage module — `storage/sqlite_store.py` (`DELETE FROM items`/`ingestion_runs`/`sessions`, cascading to `chunks`/`messages` via existing foreign keys), `storage/chroma_store.py` (fetches every id via `collection.get()`, since Chroma's own `delete()` requires `ids` or a `where` filter — there's no single "delete everything" call), and `storage/neo4j_store.py` (`MATCH (n) DETACH DELETE n`, mirroring the test fixtures' own wipe pattern). The three stores have no shared transaction, so `agent/admin.py::reset_all_data()` attempts all three even if an earlier one fails, collecting failures into a single `AdminError` naming exactly which store(s) didn't reset — better to get as far as possible and report precisely what's left in an inconsistent state than to abort early and leave two stores untouched with no visibility into which. `POST /api/admin/reset` requires an explicit `{"confirm": true}` body field (422 otherwise) — a cheap guard against an accidental call to a destructive, irreversible endpoint, on top of the frontend's own `window.confirm()` prompt.
+
+**Verified against real data**: full backend suite passes, including a real-Neo4j-backed API test that writes SQLite/Chroma/Neo4j data, calls the endpoint, and confirms all three are empty afterward.
+
+**Affects**: `storage/sqlite_store.py`, `storage/chroma_store.py`, `storage/neo4j_store.py`, `agent/admin.py` (new), `api/routes/admin.py` (new), `api/schemas.py`, `api/main.py`, `frontend/src/components/SettingsPanel.jsx`, `frontend/src/api/client.js`
+
+---
+
 ## 2026-08-30 — Relationship graph view: `GET /api/graph`
 
 **Context**: The frontend had no way to see the Neo4j relationship graph at all — the whole point of the graph layer (relationship detection, `RELATES_TO` edges) was invisible to the user. Requested directly (see issue #57).

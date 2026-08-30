@@ -194,6 +194,28 @@ def delete_by_item(collection: Collection, item_id: str) -> None:
         ) from exc
 
 
+def reset_all(collection: Collection) -> None:
+    """Delete every chunk vector in the collection.
+
+    Chroma's own ``delete()`` requires ``ids`` or a ``where`` filter — there
+    is no "delete everything" call — so this fetches every id first, then
+    deletes them in one call. A no-op on an already-empty collection. See
+    ``agent/admin.py``, ``DECISIONS.md``.
+
+    Args:
+        collection: An open collection from :func:`get_collection`.
+
+    Raises:
+        VectorStoreError: If the fetch or delete fails.
+    """
+    try:
+        all_ids = collection.get(include=[])["ids"]
+        if all_ids:
+            collection.delete(ids=all_ids)
+    except Exception as exc:
+        raise VectorStoreError(f"Could not reset the vector store: {exc}") from exc
+
+
 def get_item_embeddings(collection: Collection, item_id: str) -> list[list[float]]:
     """Fetch every stored embedding for an item's chunks.
 

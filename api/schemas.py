@@ -177,6 +177,23 @@ class IngestTriggerResponse(BaseModel):
     run_id: str
 
 
+class AdminResetRequest(BaseModel):
+    """``POST /api/admin/reset`` request body.
+
+    ``confirm`` must be explicitly ``true`` — a cheap guard against an
+    accidental call to a destructive, hard-to-reverse endpoint. Extension
+    beyond ``docs/API_Specification.docx`` — see ``DECISIONS.md``.
+    """
+
+    confirm: bool
+
+
+class AdminResetResponse(BaseModel):
+    """``POST /api/admin/reset`` response body."""
+
+    status: Literal["reset"]
+
+
 class GraphNodeResponse(BaseModel):
     """One item, within a ``GraphResponse``."""
 

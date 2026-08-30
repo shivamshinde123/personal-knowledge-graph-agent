@@ -23,6 +23,7 @@ from storage.sqlite_store import (
     list_sessions,
     record_conversation_turn,
     replace_chunks,
+    reset_all,
     start_ingestion_run,
 )
 
@@ -401,3 +402,25 @@ class TestGetMessagesForSession:
         messages = get_messages_for_session(conn, "sess-a")
 
         assert [m.text for m in messages] == ["Q-a", "A-a"]
+
+
+class TestResetAll:
+    def test_wipes_every_table(self, conn):
+        insert_item(conn, make_item())
+        replace_chunks(conn, "item-1", [make_chunk()])
+        run_id = start_ingestion_run(conn)
+        complete_ingestion_run(conn, run_id, status="success", items_processed=1)
+        record_conversation_turn(conn, "sess-1", "Q", "A", None)
+
+        reset_all(conn)
+
+        assert get_item(conn, "item-1") is None
+        assert get_chunks_for_item(conn, "item-1") == []
+        assert get_last_ingestion_run(conn) is None
+        assert list_sessions(conn) == []
+        assert get_messages_for_session(conn, "sess-1") == []
+
+    def test_no_op_on_an_already_empty_database(self, conn):
+        reset_all(conn)  # doesn't raise
+
+        assert list_sessions(conn) == []

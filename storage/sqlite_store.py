@@ -381,6 +381,34 @@ def delete_item(conn: sqlite3.Connection, item_id: str) -> None:
         raise StorageError(f"Could not delete item {item_id!r}: {exc}") from exc
 
 
+def reset_all(conn: sqlite3.Connection) -> None:
+    """Delete every row from every table, leaving the schema itself intact.
+
+    ``DELETE FROM items`` and ``DELETE FROM sessions`` cascade to
+    ``chunks``/``messages`` via their ``ON DELETE CASCADE`` foreign keys
+    (see ``_SCHEMA`` above), so those two tables aren't deleted from
+    directly. Does not touch Chroma or Neo4j — callers wanting a full
+    reset must also call ``storage/chroma_store.py::reset_all()`` and
+    ``storage/neo4j_store.py::reset_all()``, same "no cross-store foreign
+    keys" reasoning as :func:`delete_item`. See ``agent/admin.py``,
+    ``DECISIONS.md``.
+
+    Args:
+        conn: An open connection from :func:`connect`.
+
+    Raises:
+        StorageError: If the delete fails.
+    """
+    try:
+        conn.execute("DELETE FROM items")
+        conn.execute("DELETE FROM ingestion_runs")
+        conn.execute("DELETE FROM sessions")
+        conn.commit()
+    except sqlite3.Error as exc:
+        conn.rollback()
+        raise StorageError(f"Could not reset the database: {exc}") from exc
+
+
 def insert_chunk(conn: sqlite3.Connection, chunk: Chunk) -> None:
     """Insert a single chunk.
 
