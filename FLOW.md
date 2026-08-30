@@ -91,6 +91,14 @@ both endpoint nodes.
    cascade-on-delete; callers must call this explicitly alongside
    `storage/chroma_store.py::delete_by_item()` since neither store enforces
    foreign keys against SQLite
+5. Whole-graph fetch: `get_full_graph(driver) -> GraphSnapshot(nodes, edges)`
+   — one `MATCH (i:Item) RETURN i` plus one
+   `MATCH (a:Item)-[r:RELATES_TO]->(b:Item) RETURN ...`, no pagination or
+   filtering (the graph stays small by construction — unconnected items
+   never get a node, see point 1's `docs/Database_Schema.docx` section 5
+   note). What `GET /api/graph` (see below) calls, via
+   `agent/graph_view.py::get_graph_snapshot()` — see DECISIONS.md,
+   2026-08-30.
 
 ---
 
@@ -811,6 +819,24 @@ provider config. See DECISIONS.md, 2026-08-30.
    those pages by id (`client.pages.retrieve()`) instead of the
    workspace-wide `client.search()`; empty keeps the original "every page
    the integration can see" behavior
+
+---
+
+## Entry point: `GET /api/graph` (`api/routes/graph.py`)
+
+Extension beyond `docs/API_Specification.docx` — the relationship graph
+wasn't in the original spec. Requested directly for the frontend graph
+view (issue #57). See DECISIONS.md, 2026-08-30.
+
+1. Reads `driver` from `request.app.state`
+2. `agent/graph_view.py::get_graph_snapshot()` — a thin pass-through to
+   `storage/neo4j_store.py::get_full_graph()` (see "Shared: Neo4j storage"
+   above)
+3. `GraphSnapshot` reshaped into `api/schemas.py::GraphResponse`
+   (`nodes: [{id, title, source_type, url}]`, `edges: [{source_id,
+   target_id, label, confidence}]`) and returned — an empty graph (no
+   relationships confirmed yet) returns `{"nodes": [], "edges": []}`, not
+   an error
 
 ---
 

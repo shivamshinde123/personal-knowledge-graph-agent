@@ -175,3 +175,32 @@ class IngestTriggerResponse(BaseModel):
 
     status: Literal["started"]
     run_id: str
+
+
+class GraphNodeResponse(BaseModel):
+    """One item, within a ``GraphResponse``."""
+
+    id: str
+    title: str | None
+    source_type: str
+    url: str | None
+
+
+class GraphEdgeResponse(BaseModel):
+    """One relationship edge, within a ``GraphResponse``."""
+
+    source_id: str
+    target_id: str
+    label: str
+    confidence: float | None
+
+
+class GraphResponse(BaseModel):
+    """``GET /api/graph`` response body.
+
+    Extension beyond ``docs/API_Specification.docx`` — a graph view wasn't
+    in the original spec. See ``DECISIONS.md``.
+    """
+
+    nodes: list[GraphNodeResponse]
+    edges: list[GraphEdgeResponse]

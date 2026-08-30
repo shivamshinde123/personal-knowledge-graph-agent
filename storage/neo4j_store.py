@@ -77,6 +77,23 @@ class RelatedItem:
     direction: Literal["outgoing", "incoming"]
 
 
+@dataclass(slots=True)
+class GraphEdge:
+    """One directed ``RELATES_TO`` edge, for a whole-graph snapshot."""
+
+    source_id: str
+    target_id: str
+    relationship: Relationship
+
+
+@dataclass(slots=True)
+class GraphSnapshot:
+    """Every item node and relationship edge currently in the graph."""
+
+    nodes: list[ItemNode]
+    edges: list[GraphEdge]
+
+
 def _item_properties(item: ItemNode) -> dict[str, object]:
     return {
         "id": item.id,
@@ -327,6 +344,59 @@ def get_related_items(driver: neo4j.Driver, item_id: str) -> list[RelatedItem]:
         )
         for record in records
     ]
+
+
+def get_full_graph(driver: neo4j.Driver) -> GraphSnapshot:
+    """Fetch every item node and relationship edge currently in the graph.
+
+    Per ``docs/Database_Schema.docx`` section 5, only items with at least
+    one confirmed relationship have a node here at all — an item that's
+    never been related to anything simply doesn't appear, which is exactly
+    the useful subset for a relationship *graph* view (an unconnected item
+    wouldn't add anything to one). Used by ``agent/graph_view.py`` for the
+    frontend's graph visualization.
+
+    No pagination or size limit — appropriate for this project's scale
+    (a single user's personal data), not a general-purpose graph API. If
+    the graph grows large enough for this to matter, this is the function
+    to revisit.
+
+    Args:
+        driver: An open driver from :func:`get_driver`.
+
+    Returns:
+        Every node and edge, unfiltered. A node with no edges cannot exist
+        (per the invariant above), but a fetched graph could still be
+        empty if nothing has been related yet.
+
+    Raises:
+        GraphStoreError: If the query fails.
+    """
+    try:
+        with driver.session() as session:
+            node_records = list(session.run("MATCH (i:Item) RETURN i"))
+            edge_records = list(
+                session.run(
+                    "MATCH (a:Item)-[r:RELATES_TO]->(b:Item) "
+                    "RETURN a.id AS source_id, b.id AS target_id, r"
+                )
+            )
+    except _NEO4J_ERRORS as exc:
+        raise GraphStoreError(f"Could not fetch the full graph: {exc}") from exc
+    nodes = [_item_from_node(record["i"]) for record in node_records]
+    edges = [
+        GraphEdge(
+            source_id=record["source_id"],
+            target_id=record["target_id"],
+            relationship=Relationship(
+                label=record["r"]["label"],
+                confidence=record["r"].get("confidence"),
+                created_at=_to_datetime(record["r"].get("created_at")),
+            ),
+        )
+        for record in edge_records
+    ]
+    return GraphSnapshot(nodes=nodes, edges=edges)
 
 
 def delete_relationships_for_item(driver: neo4j.Driver, item_id: str) -> None:

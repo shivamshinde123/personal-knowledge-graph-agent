@@ -22,6 +22,7 @@ from storage.neo4j_store import (
     delete_relationships_for_item,
     ensure_constraints,
     get_driver,
+    get_full_graph,
     get_item,
     get_related_items,
     has_any_relationship,
@@ -188,6 +189,48 @@ class TestGetRelatedItems:
 
     def test_item_with_no_relationships_has_no_neighbors(self, driver):
         assert get_related_items(driver, "never-written") == []
+
+
+class TestGetFullGraph:
+    def test_empty_graph_returns_no_nodes_or_edges(self, driver):
+        snapshot = get_full_graph(driver)
+
+        assert snapshot.nodes == []
+        assert snapshot.edges == []
+
+    def test_returns_every_node_and_edge(self, driver):
+        a, b, c = make_item(id="a"), make_item(id="b"), make_item(id="c")
+        write_relationship(driver, a, b, Relationship(label="implements"))
+        write_relationship(driver, b, c, Relationship(label="discussed_in"))
+
+        snapshot = get_full_graph(driver)
+
+        assert {n.id for n in snapshot.nodes} == {"a", "b", "c"}
+        assert len(snapshot.edges) == 2
+        by_pair = {
+            (e.source_id, e.target_id): e.relationship.label for e in snapshot.edges
+        }
+        assert by_pair[("a", "b")] == "implements"
+        assert by_pair[("b", "c")] == "discussed_in"
+
+    def test_edge_carries_its_confidence_and_created_at(self, driver):
+        a, b = make_item(id="a"), make_item(id="b")
+        write_relationship(
+            driver,
+            a,
+            b,
+            Relationship(
+                label="implements",
+                confidence=0.85,
+                created_at=datetime(2026, 8, 1, tzinfo=UTC),
+            ),
+        )
+
+        snapshot = get_full_graph(driver)
+
+        edge = snapshot.edges[0]
+        assert edge.relationship.confidence == 0.85
+        assert edge.relationship.created_at == datetime(2026, 8, 1, tzinfo=UTC)
 
 
 class TestDeleteItem:

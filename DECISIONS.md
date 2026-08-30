@@ -8,6 +8,20 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-30 — Relationship graph view: `GET /api/graph`
+
+**Context**: The frontend had no way to see the Neo4j relationship graph at all — the whole point of the graph layer (relationship detection, `RELATES_TO` edges) was invisible to the user. Requested directly (see issue #57).
+
+**Decision**: Added `storage/neo4j_store.py::get_full_graph()` — one `MATCH (i:Item) RETURN i` plus one `MATCH (a:Item)-[r:RELATES_TO]->(b:Item) RETURN ...` per call, returning a new `GraphSnapshot` dataclass (`nodes: list[ItemNode]`, `edges: list[GraphEdge]`). Deliberately a full-graph fetch, not paginated or filtered — per `Database_Schema.docx` section 5, a node only exists once it has at least one confirmed relationship, so the graph is expected to stay small (unconnected items never appear), and a single-user local system doesn't need pagination here. Added the usual thin pass-through wrapper `agent/graph_view.py::get_graph_snapshot()` (storage → agent → api, never api → storage directly, per `Component_Map.docx`), and `GET /api/graph` (`api/routes/graph.py`) mapping the snapshot to `GraphResponse`/`GraphNodeResponse`/`GraphEdgeResponse` (`api/schemas.py`) — an extension beyond `API_Specification.docx`, which predates this feature.
+
+**Test infrastructure fix along the way**: `tests/test_api/conftest.py`'s shared `driver` fixture does not wipe the real local Neo4j database before/after each test — unlike every other Neo4j `driver` fixture in the codebase (`tests/test_storage/test_neo4j_store.py`, `tests/test_agent/test_graph_view.py`). That's a deliberate, pre-existing choice there (most `test_api/` route tests never write real graph data, so wiping on every test would be wasted work), but it means any test that *does* write real relationship data — like the new `test_graph_route.py` — must wipe around itself rather than relying on the shared fixture to do it. Added an `autouse` `clean_graph` fixture, scoped to that one test file, rather than changing the shared fixture's behavior for every other `test_api/` test.
+
+**Verified against real data**: real `write_relationship()` call against the real local Neo4j instance, followed by a real `GET /api/graph` request against the real running backend, returned the expected node/edge shape; the manually-inserted verification nodes were then removed via a targeted, ID-scoped delete so the real graph was left in its original state.
+
+**Affects**: `storage/neo4j_store.py`, `agent/graph_view.py` (new), `api/routes/graph.py` (new), `api/schemas.py`, `api/main.py`, `tests/test_api/conftest.py` usage pattern (see above), `tests/test_agent/test_graph_view.py` (new), `tests/test_api/test_graph_route.py` (new)
+
+---
+
 ## 2026-08-30 — Configurable local watch folders and Notion page scope, from Settings
 
 **Context**: `LOCAL_FILES_WATCH_DIRS` was only editable by hand-editing `config/.env`; Notion had no scoping at all — `extractors/notion.py` always ingested every page the integration could see, with no way to restrict it. Requested directly (see issue #55, partially addressed here — the first-run wizard half is still open).
