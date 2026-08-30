@@ -4,6 +4,8 @@ import {
   getSourceConfig,
   getSourceConnections,
   getSourcesStatus,
+  postAdminReset,
+  postIngestTrigger,
   putSettings,
   putSourceConfig,
   verifySourceConnections,
@@ -58,6 +60,10 @@ function SettingsPanel() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null);
   const [isVerifying, setIsVerifying] = useState(false);
+  const [isTriggeringIngest, setIsTriggeringIngest] = useState(false);
+  const [ingestStatus, setIngestStatus] = useState(null);
+  const [isResetting, setIsResetting] = useState(false);
+  const [resetStatus, setResetStatus] = useState(null);
 
   useEffect(() => {
     Promise.all([
@@ -66,13 +72,15 @@ function SettingsPanel() {
       getSourceConnections(),
       getSourceConfig(),
     ])
-      .then(([settingsResult, sourcesResult, connectionsResult, sourceConfig]) => {
-        setSettings(settingsResult);
-        setSources(sourcesResult);
-        setConnections(connectionsResult);
-        setWatchDirsText(sourceConfig.local_files_watch_dirs.join("\n"));
-        setNotionPageIdsText(sourceConfig.notion_page_ids.join("\n"));
-      })
+      .then(
+        ([settingsResult, sourcesResult, connectionsResult, sourceConfig]) => {
+          setSettings(settingsResult);
+          setSources(sourcesResult);
+          setConnections(connectionsResult);
+          setWatchDirsText(sourceConfig.local_files_watch_dirs.join("\n"));
+          setNotionPageIdsText(sourceConfig.notion_page_ids.join("\n"));
+        },
+      )
       .catch((error) => setLoadError(error.message));
   }, []);
 
@@ -84,6 +92,48 @@ function SettingsPanel() {
       setLoadError(error.message);
     } finally {
       setIsVerifying(false);
+    }
+  }
+
+  async function handleTriggerIngestion() {
+    setIsTriggeringIngest(true);
+    setIngestStatus(null);
+    try {
+      const result = await postIngestTrigger();
+      setIngestStatus({
+        ok: true,
+        text: `Started (${result.run_id}). Check back here in a few minutes for updated counts.`,
+      });
+    } catch (error) {
+      setIngestStatus({ ok: false, text: error.message });
+    } finally {
+      setIsTriggeringIngest(false);
+    }
+  }
+
+  async function handleResetAll() {
+    const confirmed = window.confirm(
+      "This permanently deletes every ingested item, embedding, and " +
+        "relationship — SQLite, Chroma, and Neo4j are all wiped. This " +
+        "cannot be undone. Continue?",
+    );
+    if (!confirmed) return;
+
+    setIsResetting(true);
+    setResetStatus(null);
+    try {
+      await postAdminReset();
+      const [sourcesResult, connectionsResult] = await Promise.all([
+        getSourcesStatus(),
+        getSourceConnections(),
+      ]);
+      setSources(sourcesResult);
+      setConnections(connectionsResult);
+      setResetStatus({ ok: true, text: "All data has been reset." });
+    } catch (error) {
+      setResetStatus({ ok: false, text: error.message });
+    } finally {
+      setIsResetting(false);
     }
   }
 
@@ -178,8 +228,8 @@ function SettingsPanel() {
       <section className="settings-section">
         <h2>Local folders to watch</h2>
         <p className="settings-field-hint">
-          One folder path per line. Files added or changed in these folders
-          are picked up on the next ingestion run.
+          One folder path per line. Files added or changed in these folders are
+          picked up on the next ingestion run.
         </p>
         <textarea
           className="source-scope-textarea"
@@ -193,8 +243,8 @@ function SettingsPanel() {
       <section className="settings-section">
         <h2>Notion page scope</h2>
         <p className="settings-field-hint">
-          One page or database ID per line. Leave empty to ingest every
-          page the Notion integration can see.
+          One page or database ID per line. Leave empty to ingest every page the
+          Notion integration can see.
         </p>
         <textarea
           className="source-scope-textarea"
@@ -203,6 +253,30 @@ function SettingsPanel() {
           onChange={(event) => setNotionPageIdsText(event.target.value)}
           placeholder="e.g. 1a2b3c4d5e6f7890abcd1234ef567890"
         />
+      </section>
+
+      <section className="settings-section">
+        <div className="settings-section-header">
+          <h2>Data Ingestion</h2>
+          <button
+            type="button"
+            className="reverify-button"
+            onClick={handleTriggerIngestion}
+            disabled={isTriggeringIngest}
+          >
+            {isTriggeringIngest ? "Starting…" : "Run ingestion now"}
+          </button>
+        </div>
+        <p className="settings-field-hint">
+          Normally runs once a day on a schedule. This starts a run immediately,
+          outside the schedule — useful right after changing the folders/pages
+          above.
+        </p>
+        {ingestStatus && (
+          <span className={`save-status ${ingestStatus.ok ? "" : "error"}`}>
+            {ingestStatus.text}
+          </span>
+        )}
       </section>
 
       <section className="settings-section">
@@ -252,6 +326,28 @@ function SettingsPanel() {
             );
           })}
         </div>
+      </section>
+
+      <section className="settings-section danger-zone">
+        <h2>Danger Zone</h2>
+        <p className="settings-field-hint">
+          Permanently deletes every ingested item, embedding, and relationship.
+          Use this to recover from a bad ingestion run or to restart from a
+          clean slate — there is no undo.
+        </p>
+        <button
+          type="button"
+          className="danger-button"
+          onClick={handleResetAll}
+          disabled={isResetting}
+        >
+          {isResetting ? "Resetting…" : "Reset all data"}
+        </button>
+        {resetStatus && (
+          <span className={`save-status ${resetStatus.ok ? "" : "error"}`}>
+            {resetStatus.text}
+          </span>
+        )}
       </section>
 
       <button

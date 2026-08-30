@@ -115,6 +115,28 @@ export function getGraph() {
   return request("/graph");
 }
 
+/**
+ * Wipe SQLite, Chroma, and Neo4j back to empty. Destructive and
+ * irreversible — callers must confirm with the user before calling this.
+ * Extension beyond API_Specification.docx — see DECISIONS.md.
+ */
+export function postAdminReset() {
+  return request("/admin/reset", {
+    method: "POST",
+    body: JSON.stringify({ confirm: true }),
+  });
+}
+
+/**
+ * Manually start a daily-batch ingestion run right now, outside the
+ * schedule. Per API_Specification.docx section 3.8 — returns immediately
+ * (202 Accepted); the run itself happens in the background, checked
+ * afterward via getSourcesStatus().
+ */
+export function postIngestTrigger() {
+  return request("/ingest/trigger", { method: "POST" });
+}
+
 /** List past conversation sessions, most recently active first. Per section 3.4. */
 export function getSessions() {
   return request("/sessions");
