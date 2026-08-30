@@ -27,11 +27,13 @@ def fake_env(
     *,
     watch_dirs=(),
     notion_api_key=None,
+    gmail_credentials_path=None,
     browser_history_path=None,
 ):
     return SimpleNamespace(
         watch_dirs=list(watch_dirs),
         notion_api_key=notion_api_key,
+        gmail_credentials_path=gmail_credentials_path,
         browser_history_path=browser_history_path,
     )
 
@@ -57,13 +59,13 @@ class TestCheckAllConnections:
             "browser_history",
         ]
 
-    def test_gmail_github_calendar_are_always_not_configured(self, monkeypatch):
+    def test_github_and_calendar_are_always_not_configured(self, monkeypatch):
         patch_settings(monkeypatch, fake_env())
 
         results = check_all_connections()
 
         by_type = {r.source_type: r for r in results}
-        for source in ("gmail", "github", "calendar"):
+        for source in ("github", "calendar"):
             assert by_type[source].status == "not_configured"
             assert "not yet built" in by_type[source].detail
 
@@ -170,6 +172,78 @@ class TestCheckNotion:
         notion = next(r for r in results if r.source_type == "notion")
         assert notion.status == "error"
         assert "invalid" in notion.detail
+
+
+class TestCheckGmail:
+    def test_no_credentials_path_is_not_configured(self, monkeypatch):
+        patch_settings(monkeypatch, fake_env(gmail_credentials_path=None))
+
+        results = check_all_connections()
+
+        gmail = next(r for r in results if r.source_type == "gmail")
+        assert gmail.status == "not_configured"
+
+    def test_credentials_configured_but_not_yet_authorized_is_not_configured(
+        self, monkeypatch, tmp_path
+    ):
+        from extractors.base import ExtractorError
+
+        patch_settings(
+            monkeypatch, fake_env(gmail_credentials_path=tmp_path / "creds.json")
+        )
+
+        def raise_not_authorized():
+            raise ExtractorError("Gmail is not authorized yet. Run ...")
+
+        monkeypatch.setattr("extractors.gmail._get_credentials", raise_not_authorized)
+
+        results = check_all_connections()
+
+        gmail = next(r for r in results if r.source_type == "gmail")
+        assert gmail.status == "not_configured"
+
+    def test_a_working_authorization_is_ok(self, monkeypatch, tmp_path):
+        patch_settings(
+            monkeypatch, fake_env(gmail_credentials_path=tmp_path / "creds.json")
+        )
+        monkeypatch.setattr("extractors.gmail._get_credentials", lambda: object())
+
+        class FakeProfile:
+            def execute(self):
+                return {"emailAddress": "me@example.com"}
+
+        class FakeUsers:
+            def getProfile(self, userId):
+                return FakeProfile()
+
+        class FakeService:
+            def users(self):
+                return FakeUsers()
+
+        monkeypatch.setattr(
+            "extractors.gmail._build_service", lambda creds: FakeService()
+        )
+
+        results = check_all_connections()
+
+        gmail = next(r for r in results if r.source_type == "gmail")
+        assert gmail.status == "ok"
+
+    def test_a_revoked_token_is_an_error(self, monkeypatch, tmp_path):
+        patch_settings(
+            monkeypatch, fake_env(gmail_credentials_path=tmp_path / "creds.json")
+        )
+
+        def raise_revoked():
+            raise RuntimeError("invalid_grant: Token has been revoked.")
+
+        monkeypatch.setattr("extractors.gmail._get_credentials", raise_revoked)
+
+        results = check_all_connections()
+
+        gmail = next(r for r in results if r.source_type == "gmail")
+        assert gmail.status == "error"
+        assert "revoked" in gmail.detail
 
 
 class TestGetConnectionStatus:
