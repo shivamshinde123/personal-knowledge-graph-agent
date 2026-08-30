@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import base64
 import logging
-from datetime import datetime
+from datetime import UTC, datetime, time, timedelta
 
 import httpx
 
@@ -37,6 +37,30 @@ _PER_PAGE = 100
 _API_VERSION = "2022-11-28"
 
 
+def _effective_window(
+    since: datetime | None, range_start, range_end
+) -> tuple[datetime | None, datetime | None]:
+    """Combine the incremental cursor with a configured date-range scope.
+
+    ``range_start`` (``GITHUB_DATE_RANGE_START``, a ``date``) is a floor:
+    it also caps the very first backfill, but never moves ``since``
+    backward once the incremental cursor has passed it. ``range_end`` is
+    a ceiling applied on every run, not just the first — a real fixed
+    window, per ``DECISIONS.md``. Same helper shape as
+    ``extractors/gmail.py``'s ``_effective_window``.
+
+    Returns:
+        ``(effective_since, until)`` — either may be ``None``.
+    """
+    if range_start is not None:
+        floor = datetime.combine(range_start, time.min, tzinfo=UTC)
+        since = floor if since is None else max(since, floor)
+    until = None
+    if range_end is not None:
+        until = datetime.combine(range_end + timedelta(days=1), time.min, tzinfo=UTC)
+    return since, until
+
+
 def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
     """Extract GitHub activity — commits, PRs, issues, READMEs, stars.
 
@@ -44,7 +68,9 @@ def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
         since: Only include items created/updated after this time. ``None``
             (the first-ever run) includes each repository's full history —
             same "first run backfills everything" behavior as the other
-            extractors.
+            extractors. Combined with ``config/.env``'s
+            ``GITHUB_DATE_RANGE_START``/``GITHUB_DATE_RANGE_END``, if set —
+            see :func:`_effective_window`.
 
     Returns:
         One item per commit/PR/issue/README/starred-repo surviving
@@ -64,6 +90,10 @@ def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
     if not token:
         raise ExtractorError("GITHUB_TOKEN is not configured")
 
+    since, until = _effective_window(
+        since, settings.github_date_range_start, settings.github_date_range_end
+    )
+
     with httpx.Client(
         base_url=_API_BASE,
         headers={
@@ -75,8 +105,9 @@ def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
     ) as client:
         repos = settings.github_repos_list or _list_accessible_repos(client)
         logger.info(
-            "GitHub extraction starting (since=%s, scope=%s)",
+            "GitHub extraction starting (since=%s, until=%s, scope=%s)",
             since,
+            until,
             (
                 f"{len(repos)} configured repo(s)"
                 if settings.github_repos_list
@@ -86,13 +117,13 @@ def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
 
         items: list[ExtractedItem] = []
         try:
-            items.extend(_extract_starred_repos(client, since))
+            items.extend(_extract_starred_repos(client, since, until))
         except Exception as exc:
             logger.warning("Could not extract starred repos: %s", exc)
 
         for full_name in repos:
             try:
-                items.extend(_extract_repo_items(client, full_name, since))
+                items.extend(_extract_repo_items(client, full_name, since, until))
             except Exception as exc:
                 logger.warning("Could not process GitHub repo %s: %s", full_name, exc)
 
@@ -130,7 +161,10 @@ def _list_accessible_repos(client: httpx.Client) -> list[str]:
 
 
 def _extract_repo_items(
-    client: httpx.Client, full_name: str, since: datetime | None
+    client: httpx.Client,
+    full_name: str,
+    since: datetime | None,
+    until: datetime | None,
 ) -> list[ExtractedItem]:
     items: list[ExtractedItem] = []
     for extract in (
@@ -140,7 +174,7 @@ def _extract_repo_items(
         _extract_issues,
     ):
         try:
-            items.extend(extract(client, full_name, since))
+            items.extend(extract(client, full_name, since, until))
         except Exception as exc:
             logger.warning(
                 "Could not extract %s for %s: %s", extract.__name__, full_name, exc
@@ -149,8 +183,16 @@ def _extract_repo_items(
 
 
 def _extract_readme(
-    client: httpx.Client, full_name: str, since: datetime | None
+    client: httpx.Client,
+    full_name: str,
+    since: datetime | None,
+    until: datetime | None,
 ) -> list[ExtractedItem]:
+    # `until` is accepted (for a uniform call shape with the other
+    # extract_* functions in _extract_repo_items()'s loop) but unused — a
+    # README is a single always-current document, not a dated feed, so an
+    # end-date cap doesn't apply to it. See DECISIONS.md.
+    del until
     response = client.get(f"/repos/{full_name}/readme")
     if response.status_code == 404:
         return []
@@ -208,11 +250,16 @@ def _readme_last_modified(
 
 
 def _extract_commits(
-    client: httpx.Client, full_name: str, since: datetime | None
+    client: httpx.Client,
+    full_name: str,
+    since: datetime | None,
+    until: datetime | None,
 ) -> list[ExtractedItem]:
     params: dict = {"per_page": _PER_PAGE}
     if since is not None:
         params["since"] = _to_github_timestamp(since)
+    if until is not None:
+        params["until"] = _to_github_timestamp(until)
 
     items: list[ExtractedItem] = []
     page = 1
@@ -269,7 +316,10 @@ def _commit_changed_files(client: httpx.Client, full_name: str, sha: str) -> lis
 
 
 def _extract_pull_requests(
-    client: httpx.Client, full_name: str, since: datetime | None
+    client: httpx.Client,
+    full_name: str,
+    since: datetime | None,
+    until: datetime | None,
 ) -> list[ExtractedItem]:
     items: list[ExtractedItem] = []
     page = 1
@@ -297,6 +347,11 @@ def _extract_pull_requests(
                 # this page (and every subsequent page) is older still.
                 reached_cutoff = True
                 break
+            if until is not None and created_at is not None and created_at > until:
+                # Newer than the configured end date — skip it, but don't
+                # treat it as the cutoff: an older PR later in this same
+                # page (or a later page) may still be within range.
+                continue
             items.append(_pr_to_item(client, full_name, pr, created_at))
 
         if reached_cutoff or len(batch) < _PER_PAGE:
@@ -343,7 +398,10 @@ def _pr_review_comments(client: httpx.Client, full_name: str, number: int) -> li
 
 
 def _extract_issues(
-    client: httpx.Client, full_name: str, since: datetime | None
+    client: httpx.Client,
+    full_name: str,
+    since: datetime | None,
+    until: datetime | None,
 ) -> list[ExtractedItem]:
     params: dict = {"state": "all", "per_page": _PER_PAGE}
     if since is not None:
@@ -360,6 +418,11 @@ def _extract_issues(
             if "pull_request" in issue:
                 # GitHub's issues endpoint also returns PRs; those are
                 # handled separately by _extract_pull_requests().
+                continue
+            created_at = _parse_timestamp(issue.get("created_at"))
+            if until is not None and created_at is not None and created_at > until:
+                # The issues API has no server-side "until" param (unlike
+                # commits) — filter client-side instead.
                 continue
             items.append(_issue_to_item(full_name, issue))
         if len(batch) < _PER_PAGE:
@@ -384,7 +447,7 @@ def _issue_to_item(full_name: str, issue: dict) -> ExtractedItem:
 
 
 def _extract_starred_repos(
-    client: httpx.Client, since: datetime | None
+    client: httpx.Client, since: datetime | None, until: datetime | None
 ) -> list[ExtractedItem]:
     items: list[ExtractedItem] = []
     page = 1
@@ -403,6 +466,8 @@ def _extract_starred_repos(
         for entry in batch:
             starred_at = _parse_timestamp(entry.get("starred_at"))
             if since is not None and starred_at is not None and starred_at <= since:
+                continue
+            if until is not None and starred_at is not None and starred_at > until:
                 continue
             items.append(_starred_repo_to_item(entry["repo"], starred_at))
         if len(batch) < _PER_PAGE:

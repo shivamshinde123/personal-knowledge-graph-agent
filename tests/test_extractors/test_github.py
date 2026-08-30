@@ -70,6 +70,7 @@ def make_handler(
     issues=(),
     starred=(),
     repo_meta=None,
+    captured_commit_params=None,
 ):
     """Build an ``httpx.MockTransport`` handler faking the GitHub REST API.
 
@@ -88,6 +89,9 @@ def make_handler(
             ``pull_request`` key, to verify they're excluded).
         starred: List of ``{"starred_at": ..., "repo": {...}}`` entries.
         repo_meta: Response body for ``GET /repos/{repo}``.
+        captured_commit_params: If given, every commits-endpoint request's
+            query params are appended to this list, for asserting on
+            ``since``/``until`` in date-range tests.
     """
     commit_details = commit_details or {}
     pr_comments = pr_comments or {}
@@ -112,6 +116,8 @@ def make_handler(
             # README last-modified lookup
             return httpx.Response(200, json=[_commit("readme-sha", "docs: update")])
         if path.endswith("/commits"):
+            if captured_commit_params is not None:
+                captured_commit_params.append(dict(request.url.params))
             return httpx.Response(200, json=list(commits))
         if "/commits/" in path:
             sha = path.rsplit("/", 1)[-1]
@@ -131,7 +137,13 @@ def make_handler(
 
 
 def install_fake_client(
-    monkeypatch, handler, *, github_token="fake-token", github_repos_list=None
+    monkeypatch,
+    handler,
+    *,
+    github_token="fake-token",
+    github_repos_list=None,
+    github_date_range_start=None,
+    github_date_range_end=None,
 ):
     monkeypatch.setattr(
         "extractors.github.get_settings",
@@ -139,6 +151,8 @@ def install_fake_client(
             env=SimpleNamespace(
                 github_token=github_token,
                 github_repos_list=github_repos_list or [],
+                github_date_range_start=github_date_range_start,
+                github_date_range_end=github_date_range_end,
             )
         ),
     )
@@ -310,6 +324,113 @@ class TestStarredRepos:
         assert starred_items[0].source_ref_id == "someone/cool-project:starred"
         assert "A cool project" in starred_items[0].raw_text
         assert "ml" in starred_items[0].raw_text
+
+
+class TestDateRangeScoping:
+    def test_end_date_is_sent_as_the_commits_until_param(self, monkeypatch):
+        from datetime import date
+
+        captured = []
+        handler = make_handler(captured_commit_params=captured)
+        install_fake_client(
+            monkeypatch, handler, github_date_range_end=date(2026, 6, 30)
+        )
+
+        extract_new_items()
+
+        assert len(captured) == 1
+        # Inclusive of the configured end date: the day after it.
+        assert captured[0]["until"] == "2026-07-01T00:00:00Z"
+
+    def test_no_range_configured_sends_no_until_param(self, monkeypatch):
+        captured = []
+        handler = make_handler(captured_commit_params=captured)
+        install_fake_client(monkeypatch, handler)
+
+        extract_new_items()
+
+        assert "until" not in captured[0]
+
+    def test_start_date_floors_an_earlier_since_cursor(self, monkeypatch):
+        from datetime import UTC, date, datetime
+
+        captured = []
+        handler = make_handler(captured_commit_params=captured)
+        install_fake_client(
+            monkeypatch, handler, github_date_range_start=date(2026, 6, 1)
+        )
+        earlier_since = datetime(2020, 1, 1, tzinfo=UTC)
+
+        extract_new_items(earlier_since)
+
+        assert captured[0]["since"] == "2026-06-01T00:00:00Z"
+
+    def test_start_date_does_not_move_a_later_since_cursor_backward(self, monkeypatch):
+        from datetime import UTC, date, datetime
+
+        captured = []
+        handler = make_handler(captured_commit_params=captured)
+        install_fake_client(
+            monkeypatch, handler, github_date_range_start=date(2020, 1, 1)
+        )
+        later_since = datetime(2026, 1, 1, tzinfo=UTC)
+
+        extract_new_items(later_since)
+
+        assert captured[0]["since"] == "2026-01-01T00:00:00Z"
+
+    def test_prs_newer_than_the_end_date_are_excluded(self, monkeypatch):
+        from datetime import date
+
+        handler = make_handler(
+            prs=[_pr(1, "Too new", created_at="2026-08-01T00:00:00Z")]
+        )
+        install_fake_client(
+            monkeypatch, handler, github_date_range_end=date(2026, 6, 30)
+        )
+
+        items = extract_new_items()
+
+        assert not any(":pr:" in i.source_ref_id for i in items)
+
+    def test_issues_newer_than_the_end_date_are_excluded(self, monkeypatch):
+        from datetime import date
+
+        handler = make_handler(
+            issues=[_issue(1, "Too new", created_at="2026-08-01T00:00:00Z")]
+        )
+        install_fake_client(
+            monkeypatch, handler, github_date_range_end=date(2026, 6, 30)
+        )
+
+        items = extract_new_items()
+
+        assert not any(":issue:" in i.source_ref_id for i in items)
+
+    def test_starred_repos_newer_than_the_end_date_are_excluded(self, monkeypatch):
+        from datetime import date
+
+        handler = make_handler(
+            starred=[
+                {
+                    "starred_at": "2026-08-01T00:00:00Z",
+                    "repo": {
+                        "full_name": "someone/cool-project",
+                        "description": "",
+                        "topics": [],
+                        "html_url": "https://github.com/someone/cool-project",
+                    },
+                }
+            ],
+            repos=(),
+        )
+        install_fake_client(
+            monkeypatch, handler, github_date_range_end=date(2026, 6, 30)
+        )
+
+        items = extract_new_items()
+
+        assert not any(i.source_ref_id.endswith(":starred") for i in items)
 
 
 class TestScopedToConfiguredRepos:
