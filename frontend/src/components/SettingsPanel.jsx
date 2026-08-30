@@ -10,6 +10,11 @@ import {
   verifySourceConnections,
 } from "../api/client.js";
 import { useConfirm } from "../hooks/useConfirm.jsx";
+import radioCheckIcon from "../assets/icons/radio-check-icon.svg";
+import saveIcon from "../assets/icons/save-icon.svg";
+import ingestIcon from "../assets/icons/ingest-icon.svg";
+import reverifyIcon from "../assets/icons/reverify-icon.svg";
+import dangerIcon from "../assets/icons/danger-icon.svg";
 
 /** "a\nb\n\nc" -> ["a", "b", "c"] — one entry per non-blank line. */
 function linesToList(text) {
@@ -71,6 +76,11 @@ function SettingsPanel({
   const [connections, setConnections] = useState(null);
   const [watchDirsText, setWatchDirsText] = useState("");
   const [notionPageIdsText, setNotionPageIdsText] = useState("");
+  const [githubReposText, setGithubReposText] = useState("");
+  const [gmailDateRangeStart, setGmailDateRangeStart] = useState("");
+  const [gmailDateRangeEnd, setGmailDateRangeEnd] = useState("");
+  const [githubDateRangeStart, setGithubDateRangeStart] = useState("");
+  const [githubDateRangeEnd, setGithubDateRangeEnd] = useState("");
   const [loadError, setLoadError] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null);
@@ -95,15 +105,30 @@ function SettingsPanel({
         ([settingsResult, sourcesResult, connectionsResult, sourceConfig]) => {
           const watchDirs = sourceConfig.local_files_watch_dirs.join("\n");
           const notionPageIds = sourceConfig.notion_page_ids.join("\n");
+          const githubRepos = sourceConfig.github_repos.join("\n");
+          const gmailStart = sourceConfig.gmail_date_range_start ?? "";
+          const gmailEnd = sourceConfig.gmail_date_range_end ?? "";
+          const githubStart = sourceConfig.github_date_range_start ?? "";
+          const githubEnd = sourceConfig.github_date_range_end ?? "";
           setSettings(settingsResult);
           setSources(sourcesResult);
           setConnections(connectionsResult);
           setWatchDirsText(watchDirs);
           setNotionPageIdsText(notionPageIds);
+          setGithubReposText(githubRepos);
+          setGmailDateRangeStart(gmailStart);
+          setGmailDateRangeEnd(gmailEnd);
+          setGithubDateRangeStart(githubStart);
+          setGithubDateRangeEnd(githubEnd);
           originalRef.current = {
             ...settingsResult,
             watchDirsText: watchDirs,
             notionPageIdsText: notionPageIds,
+            githubReposText: githubRepos,
+            gmailDateRangeStart: gmailStart,
+            gmailDateRangeEnd: gmailEnd,
+            githubDateRangeStart: githubStart,
+            githubDateRangeEnd: githubEnd,
           };
         },
       )
@@ -201,6 +226,21 @@ function SettingsPanel({
     if (notionPageIdsText !== original.notionPageIdsText) {
       changes.push("Notion page scope");
     }
+    if (githubReposText !== original.githubReposText) {
+      changes.push("GitHub repository scope");
+    }
+    if (
+      gmailDateRangeStart !== original.gmailDateRangeStart ||
+      gmailDateRangeEnd !== original.gmailDateRangeEnd
+    ) {
+      changes.push("Gmail date range");
+    }
+    if (
+      githubDateRangeStart !== original.githubDateRangeStart ||
+      githubDateRangeEnd !== original.githubDateRangeEnd
+    ) {
+      changes.push("GitHub date range");
+    }
 
     if (changes.length === 0) {
       setSaveStatus({ ok: true, text: "Nothing changed." });
@@ -244,6 +284,11 @@ function SettingsPanel({
         putSourceConfig({
           local_files_watch_dirs: linesToList(watchDirsText),
           notion_page_ids: linesToList(notionPageIdsText),
+          github_repos: linesToList(githubReposText),
+          gmail_date_range_start: gmailDateRangeStart,
+          gmail_date_range_end: gmailDateRangeEnd,
+          github_date_range_start: githubDateRangeStart,
+          github_date_range_end: githubDateRangeEnd,
         }),
       ]);
       setSettings(settingsResult);
@@ -251,6 +296,11 @@ function SettingsPanel({
         ...settingsResult,
         watchDirsText,
         notionPageIdsText,
+        githubReposText,
+        gmailDateRangeStart,
+        gmailDateRangeEnd,
+        githubDateRangeStart,
+        githubDateRangeEnd,
       };
       setSaveStatus({ ok: true, text: "Saved." });
 
@@ -297,277 +347,406 @@ function SettingsPanel({
   const isLocal = settings.provider_mode === "fully_local";
   const isCloud = settings.provider_mode === "fully_cloud";
 
+  // `ingestionStatus` (App.jsx) is only ever set once something is
+  // triggered/polled *this session* — on a fresh page load (or after
+  // navigating back to Settings in a new tab) it's null even though a
+  // real run happened yesterday. `sources.last_run`, fetched on mount
+  // from the real, persisted `ingestion_runs` table, doesn't have that
+  // gap — same idea as "Last checked" below always showing a real value
+  // rather than only appearing once you click Reverify this session.
+  // Prefer the live `ingestionStatus` when present (it's actively
+  // polling and reflects "status: running" mid-run, which the persisted
+  // row alone can't distinguish from a stale/stuck run), and fall back
+  // to the persisted last run otherwise.
+  const displayedIngestion =
+    ingestionStatus ??
+    (sources.last_run && {
+      startedAt: new Date(sources.last_run.started_at),
+      itemsProcessed: sources.last_run.items_processed,
+      status: sources.last_run.status,
+    });
+
   return (
     <div className="settings-panel">
       {confirmDialog}
-      <h1>Settings</h1>
-
-      <div className="settings-columns">
-        <section className="settings-section">
-          <h2>Generation Provider</h2>
-          {PROVIDER_MODES.map((mode) => (
-            <div className="radio-option" key={mode.value}>
-              <input
-                type="radio"
-                id={`provider-${mode.value}`}
-                name="provider_mode"
-                value={mode.value}
-                checked={settings.provider_mode === mode.value}
-                onChange={() =>
-                  setSettings((prev) => ({
-                    ...prev,
-                    provider_mode: mode.value,
-                  }))
-                }
-              />
-              <div>
-                <label htmlFor={`provider-${mode.value}`}>{mode.label}</label>
-                <p>{mode.description}</p>
-              </div>
-            </div>
-          ))}
-        </section>
-
-        <section className="settings-section">
-          <h2>Models</h2>
-          <p className="settings-field-hint">
-            Generation: only the model matching the provider above is actually
-            used — both are kept here so switching doesn't lose the other side's
-            value. Embedding is separate and always cloud, regardless of which
-            generation provider is selected — there's no local embedding option,
-            so an OpenRouter API key is required either way. Changing the
-            embedding model needs a full data reset and re-ingestion, since
-            existing embeddings won't match the new model — saving a change here
-            will ask you to confirm that first.
+      <div className="settings-header">
+        <div>
+          <h1>Settings</h1>
+          <p className="settings-subtitle">
+            Configure your ambient intelligence environment, models, and data
+            sources.
           </p>
-
-          <div className="model-field">
-            <label htmlFor="local-generation-model">
-              Local generation model
-            </label>
-            <input
-              id="local-generation-model"
-              className="model-select"
-              type="text"
-              disabled={!isLocal}
-              value={settings.local_generation_model}
-              onChange={(event) =>
-                setSettings((prev) => ({
-                  ...prev,
-                  local_generation_model: event.target.value,
-                }))
-              }
-              placeholder="e.g. llama3:8b"
-            />
-          </div>
-
-          <div className="model-field">
-            <label htmlFor="cloud-generation-model">
-              Cloud generation model
-            </label>
-            <input
-              id="cloud-generation-model"
-              className="model-select"
-              type="text"
-              disabled={!isCloud}
-              value={settings.cloud_generation_model}
-              onChange={(event) =>
-                setSettings((prev) => ({
-                  ...prev,
-                  cloud_generation_model: event.target.value,
-                }))
-              }
-              placeholder="e.g. anthropic/claude-sonnet-4"
-            />
-          </div>
-
-          <div className="model-field">
-            <label htmlFor="cloud-embedding-model">
-              Embedding model{" "}
-              <span className="model-field-fixed">(always cloud)</span>
-            </label>
-            <input
-              id="cloud-embedding-model"
-              className="model-select"
-              type="text"
-              value={settings.cloud_embedding_model}
-              onChange={(event) =>
-                setSettings((prev) => ({
-                  ...prev,
-                  cloud_embedding_model: event.target.value,
-                }))
-              }
-              placeholder="e.g. openai/text-embedding-3-small"
-            />
-          </div>
-        </section>
-
-        <section className="settings-section">
-          <div className="settings-section-header">
-            <h2>Local folders to watch</h2>
-            <button
-              type="button"
-              className="reverify-button"
-              onClick={handleBrowseFolder}
-              disabled={isBrowsing}
-            >
-              {isBrowsing ? "Browsing…" : "Browse…"}
-            </button>
-          </div>
-          <p className="settings-field-hint">
-            One folder path per line — paste a path, or use "Browse…" to pick
-            one. Files added or changed in these folders are picked up on the
-            next ingestion run.
-          </p>
-          <textarea
-            className="source-scope-textarea"
-            rows={3}
-            value={watchDirsText}
-            onChange={(event) => setWatchDirsText(event.target.value)}
-            placeholder={"C:\\Users\\you\\Documents\\Notes"}
-          />
-        </section>
-
-        <section className="settings-section">
-          <h2>Notion page scope</h2>
-          <p className="settings-field-hint">
-            One page or database ID per line. Leave empty to ingest every page
-            the Notion integration can see.
-          </p>
-          <textarea
-            className="source-scope-textarea"
-            rows={3}
-            value={notionPageIdsText}
-            onChange={(event) => setNotionPageIdsText(event.target.value)}
-            placeholder="e.g. 1a2b3c4d5e6f7890abcd1234ef567890"
-          />
-        </section>
-
-        <section className="settings-section">
-          <div className="settings-section-header">
-            <h2>Data Ingestion</h2>
-            <button
-              type="button"
-              className="reverify-button"
-              onClick={handleTriggerIngestion}
-              disabled={isTriggeringIngest}
-            >
-              {isTriggeringIngest ? "Starting…" : "Run ingestion now"}
-            </button>
-          </div>
-          <p className="settings-field-hint">
-            Normally runs once a day on a schedule. This starts a run
-            immediately, outside the schedule — useful right after changing the
-            folders/pages above. A notification appears once it finishes, even
-            from another screen.
-          </p>
-          {ingestionStatus && (
-            <div className="ingestion-progress">
-              <div className="ingestion-progress-header">
-                <span>
-                  Started at {ingestionStatus.startedAt.toLocaleTimeString()}
-                  {ingestionStatus.status !== "running" && (
-                    <>
-                      {" "}
-                      ·{" "}
-                      {ingestionStatus.status === "success"
-                        ? "Completed"
-                        : `Finished (${ingestionStatus.status})`}
-                    </>
-                  )}
-                </span>
-                <span>{ingestionStatus.itemsProcessed} item(s) processed</span>
-              </div>
-              <div
-                className={`ingestion-progress-bar ${ingestionStatus.status === "running" ? "running" : ingestionStatus.status}`}
-              >
-                <div className="ingestion-progress-bar-fill" />
-              </div>
-            </div>
-          )}
-        </section>
-
-        <section className="settings-section">
-          <div className="settings-section-header">
-            <h2>Connected Data Sources</h2>
-            <button
-              type="button"
-              className="reverify-button"
-              onClick={handleReverify}
-              disabled={isVerifying}
-            >
-              {isVerifying ? "Checking…" : "Reverify"}
-            </button>
-          </div>
-          {connections.connections.length > 0 && (
-            <p className="connections-checked-at">
-              Last checked:{" "}
-              {new Date(connections.connections[0].checked_at).toLocaleString()}
-            </p>
-          )}
-          <div className="sources-grid">
-            {connections.connections.map((connection) => {
-              const sourceCounts = sources.sources.find(
-                (source) => source.source_type === connection.source_type,
-              );
-              return (
-                <div
-                  className="source-status-card"
-                  key={connection.source_type}
-                  title={connection.detail ?? undefined}
-                >
-                  <span>{connection.source_type.replace("_", " ")}</span>
-                  <span className="source-status-value">
-                    <span className={`status-dot ${connection.status}`} />
-                    {CONNECTION_LABELS[connection.status] ?? connection.status}
-                    {connection.status === "ok" &&
-                      sourceCounts !== undefined && (
-                        <span className="source-item-count">
-                          ({sourceCounts.total_items} total
-                          {sourceCounts.items_processed > 0
-                            ? `, ${sourceCounts.items_processed} new`
-                            : ""}
-                          )
-                        </span>
-                      )}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-
-        <section className="settings-section danger-zone">
-          <h2>Danger Zone</h2>
-          <p className="settings-field-hint">
-            Permanently deletes every ingested item, embedding, and
-            relationship. Use this to recover from a bad ingestion run or to
-            restart from a clean slate — there is no undo.
-          </p>
+        </div>
+        <div className="save-action">
           <button
             type="button"
-            className="danger-button"
-            onClick={handleResetAll}
-            disabled={isResetting}
+            className="save-button"
+            onClick={handleSave}
+            disabled={isSaving}
           >
-            {isResetting ? "Resetting…" : "Reset all data"}
+            {isSaving ? "Saving…" : "Save Changes"}
+            <img src={saveIcon} alt="" aria-hidden="true" />
           </button>
-        </section>
+          {saveStatus && (
+            <span className={`save-status ${saveStatus.ok ? "" : "error"}`}>
+              {saveStatus.text}
+            </span>
+          )}
+        </div>
       </div>
 
-      <button
-        type="button"
-        className="save-button"
-        onClick={handleSave}
-        disabled={isSaving}
-      >
-        {isSaving ? "Saving…" : "Save Changes"}
-      </button>
-      {saveStatus && (
-        <span className={`save-status ${saveStatus.ok ? "" : "error"}`}>
-          {saveStatus.text}
-        </span>
-      )}
+      <div className="settings-columns">
+        <div className="settings-column">
+          <section className="settings-section">
+            <h2>Generation Provider</h2>
+            <p className="settings-field-hint">
+              Select where processing occurs. Cloud offers higher quality, local
+              ensures privacy.
+            </p>
+            {PROVIDER_MODES.map((mode) => {
+              const selected = settings.provider_mode === mode.value;
+              return (
+                <label
+                  className={`radio-option ${selected ? "selected" : ""}`}
+                  key={mode.value}
+                >
+                  <input
+                    type="radio"
+                    name="provider_mode"
+                    value={mode.value}
+                    checked={selected}
+                    onChange={() =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        provider_mode: mode.value,
+                      }))
+                    }
+                  />
+                  <span className="radio-option-dot">
+                    {selected && (
+                      <img src={radioCheckIcon} alt="" aria-hidden="true" />
+                    )}
+                  </span>
+                  <span className="radio-option-body">
+                    <span className="radio-option-label">{mode.label}</span>
+                    <p>{mode.description}</p>
+                  </span>
+                </label>
+              );
+            })}
+          </section>
+
+          <section className="settings-section">
+            <h2>Models</h2>
+            <p className="settings-field-hint">
+              Generation: only the model matching the provider above is actually
+              used — both are kept here so switching doesn't lose the other
+              side's value. Embedding is separate and always cloud, regardless
+              of which generation provider is selected — there's no local
+              embedding option, so an OpenRouter API key is required either way.
+              Changing the embedding model needs a full data reset and
+              re-ingestion, since existing embeddings won't match the new model
+              — saving a change here will ask you to confirm that first.
+            </p>
+
+            <div className="model-field">
+              <label htmlFor="local-generation-model">
+                Local generation model
+              </label>
+              <input
+                id="local-generation-model"
+                className="model-select"
+                type="text"
+                disabled={!isLocal}
+                value={settings.local_generation_model}
+                onChange={(event) =>
+                  setSettings((prev) => ({
+                    ...prev,
+                    local_generation_model: event.target.value,
+                  }))
+                }
+                placeholder="e.g. llama3:8b"
+              />
+            </div>
+
+            <div className="model-field">
+              <label htmlFor="cloud-generation-model">
+                Cloud generation model
+              </label>
+              <input
+                id="cloud-generation-model"
+                className="model-select"
+                type="text"
+                disabled={!isCloud}
+                value={settings.cloud_generation_model}
+                onChange={(event) =>
+                  setSettings((prev) => ({
+                    ...prev,
+                    cloud_generation_model: event.target.value,
+                  }))
+                }
+                placeholder="e.g. anthropic/claude-sonnet-4"
+              />
+            </div>
+
+            <div className="model-field">
+              <div className="model-field-label-row">
+                <label htmlFor="cloud-embedding-model">Embedding model</label>
+                <span className="model-field-fixed">Always cloud</span>
+              </div>
+              <input
+                id="cloud-embedding-model"
+                className="model-select"
+                type="text"
+                value={settings.cloud_embedding_model}
+                onChange={(event) =>
+                  setSettings((prev) => ({
+                    ...prev,
+                    cloud_embedding_model: event.target.value,
+                  }))
+                }
+                placeholder="e.g. openai/text-embedding-3-small"
+              />
+            </div>
+          </section>
+
+          <section className="settings-section danger-zone">
+            <h2>
+              <img src={dangerIcon} alt="" aria-hidden="true" />
+              Danger Zone
+            </h2>
+            <p className="settings-field-hint">
+              Permanently deletes every ingested item, embedding, and
+              relationship. Use this to recover from a bad ingestion run or to
+              restart from a clean slate — there is no undo.
+            </p>
+            <button
+              type="button"
+              className="danger-button"
+              onClick={handleResetAll}
+              disabled={isResetting}
+            >
+              {isResetting ? "Resetting…" : "Reset all data"}
+            </button>
+          </section>
+        </div>
+
+        <div className="settings-column">
+          <section className="settings-section">
+            <div className="settings-section-header">
+              <h2>Local folders to watch</h2>
+              <button
+                type="button"
+                className="settings-ghost-button"
+                onClick={handleBrowseFolder}
+                disabled={isBrowsing}
+              >
+                {isBrowsing ? "Browsing…" : "Browse…"}
+              </button>
+            </div>
+            <p className="settings-field-hint">
+              One folder path per line — paste a path, or use "Browse…" to pick
+              one. Files added or changed in these folders are picked up on the
+              next ingestion run.
+            </p>
+            <textarea
+              className="source-scope-textarea"
+              rows={3}
+              value={watchDirsText}
+              onChange={(event) => setWatchDirsText(event.target.value)}
+              placeholder={"C:\\Users\\you\\Documents\\Notes"}
+            />
+          </section>
+
+          <section className="settings-section">
+            <h2>Notion page scope</h2>
+            <p className="settings-field-hint">
+              One page or database ID per line. Leave empty to ingest every page
+              the Notion integration can see.
+            </p>
+            <textarea
+              className="source-scope-textarea"
+              rows={3}
+              value={notionPageIdsText}
+              onChange={(event) => setNotionPageIdsText(event.target.value)}
+              placeholder="e.g. 1a2b3c4d5e6f7890abcd1234ef567890"
+            />
+          </section>
+
+          <section className="settings-section">
+            <h2>GitHub repository scope</h2>
+            <p className="settings-field-hint">
+              One <code>owner/repo</code> per line. Leave empty to ingest every
+              repository the token can access.
+            </p>
+            <textarea
+              className="source-scope-textarea"
+              rows={3}
+              value={githubReposText}
+              onChange={(event) => setGithubReposText(event.target.value)}
+              placeholder="e.g. octocat/hello-world"
+            />
+          </section>
+
+          <section className="settings-section">
+            <h2>Gmail date range</h2>
+            <p className="settings-field-hint">
+              Only ingest messages within this range. Leave either side empty
+              for no floor/ceiling.
+            </p>
+            <div className="date-range-fields">
+              <label>
+                From
+                <input
+                  type="date"
+                  value={gmailDateRangeStart}
+                  onChange={(event) =>
+                    setGmailDateRangeStart(event.target.value)
+                  }
+                />
+              </label>
+              <label>
+                To
+                <input
+                  type="date"
+                  value={gmailDateRangeEnd}
+                  onChange={(event) => setGmailDateRangeEnd(event.target.value)}
+                />
+              </label>
+            </div>
+          </section>
+
+          <section className="settings-section">
+            <h2>GitHub date range</h2>
+            <p className="settings-field-hint">
+              Only ingest commits, PRs, issues, and stars within this range.
+              Leave either side empty for no floor/ceiling.
+            </p>
+            <div className="date-range-fields">
+              <label>
+                From
+                <input
+                  type="date"
+                  value={githubDateRangeStart}
+                  onChange={(event) =>
+                    setGithubDateRangeStart(event.target.value)
+                  }
+                />
+              </label>
+              <label>
+                To
+                <input
+                  type="date"
+                  value={githubDateRangeEnd}
+                  onChange={(event) =>
+                    setGithubDateRangeEnd(event.target.value)
+                  }
+                />
+              </label>
+            </div>
+          </section>
+
+          <section className="settings-section">
+            <div className="settings-section-header settings-section-header-bordered">
+              <div>
+                <h2>Data Ingestion</h2>
+                <p className="settings-field-hint">
+                  Normally runs once a day on a schedule.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="settings-ghost-button"
+                onClick={handleTriggerIngestion}
+                disabled={isTriggeringIngest}
+              >
+                <img src={ingestIcon} alt="" aria-hidden="true" />
+                {isTriggeringIngest ? "Starting…" : "Run ingestion now"}
+              </button>
+            </div>
+            {displayedIngestion && (
+              <div className="ingestion-progress">
+                <div className="ingestion-progress-header">
+                  <span>
+                    Started at {displayedIngestion.startedAt.toLocaleString()}
+                    {displayedIngestion.status !== "running" && (
+                      <>
+                        {" "}
+                        ·{" "}
+                        {displayedIngestion.status === "success"
+                          ? "Completed"
+                          : `Finished (${displayedIngestion.status})`}
+                      </>
+                    )}
+                  </span>
+                  <span>
+                    {displayedIngestion.itemsProcessed} item(s) processed
+                  </span>
+                </div>
+                <div
+                  className={`ingestion-progress-bar ${displayedIngestion.status === "running" ? "running" : displayedIngestion.status}`}
+                >
+                  <div className="ingestion-progress-bar-fill" />
+                </div>
+              </div>
+            )}
+
+            <div className="settings-section-header">
+              <h3>Connected Data Sources</h3>
+              <button
+                type="button"
+                className="settings-text-button"
+                onClick={handleReverify}
+                disabled={isVerifying}
+              >
+                <img src={reverifyIcon} alt="" aria-hidden="true" />
+                {isVerifying ? "Checking…" : "Reverify"}
+              </button>
+            </div>
+            {connections.connections.length > 0 && (
+              <p className="connections-checked-at">
+                Last checked:{" "}
+                {new Date(
+                  connections.connections[0].checked_at,
+                ).toLocaleString()}
+              </p>
+            )}
+            <div className="sources-grid">
+              {connections.connections.map((connection) => {
+                const sourceCounts = sources.sources.find(
+                  (source) => source.source_type === connection.source_type,
+                );
+                const connected = connection.status === "ok";
+                return (
+                  <div
+                    className={`source-status-card ${connected ? "" : "dim"}`}
+                    key={connection.source_type}
+                    title={connection.detail ?? undefined}
+                  >
+                    <span>{connection.source_type.replace("_", " ")}</span>
+                    <span className="source-status-value">
+                      <span className={`status-dot ${connection.status}`} />
+                      <span>
+                        {CONNECTION_LABELS[connection.status] ??
+                          connection.status}
+                        {connected && sourceCounts !== undefined && (
+                          <span className="source-item-count">
+                            ({sourceCounts.total_items} total
+                            {sourceCounts.items_processed > 0
+                              ? `, ${sourceCounts.items_processed} new`
+                              : ""}
+                            )
+                          </span>
+                        )}
+                      </span>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        </div>
+      </div>
     </div>
   );
 }

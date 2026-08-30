@@ -7,6 +7,9 @@ requires-python = ">=3.12"
 dependencies = [
     "chromadb>=1.5.9",
     "fastapi>=0.141.1",
+    "google-api-python-client>=2.199.0",
+    "google-auth>=2.57.0",
+    "google-auth-oauthlib>=1.4.1",
     "langchain-ollama>=1.1.0",
     "langchain-openai>=1.6.0",
     "langgraph>=1.2.11",
@@ -47,7 +50,13 @@ convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
 # Tests are self-documenting via their names; don't require docstrings there.
-"tests/**" = ["D100", "D101", "D102", "D103", "D104"]
+# D107/N802/N803 also ignored for tests specifically: a fake test double for
+# an external API (e.g. Gmail/Calendar's Python client, which preserves the
+# REST API's own camelCase parameter names like userId/getProfile verbatim
+# rather than translating to snake_case) must match that real API's method
+# and parameter names exactly to be a faithful fake -- see
+# tests/test_extractors/test_gmail.py.
+"tests/**" = ["D100", "D101", "D102", "D103", "D104", "D107", "N802", "N803"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

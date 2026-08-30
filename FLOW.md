@@ -7,7 +7,7 @@ change to an entry point or call chain.
 > **Status**: the configuration layer, all three storage backends, the
 > provider layer, the entire pipeline layer (`filters`, `chunking`,
 > `metadata`, `embeddings`, `relationships`), `scheduler/daily_batch.py`,
-> and three extractors (local files, Notion, browser history) are
+> and four extractors (local files, Notion, Gmail, browser history) are
 > implemented and merged to `main`. The agent layer is complete:
 > `agent/router.py`, `agent/search_nodes.py`, `agent/graph_traversal.py`,
 > `agent/merger.py`, `agent/synthesizer.py`, and the LangGraph wiring in
@@ -31,8 +31,8 @@ change to an entry point or call chain.
 > (see DECISIONS.md, all 2026-08-29). The evaluation layer
 > (`eval/test_questions.json`, `eval/evaluators.py`,
 > `eval/run_evaluation.py`, `agent/tracing.py`) is implemented and
-> verified against the real LangSmith account (see below). Remaining: the
-> three extractors not yet built (Gmail, GitHub, Google Calendar).
+> verified against the real LangSmith account (see below). Remaining: two
+> extractors not yet built (GitHub, Google Calendar).
 
 ---
 
@@ -365,6 +365,45 @@ calls `pipeline/filters.py` next.
   2026-08-24. Logs an INFO progress line every 25 pages scanned (a full
   scan visits every visible page and can take a long time on a large
   workspace — see DECISIONS.md, 2026-08-24).
+- `extractors/gmail.py` — one item per **thread**, not per message
+  (`docs/Data_Extraction_Specification.docx` section 5 lists thread ID as
+  metadata, but `ExtractedItem` has no generic metadata field to hang it
+  off, so the whole thread — every message, oldest first — is
+  concatenated into one item's `raw_text` instead; a new reply
+  re-extracts and re-embeds the whole conversation, since `source_ref_id`
+  is the thread id — see DECISIONS.md, 2026-08-30). Auth: loads a cached
+  OAuth token (`data/gmail_token.json`), silently refreshing it if
+  expired — never triggers the interactive browser consent flow itself.
+  If no cached token exists yet, raises `ExtractorError` naming the
+  one-time setup command (`setup_auth()`, run via
+  `uv run python -m extractors.gmail --setup-auth`) instead of hanging an
+  unattended run waiting on a consent screen. Lists message ids via
+  `messages().list(q="after:<since>")` (Gmail search syntax), resolves
+  each to its thread id (free — included in the list response), then
+  fetches each distinct thread in full. Per message: labels matching
+  `config.yaml`'s `filters.gmail.excluded_labels` (e.g.
+  `CATEGORY_PROMOTIONS`) are dropped; body text prefers `text/plain`,
+  falling back to a crude HTML-tag-stripped `text/html`; PDF/DOCX
+  attachments get their text extracted via the same `pypdf`/`python-docx`
+  libraries `extractors/local_files.py` uses. A thread where every
+  message was filtered out produces no item. `_effective_window()`
+  combines the incremental `since` cursor with `config/.env`'s
+  `GMAIL_DATE_RANGE_START`/`GMAIL_DATE_RANGE_END`, if set: the start date
+  floors `since` (via `max()`, never moving a later cursor backward) and
+  the end date adds an inclusive `before:` to the Gmail search query on
+  every run — see DECISIONS.md, 2026-08-30.
+- `extractors/github.py` — per repo (scoped to `settings.env.github_repos_list`
+  if set, else every accessible repo — see DECISIONS.md), extracts the
+  README (re-checked via its own last-commit date, not every run),
+  commits (message + changed file names, no diffs), PRs (title/body +
+  review comments), issues (excluding PR-shaped entries via the
+  `pull_request` key), and starred repos (module-level, not per-repo).
+  `_effective_window()` (same shape as `extractors/gmail.py`'s) combines
+  `since` with `GITHUB_DATE_RANGE_START`/`GITHUB_DATE_RANGE_END`: the
+  start date floors `since`; the end date (`until`) is passed as GitHub's
+  own `until` query param for commits, and filtered client-side for PRs/
+  issues/starred repos (those endpoints have no server-side upper bound)
+  — see DECISIONS.md, 2026-08-30.
 - `extractors/browser_history.py` — copies `settings.env.browser_history_path`
   to a temp file before opening it (the browser holds the original locked
   while running — see DECISIONS.md, 2026-08-24), then reads Chrome's `urls`
@@ -529,9 +568,9 @@ test doubles/temp resources instead.
 1. `_run()` reads the watermark via `get_last_run_timestamp(conn)` and
    starts a run record via `start_ingestion_run(conn)`
 2. For each registered extractor in `_EXTRACTORS` (currently
-   `("local_file", local_files.extract_new_items)` and
-   `("notion", notion.extract_new_items)` — adding a source means adding
-   one entry here, per `docs/File_Folder_Structure.docx` section 4;
+   `local_file`, `notion`, `gmail`, `github`, and `browser_history` —
+   adding a source means adding one entry here, per
+   `docs/File_Folder_Structure.docx` section 4;
    `tests/test_scheduler/test_daily_batch.py`'s integration tests pin
    `_EXTRACTORS` to `local_file` only via an autouse fixture, so a new
    entry here never makes those tests real-network-dependent — see
@@ -850,10 +889,15 @@ See DECISIONS.md, 2026-08-29.
    order: `local_file`/`browser_history` — a real filesystem check
    (configured path/dir exists and is reachable); `notion` — a real,
    cheap Notion API call (`Client(auth=...).users.me()`) if
-   `NOTION_API_KEY` is set; `gmail`/`github`/`calendar` — always
-   `"not_configured"` with a "not yet built" detail, since no extractor
-   exists for these yet (see GitHub issues #38-#40) — never silently
-   reported as `"ok"`
+   `NOTION_API_KEY` is set; `gmail` — a real, cheap Gmail API call
+   (`users().getProfile()`) using the cached OAuth token if
+   `GMAIL_CREDENTIALS_PATH` is set — "not yet authorized" (the one-time
+   `setup_auth()` step hasn't been run) reports `"not_configured"`, not
+   an error, since nothing is actually broken; any other failure (revoked
+   token, unreachable API) reports `"error"` — see DECISIONS.md,
+   2026-08-30; `github`/`calendar` — always `"not_configured"` with a
+   "not yet built" detail, since no extractor exists for these yet —
+   never silently reported as `"ok"`
 4. Returns `{"connections": [{"source_type", "status", "detail",
    "checked_at"}, ...]}`, `status` one of `"ok"` / `"error"` /
    `"not_configured"`
@@ -1065,11 +1109,15 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    style — "Chat" (added with the Figma redesign, see DECISIONS.md,
    2026-08-30) calls a new `onOpenChat` prop that only switches
    `App.jsx`'s `view`, unlike "New chat"/a session click, which also touch
-   `sessionId`/`chatKey`. Each nav icon is the exact exported Figma asset
-   (`assets/icons/nav-*.svg`), applied via CSS `mask-image` so the same
-   shape can render in either the muted or `--accent-active` color
-   depending on which tab is current, rather than needing two
-   differently-colored exports per icon — see DECISIONS.md, 2026-08-30
+   `sessionId`/`chatKey`. Each nav icon is `components/icons/NavIcons.jsx`
+   (`ChatIcon`/`GraphIcon`/`SettingsIcon`) — the exact exported Figma
+   asset's path geometry, inlined as SVG with `fill="currentColor"`, so
+   the same shape renders in either the muted or `--accent-active` color
+   depending on which tab is current, without needing two
+   differently-colored exports per icon. An earlier version used `<img>`
+   + CSS `mask-image` for the same effect directly from the exported SVG
+   files; switched to inlining after the mask-image version didn't
+   render — see DECISIONS.md, 2026-08-30
 3. `ChatWindow.jsx` — on mount, if given an existing `sessionId`, calls
    `api/client.js::getSessionHistory()` once and populates messages from
    it (see DECISIONS.md, 2026-08-25). On submit, appends the user message
@@ -1135,11 +1183,24 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    items as it streams through each source), filled solid green/red once
    the run finishes; the live `items_processed` count is shown as text
    alongside it. See DECISIONS.md, 2026-08-30 (the live-progress entry).
-   The settings sections render inside a `.settings-columns` wrapper (CSS
-   multi-column, not a grid — see DECISIONS.md, 2026-08-30) so they
-   self-balance into two columns instead of stretching edge to edge on a
-   wide screen; the page heading and the final Save button/status stay
-   outside it, full width
+   Per the Figma redesign (see DECISIONS.md, 2026-08-30, "screen 2 of
+   3"), the sections render inside two explicit `.settings-column`
+   containers in a real CSS Grid (`.settings-columns`), not an
+   auto-balancing multi-column layout — the design originally grouped
+   *specific* sections into *specific* sides (Generation Provider/Models
+   on the left, Local folders/Notion scope/Data Ingestion/Danger Zone on
+   the right); Danger Zone was later moved into the left column
+   (Generation Provider/Models/Danger Zone) per direct request, so the
+   DOM no longer matches the design's own grouping exactly, but the
+   two-explicit-columns structure itself is unchanged. "Data
+   Ingestion" and "Connected Data Sources" render as one merged card with
+   an internal divider (`.settings-section-header-bordered`) rather than
+   two separate cards — same two handlers/states as before, just one DOM
+   boundary instead of two. "Save Changes" sits in `.settings-header`,
+   top-right next to the page title — moved there (from the bottom of
+   the left column, itself moved from full-width below both columns) per
+   direct request; each move is placement only, `handleSave()` itself is
+   unchanged throughout
 5. `Toasts.jsx` — a pure display component: renders whichever
    `{id, kind, text}` entries are in `App.jsx`'s `toasts` state as a
    fixed top-right stack, each auto-removed after 7 seconds

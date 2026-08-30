@@ -147,17 +147,32 @@ class SourceConfigResponse(BaseModel):
 
     Extension beyond ``docs/API_Specification.docx`` — configurable
     ingestion scope, not just credentials. See ``DECISIONS.md``.
+
+    The four date-range fields are plain ``YYYY-MM-DD`` strings (or
+    ``None``), not a ``date`` type — this matches an HTML
+    ``<input type="date">``'s value directly, so the frontend needs no
+    parsing/formatting boundary. See ``DECISIONS.md``.
     """
 
     local_files_watch_dirs: list[str]
     notion_page_ids: list[str]
+    github_repos: list[str]
+    gmail_date_range_start: str | None
+    gmail_date_range_end: str | None
+    github_date_range_start: str | None
+    github_date_range_end: str | None
 
 
 class SourceConfigUpdateRequest(BaseModel):
-    """``PUT /api/settings/sources`` request body — both fields optional."""
+    """``PUT /api/settings/sources`` request body — every field optional."""
 
     local_files_watch_dirs: list[str] | None = None
     notion_page_ids: list[str] | None = None
+    github_repos: list[str] | None = None
+    gmail_date_range_start: str | None = None
+    gmail_date_range_end: str | None = None
+    github_date_range_start: str | None = None
+    github_date_range_end: str | None = None
 
 
 class BrowseFolderResponse(BaseModel):

@@ -1,5 +1,6 @@
 """Tests for the configuration loader."""
 
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -395,6 +396,60 @@ class TestUpdateSourceConfig:
         )
 
         assert result.notion_page_ids_list == ["page-1", "page-2"]
+
+    def test_updates_github_repos(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+
+        result = update_source_config(
+            github_repos=["me/repo-a", "me/repo-b"], path=env_path
+        )
+
+        assert result.github_repos_list == ["me/repo-a", "me/repo-b"]
+
+    def test_an_empty_github_repos_list_clears_the_setting(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+        update_source_config(github_repos=["me/repo-a"], path=env_path)
+
+        result = update_source_config(github_repos=[], path=env_path)
+
+        assert result.github_repos_list == []
+
+    def test_updates_date_range_fields(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+
+        result = update_source_config(
+            gmail_date_range_start="2026-01-01",
+            gmail_date_range_end="2026-06-30",
+            github_date_range_start="2025-01-01",
+            github_date_range_end="2025-12-31",
+            path=env_path,
+        )
+
+        assert result.gmail_date_range_start == date(2026, 1, 1)
+        assert result.gmail_date_range_end == date(2026, 6, 30)
+        assert result.github_date_range_start == date(2025, 1, 1)
+        assert result.github_date_range_end == date(2025, 12, 31)
+
+    def test_an_empty_string_clears_a_date_range_field(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+        update_source_config(gmail_date_range_start="2026-01-01", path=env_path)
+
+        result = update_source_config(gmail_date_range_start="", path=env_path)
+
+        assert result.gmail_date_range_start is None
+
+    def test_a_none_date_range_field_is_left_unchanged(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+        update_source_config(gmail_date_range_start="2026-01-01", path=env_path)
+
+        result = update_source_config(notion_page_ids=["page-1"], path=env_path)
+
+        assert result.gmail_date_range_start == date(2026, 1, 1)
 
     def test_omitted_fields_are_left_unchanged(self, tmp_path):
         env_path = tmp_path / ".env"

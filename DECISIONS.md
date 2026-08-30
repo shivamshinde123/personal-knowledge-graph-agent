@@ -8,6 +8,76 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-30 — Gmail/GitHub ingestion date-range scoping
+
+**Context**: Gmail and GitHub can pull a large amount of history on first backfill (every message ever, every commit/PR/issue across every accessible repo). Wanted a way to bound that from the Settings screen — both an explicit start/end date range, and (for GitHub, which already supported it at the extractor level via `GITHUB_REPOS` but had no UI/API path to set it) a specific list of repos.
+
+**Decision**: Four new `EnvSettings` fields — `gmail_date_range_start/end`, `github_date_range_start/end` — typed `date | None`, living in `config/.env` alongside `LOCAL_FILES_WATCH_DIRS`/`NOTION_PAGE_IDS`/`GITHUB_REPOS` (the existing precedent for non-secret *scope* settings, as opposed to `config.yaml`'s behavioral settings). Semantics: a start date is a **floor** — `effective_since = max(incremental_since, range_start)` — so it also naturally caps the very first backfill without disabling the normal incremental cursor on later runs. An end date is a **ceiling** applied on every run, not just the first — a real fixed window, since the ask was an explicit start/end range, not just a one-time backfill cap.
+
+`update_source_config()`'s date parameters are plain `str | None` (ISO `"YYYY-MM-DD"` or `""` to clear), not `date | None` — this matches an HTML `<input type="date">`'s value directly (always a string, empty when cleared), so no parsing boundary is needed between the API layer and `.env`. `EnvSettings` itself does the real `date` parsing (pydantic-settings coerces the env string automatically), so extractors get real `date`/`datetime` objects.
+
+**Alternatives considered**: Storing the range in `config.yaml` under `filters` — rejected for consistency: `GITHUB_REPOS` and `NOTION_PAGE_IDS` (identical "scope, not behavior" character) already live in `.env` and are already edited via `update_source_config()`/`PUT /api/settings/sources`; splitting date ranges into `config.yaml` would mean two different edit paths for what's conceptually the same kind of setting.
+
+**Affects**: `config/settings.py` (`EnvSettings`, `update_source_config`), `api/schemas.py`, `api/routes/settings.py`, `extractors/gmail.py`, `extractors/github.py`, `frontend/src/components/SettingsPanel.jsx`.
+
+---
+
+## 2026-08-30 — Ingestion "Started at" timestamp now persists like "Last checked" does
+
+**Context**: `SettingsPanel.jsx`'s "Started at HH:MM:SS" line only ever read `ingestionStatus` (an `App.jsx`-owned, session-only value set when ingestion is triggered/polled) — so a fresh page load, or opening Settings without having triggered a run yet this session, showed nothing at all, even though a real run happened recently. Reported directly: wanted it to "stick" the way "Last checked" (Reverify) already does — that one always shows a real value because it reads `connections.connections[0].checked_at`, fetched fresh on every mount, not session state.
+
+**Decision**: Added a `displayedIngestion` value that prefers the live `ingestionStatus` when present (it's actively polling, and can show `status: "running"` mid-run — something a once-per-mount fetch can't distinguish from a stale row) and falls back to `sources.last_run` (already fetched on mount via `getSourcesStatus()`, backed by the real, persisted `ingestion_runs` table) otherwise. Also switched the timestamp from `toLocaleTimeString()` to `toLocaleString()` (full date, not just time) — a persisted last run could be from a previous day, not just "earlier today," so a bare time would be ambiguous.
+
+**Verified**: real `GET /api/sources/status` against the live backend returns a real `last_run` (`started_at`, `status: "success"`, `items_processed: 108`) from a prior session; confirmed the fallback path renders it.
+
+**Affects**: `frontend/src/components/SettingsPanel.jsx`
+
+---
+
+## 2026-08-30 — Removed the model fields' decorative dropdown chevron
+
+**Context**: The Settings redesign entry above ("screen 2 of 3") added a chevron icon to the three model fields, reasoning at the time that it was "visual only" and harmless since it just matched the design's "Options" box styling. Reported directly as confusing: it reads as a real `<select>` dropdown, but these are (correctly, deliberately) plain free-text `<input>`s — model identifiers are arbitrary strings (any Ollama tag, any OpenRouter model slug), not a fixed enum, so a real dropdown would be wrong here. The chevron was misleading about what the field actually does, which is worse than "harmless."
+
+**Decision**: Removed the chevron from all three model fields (local generation, cloud generation, embedding). The fields themselves are unchanged — still plain text inputs, same handlers, same validation-free behavior as before the redesign entirely.
+
+**Affects**: `frontend/src/components/SettingsPanel.jsx`, `frontend/src/index.css`, `frontend/src/assets/icons/model-select-chevron.svg` (removed)
+
+---
+
+## 2026-08-30 — Sidebar nav icons weren't rendering: switched CSS mask-image for inline SVG
+
+**Context**: The Chat redesign's sidebar nav icons (Chat/Graph/Settings) used `<span>` + CSS `mask-image` (recoloring one exported Figma asset via `background-color: currentColor`, since each icon needed to render in either a muted or active-purple color depending on the current view — see the earlier "Figma redesign, screen 1" entry). Reported directly as not showing up at all.
+
+**Decision**: Replaced with inline SVG React components (`components/icons/NavIcons.jsx`) — the exact same path geometry as the exported assets, `fill="currentColor"` on the `<path>`, matching how this app's original (pre-redesign) stroke icons were themed. This is the same pattern already used elsewhere in the app (`Sidebar.jsx`'s pre-redesign Graph/Settings icons, before this redesign existed at all) and removes any dependency on `mask-image` support/behavior entirely — a plain colored SVG has no browser-compatibility question the way a masked element might. The three now-unused exported SVG files (`nav-chat.svg`, `nav-graph.svg`, `nav-settings.svg`) were deleted; every other icon added during the redesign (chat suggestion chips, settings buttons, etc.) is still a plain `<img>` since those only ever need one fixed color, not a state-dependent recolor — the mask/inline-SVG question only applied here.
+
+**Verified**: `eslint` (zero warnings), production `vite build` (succeeds, three fewer bundled SVG assets).
+
+**Affects**: `frontend/src/components/Sidebar.jsx`, `frontend/src/components/icons/NavIcons.jsx` (new), `frontend/src/index.css`, `frontend/src/assets/icons/nav-{chat,graph,settings}.svg` (removed)
+
+---
+
+## 2026-08-30 — Figma redesign, screen 2 of 3: Settings
+
+**Context**: Requested directly, same Figma file as the Chat redesign — restyle only, functionality unchanged. Branched off `feat/redesign-chat-screen` (not `main` or `feat/relationship-graph-view`) since this screen depends directly on that branch's token palette, Geist font, and icon-asset foundation.
+
+**Two explicit columns, not the earlier multi-column masonry**: the Chat-branch two-column Settings layout (`column-count: 2`, self-balancing by height) predates this redesign and was a reasonable approximation without a real design to match. The actual Figma design groups *specific* sections into *specific* sides — Generation Provider, Models, and Save Changes on the left ("Core Engine Settings"); Local folders, Notion scope, Data Ingestion, and Danger Zone on the right ("Data Sources & Scope") — not just "whichever column is shorter." Replaced with a real two-column CSS Grid and two explicit `.settings-column` containers in the JSX, matching that grouping exactly.
+
+**Data Ingestion and Connected Data Sources merged into one card**: these were two separate `.settings-section` boxes; the design shows them as one card with an internal horizontal divider (a "Run ingestion now" row, then a bordered-off "Connected Data Sources" subsection with its own "Reverify" control). Merged the markup into one `<section>` with an inner `settings-section-header-bordered` divider — no change to either action's handler, state, or behavior, only where the DOM boundary between them falls.
+
+**Save Changes moved into the left column, no longer full-width at the page bottom**: purely a placement change (still the exact same `handleSave()` diff-and-confirm flow) — the design places it directly under the Models card, not spanning the whole page under both columns.
+
+**Radio option restructured as a single `<label>`, not input+label siblings**: needed to swap in a custom purple-dot/checkmark visual instead of the browser's native radio appearance (per the design), which meant visually hiding the native `<input>`. First pass hid the input but left the new dot visual as a sibling *outside* the `<label>`, which regressed a real behavior — clicking the dot didn't toggle the radio, only clicking the text did, unlike the original where clicking the native radio circle itself always worked. Fixed by making `.radio-option` itself the `<label>`, wrapping the (visually hidden) input, the dot, and the text together, so the whole row is one click target again, same as before — see "keep functionality the same" in the request.
+
+**Decorative icons throughout, all exact exported Figma assets** (per the same asset-fidelity approach as the Chat redesign — see the earlier "Figma redesign, screen 1" entry): a checkmark inside the selected radio dot, a chevron on each model field (the fields are still plain free-text `<input>`s, not real dropdowns — the chevron is visual only, matching the design's own "Options" box styling, since model identifiers are arbitrary strings, not a fixed enum, so a real `<select>` would be wrong here), and small icons on the Save/Run-ingestion/Reverify buttons and the Danger Zone heading.
+
+**Skipped the design's footer text** ("Knowledge Agent v2.4.1 • Core Engine Active"): a fabricated version number and status string with no corresponding real data anywhere in the app — adding it would misleadingly imply real version/health tracking that doesn't exist. Omitted rather than inventing fake values to fill it.
+
+**Verified**: `eslint` (zero warnings), production `vite build` (succeeds), and the live dev server against the live backend — every existing Settings behavior (provider/model diffing and confirm-before-save, the embedding-model-change reset+re-ingest flow, Browse…, live ingestion progress, Reverify, Reset all data) exercised unchanged, only the visuals differ.
+
+**Affects**: `frontend/src/index.css`, `frontend/src/components/SettingsPanel.jsx`, `frontend/src/assets/icons/*.svg` (6 new files: radio-check, model-select-chevron, save, ingest, reverify, danger)
+
+---
+
 ## 2026-08-30 — Figma redesign, screen 1 of 3: Chat interface
 
 **Context**: Requested directly — a Figma file (`H5lylGQQm8W8mo7PdL3Syr`, "Untitled") containing a full visual redesign of all three existing screens (Chat, Graph, Settings): ambient blurred-glow backgrounds, translucent/backdrop-blur "glass" cards, a purple accent palette, the Geist typeface. Confirmed with the user up front: roll out one screen/branch/PR at a time starting with Chat, restyle only (no functional/behavioral changes beyond what the design itself implies), dark-only (the design has no light variant, so inventing one would be guessing), and source the Geist font from the official `geist` npm package rather than a Google Fonts CDN link — this is a local-first app with no other runtime network dependency, and self-hosting keeps it that way.
