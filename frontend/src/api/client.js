@@ -108,6 +108,17 @@ export function putSourceConfig(payload) {
 }
 
 /**
+ * Open a native folder-picker dialog on the machine running the backend
+ * (meaningful only because this is a local, single-user system — a
+ * browser can't reveal a picked folder's real filesystem path on its
+ * own). Blocks until the dialog closes; `path` is null if cancelled.
+ * Extension beyond API_Specification.docx — see DECISIONS.md.
+ */
+export function postBrowseFolder() {
+  return request("/settings/browse-folder", { method: "POST" });
+}
+
+/**
  * The whole relationship graph (every item node, every confirmed edge).
  * Extension beyond API_Specification.docx — see DECISIONS.md.
  */

@@ -12,7 +12,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from agent.browse import browse_folder
 from api.schemas import (
+    BrowseFolderResponse,
     SettingsResponse,
     SettingsUpdateRequest,
     SettingsUpdateResponse,
@@ -59,6 +61,17 @@ def get_source_config_route() -> SourceConfigResponse:
         local_files_watch_dirs=[str(d) for d in env.watch_dirs],
         notion_page_ids=env.notion_page_ids_list,
     )
+
+
+@router.post("/settings/browse-folder", response_model=BrowseFolderResponse)
+def browse_folder_route() -> BrowseFolderResponse:
+    """Open a native folder-picker dialog on the server machine.
+
+    Only meaningful because this backend runs on the same local machine as
+    the user — see ``agent/browse.py``. Blocks until the dialog is closed;
+    ``path`` is ``null`` if the user cancelled rather than picking one.
+    """
+    return BrowseFolderResponse(path=browse_folder())
 
 
 @router.put("/settings/sources", response_model=SourceConfigResponse)

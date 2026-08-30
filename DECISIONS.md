@@ -8,6 +8,20 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-30 — Native folder-picker button for local watch folders
+
+**Context**: The "Local folders to watch" field only accepted a pasted path — requested directly: a "Browse…" button that opens a real file explorer and fills the field in.
+
+**Decision**: A browser cannot do this on its own — neither `<input type="file" webkitdirectory>` nor the File System Access API's `showDirectoryPicker()` exposes a picked folder's absolute filesystem path, by deliberate browser sandboxing (there's no web-platform API that returns one at all). Since this backend runs on the same local machine as the user — this whole system is single-user, local-only, per `CLAUDE.md` — the fix is to open a *native* OS dialog from the backend itself: `agent/browse.py::browse_folder()` shells out to a PowerShell `System.Windows.Forms.FolderBrowserDialog` script and returns whatever path it wrote to stdout (`None` if the user cancelled). `POST /api/settings/browse-folder` exposes it; the button appends the returned path as a new line in the existing textarea (skipping it if already present) rather than replacing the field, so it composes with pasting.
+
+PowerShell rather than `tkinter` — this project's environment is Windows (`CLAUDE.md`'s Environment section), and a subprocess dialog gets its own process with its own main thread, sidestepping any "GUI toolkit called from a non-main thread" concern a FastAPI sync route (run in uvicorn's threadpool, not the main thread) would otherwise raise. This makes the feature Windows-only for now — noted directly in `agent/browse.py`'s docstring as a known limitation, not silently assumed to be portable.
+
+**Verified**: real subprocess call confirmed the `System.Windows.Forms` assembly loads and the script's control flow (`ShowDialog()` returning `OK`/cancelled) is correct; the actual interactive click-through was left for the user to verify themselves, since it requires a real human clicking a real dialog — not something a script can drive.
+
+**Affects**: `agent/browse.py` (new), `api/routes/settings.py`, `api/schemas.py`, `frontend/src/components/SettingsPanel.jsx`, `frontend/src/api/client.js`
+
+---
+
 ## 2026-08-30 — Toast notifications for ingestion completion and reset
 
 **Context**: "Run ingestion now" only confirmed the run had *started* — there was no way to tell when it actually finished, or whether it succeeded, without manually re-checking Settings. Requested directly.

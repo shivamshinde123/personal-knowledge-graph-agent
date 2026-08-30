@@ -163,3 +163,24 @@ class TestPutSourceConfig:
 
         assert response.status_code == 500
         assert response.json()["error"] == "config_error"
+
+
+class TestBrowseFolder:
+    def test_returns_the_selected_path(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "api.routes.settings.browse_folder",
+            lambda: "C:\\Users\\you\\Documents\\Notes",
+        )
+
+        response = client.post("/api/settings/browse-folder")
+
+        assert response.status_code == 200
+        assert response.json() == {"path": "C:\\Users\\you\\Documents\\Notes"}
+
+    def test_returns_null_path_when_the_dialog_is_cancelled(self, client, monkeypatch):
+        monkeypatch.setattr("api.routes.settings.browse_folder", lambda: None)
+
+        response = client.post("/api/settings/browse-folder")
+
+        assert response.status_code == 200
+        assert response.json() == {"path": None}

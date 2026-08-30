@@ -4,6 +4,7 @@ import {
   getSourceConfig,
   getSourceConnections,
   getSourcesStatus,
+  postBrowseFolder,
   putSettings,
   putSourceConfig,
   verifySourceConnections,
@@ -69,6 +70,7 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
   const [isVerifying, setIsVerifying] = useState(false);
   const [isTriggeringIngest, setIsTriggeringIngest] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
+  const [isBrowsing, setIsBrowsing] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -88,6 +90,23 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
       )
       .catch((error) => setLoadError(error.message));
   }, []);
+
+  async function handleBrowseFolder() {
+    setIsBrowsing(true);
+    try {
+      const { path } = await postBrowseFolder();
+      if (path === null) return; // user cancelled the dialog
+      setWatchDirsText((prev) => {
+        const existing = linesToList(prev);
+        if (existing.includes(path)) return prev; // already added
+        return [...existing, path].join("\n");
+      });
+    } catch (error) {
+      onError(`Could not open the folder picker: ${error.message}`);
+    } finally {
+      setIsBrowsing(false);
+    }
+  }
 
   async function handleReverify() {
     setIsVerifying(true);
@@ -224,10 +243,21 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
       </section>
 
       <section className="settings-section">
-        <h2>Local folders to watch</h2>
+        <div className="settings-section-header">
+          <h2>Local folders to watch</h2>
+          <button
+            type="button"
+            className="reverify-button"
+            onClick={handleBrowseFolder}
+            disabled={isBrowsing}
+          >
+            {isBrowsing ? "Browsing…" : "Browse…"}
+          </button>
+        </div>
         <p className="settings-field-hint">
-          One folder path per line. Files added or changed in these folders are
-          picked up on the next ingestion run.
+          One folder path per line — paste a path, or use "Browse…" to pick one.
+          Files added or changed in these folders are picked up on the next
+          ingestion run.
         </p>
         <textarea
           className="source-scope-textarea"

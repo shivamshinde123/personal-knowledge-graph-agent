@@ -797,6 +797,19 @@ See DECISIONS.md, 2026-08-29.
 
 ---
 
+## Entry point: `POST /api/settings/browse-folder` (`api/routes/settings.py`)
+
+Extension beyond `docs/API_Specification.docx` — see `agent/browse.py`,
+DECISIONS.md, 2026-08-30.
+
+1. `agent/browse.py::browse_folder()` — shells out to a PowerShell
+   `System.Windows.Forms.FolderBrowserDialog` script, blocking until the
+   dialog is closed
+2. Returns `{"path": <string> | null}` — `null` if the user cancelled
+   rather than picking a folder
+
+---
+
 ## Entry point: `GET`/`PUT /api/settings/sources` (`api/routes/settings.py`)
 
 Extension beyond `docs/API_Specification.docx` — configurable ingestion
@@ -958,7 +971,11 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    state and re-fetches `getSourcesStatus()`/`getSourceConnections()`
    afterward so the displayed counts reflect the change immediately; the
    completion toast itself is `App.jsx`'s responsibility, not
-   `SettingsPanel.jsx`'s — see DECISIONS.md, 2026-08-30
+   `SettingsPanel.jsx`'s — see DECISIONS.md, 2026-08-30. "Browse…" next to
+   the local folders field calls `postBrowseFolder()`; a non-null result
+   is appended as a new line in `watchDirsText` (skipped if already
+   present), composing with manually pasted paths rather than replacing
+   them — see DECISIONS.md, 2026-08-30
 5. `Toasts.jsx` — a pure display component: renders whichever
    `{id, kind, text}` entries are in `App.jsx`'s `toasts` state as a
    fixed top-right stack, each auto-removed after 7 seconds

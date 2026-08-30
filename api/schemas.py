@@ -140,6 +140,16 @@ class SourceConfigUpdateRequest(BaseModel):
     notion_page_ids: list[str] | None = None
 
 
+class BrowseFolderResponse(BaseModel):
+    """``POST /api/settings/browse-folder`` response body.
+
+    Extension beyond ``docs/API_Specification.docx`` — see
+    ``agent/browse.py``, ``DECISIONS.md``.
+    """
+
+    path: str | None
+
+
 class SessionSummary(BaseModel):
     """One session, within a ``SessionsListResponse``."""
 
