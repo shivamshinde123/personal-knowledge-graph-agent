@@ -8,6 +8,16 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-30 — Graph legend omits `browser_history`
+
+**Context**: Requested directly after noticing browser history never appears on the relationship graph. Verified this is by design, not a bug: `pipeline/relationships.py` excludes `browser_history` from relationship detection entirely, in both directions (as source and as candidate — see the module's `_NO_RELATIONSHIP_DETECTION_SOURCE` filtering, and `CLAUDE.md`'s locked-in decision that browser history gets no relationship detection). `storage/neo4j_store.py::get_full_graph()`'s own docstring confirms a node only exists once it has at least one confirmed relationship — so a `browser_history` node can never exist on this graph, structurally, not just in practice.
+
+**Decision**: `GraphView.jsx`'s legend now filters `browser_history` out of the `SOURCE_TYPE_COLORS` entries it renders, rather than listing a source type that can never actually show up on the graph — showing it would incorrectly suggest browser history items are just absent for now (e.g. not yet ingested) rather than structurally excluded. The color mapping itself is left in place (still used as the node-fill lookup, and cheap to keep around even though that branch can never be hit for this source type).
+
+**Affects**: `frontend/src/components/GraphView.jsx`
+
+---
+
 ## 2026-08-30 — `reset_all()`'s Chroma reset never actually cleared the dimension lock
 
 **Context**: While verifying the previous entry's fix live (real reset via `POST /api/admin/reset`, then a real ingestion run), the run failed again with the exact same `Collection expecting embedding with dimension of 384, got 1536` error — on the very first item, right after a confirmed reset. So the earlier "fix" (reset, documented below) had not actually fixed anything; it only looked like it had because the run happened to be re-checked via `GET /api/sources/status` returning zero, which reset does guarantee (SQLite/Neo4j/Chroma document counts all go to zero) — but zero *document count* is not the same as a cleared *dimension lock*.

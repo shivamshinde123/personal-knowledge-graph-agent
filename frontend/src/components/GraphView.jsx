@@ -227,15 +227,22 @@ function GraphView() {
         </g>
       </svg>
       <ul className="graph-view-legend">
-        {Object.entries(SOURCE_TYPE_COLORS).map(([sourceType, color]) => (
-          <li key={sourceType}>
-            <span
-              className="graph-view-legend-swatch"
-              style={{ backgroundColor: color }}
-            />
-            {sourceType.replace("_", " ")}
-          </li>
-        ))}
+        {Object.entries(SOURCE_TYPE_COLORS)
+          // browser_history is excluded from relationship detection entirely
+          // (see pipeline/relationships.py, CLAUDE.md) — a node only exists
+          // here once it has a confirmed relationship, so a browser_history
+          // node can never appear on this graph. Listing it in the legend
+          // would promise something that can never show up.
+          .filter(([sourceType]) => sourceType !== "browser_history")
+          .map(([sourceType, color]) => (
+            <li key={sourceType}>
+              <span
+                className="graph-view-legend-swatch"
+                style={{ backgroundColor: color }}
+              />
+              {sourceType.replace("_", " ")}
+            </li>
+          ))}
       </ul>
     </main>
   );

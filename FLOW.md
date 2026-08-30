@@ -1143,7 +1143,12 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    "reheats" the layout so neighbors visibly respond; releasing clears
    `fx`/`fy` back to `null` and cools the simulation down again
    (`alphaTarget(0)`). Nodes are colored by `source_type`, edges labeled
-   with their relationship `label`.
+   with their relationship `label`. The legend lists every `source_type`
+   except `browser_history` — that source is excluded from relationship
+   detection entirely (`pipeline/relationships.py`, see CLAUDE.md), so a
+   node for it can never exist on this graph; listing it in the legend
+   would promise something that can never appear. See DECISIONS.md,
+   2026-08-30.
 7. `api/client.js` is the only module making network calls (per
    `docs/Coding_Conventions.docx` section 3) — every function maps
    directly to one `docs/API_Specification.docx` endpoint, talking to
