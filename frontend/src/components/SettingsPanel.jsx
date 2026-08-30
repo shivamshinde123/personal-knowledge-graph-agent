@@ -302,6 +302,25 @@ function SettingsPanel({
   const isLocal = settings.provider_mode === "fully_local";
   const isCloud = settings.provider_mode === "fully_cloud";
 
+  // `ingestionStatus` (App.jsx) is only ever set once something is
+  // triggered/polled *this session* — on a fresh page load (or after
+  // navigating back to Settings in a new tab) it's null even though a
+  // real run happened yesterday. `sources.last_run`, fetched on mount
+  // from the real, persisted `ingestion_runs` table, doesn't have that
+  // gap — same idea as "Last checked" below always showing a real value
+  // rather than only appearing once you click Reverify this session.
+  // Prefer the live `ingestionStatus` when present (it's actively
+  // polling and reflects "status: running" mid-run, which the persisted
+  // row alone can't distinguish from a stale/stuck run), and fall back
+  // to the persisted last run otherwise.
+  const displayedIngestion =
+    ingestionStatus ??
+    (sources.last_run && {
+      startedAt: new Date(sources.last_run.started_at),
+      itemsProcessed: sources.last_run.items_processed,
+      status: sources.last_run.status,
+    });
+
   return (
     <div className="settings-panel">
       {confirmDialog}
@@ -507,27 +526,27 @@ function SettingsPanel({
                 {isTriggeringIngest ? "Starting…" : "Run ingestion now"}
               </button>
             </div>
-            {ingestionStatus && (
+            {displayedIngestion && (
               <div className="ingestion-progress">
                 <div className="ingestion-progress-header">
                   <span>
-                    Started at {ingestionStatus.startedAt.toLocaleTimeString()}
-                    {ingestionStatus.status !== "running" && (
+                    Started at {displayedIngestion.startedAt.toLocaleString()}
+                    {displayedIngestion.status !== "running" && (
                       <>
                         {" "}
                         ·{" "}
-                        {ingestionStatus.status === "success"
+                        {displayedIngestion.status === "success"
                           ? "Completed"
-                          : `Finished (${ingestionStatus.status})`}
+                          : `Finished (${displayedIngestion.status})`}
                       </>
                     )}
                   </span>
                   <span>
-                    {ingestionStatus.itemsProcessed} item(s) processed
+                    {displayedIngestion.itemsProcessed} item(s) processed
                   </span>
                 </div>
                 <div
-                  className={`ingestion-progress-bar ${ingestionStatus.status === "running" ? "running" : ingestionStatus.status}`}
+                  className={`ingestion-progress-bar ${displayedIngestion.status === "running" ? "running" : displayedIngestion.status}`}
                 >
                   <div className="ingestion-progress-bar-fill" />
                 </div>

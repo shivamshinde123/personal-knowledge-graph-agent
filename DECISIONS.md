@@ -8,6 +8,18 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-30 — Ingestion "Started at" timestamp now persists like "Last checked" does
+
+**Context**: `SettingsPanel.jsx`'s "Started at HH:MM:SS" line only ever read `ingestionStatus` (an `App.jsx`-owned, session-only value set when ingestion is triggered/polled) — so a fresh page load, or opening Settings without having triggered a run yet this session, showed nothing at all, even though a real run happened recently. Reported directly: wanted it to "stick" the way "Last checked" (Reverify) already does — that one always shows a real value because it reads `connections.connections[0].checked_at`, fetched fresh on every mount, not session state.
+
+**Decision**: Added a `displayedIngestion` value that prefers the live `ingestionStatus` when present (it's actively polling, and can show `status: "running"` mid-run — something a once-per-mount fetch can't distinguish from a stale row) and falls back to `sources.last_run` (already fetched on mount via `getSourcesStatus()`, backed by the real, persisted `ingestion_runs` table) otherwise. Also switched the timestamp from `toLocaleTimeString()` to `toLocaleString()` (full date, not just time) — a persisted last run could be from a previous day, not just "earlier today," so a bare time would be ambiguous.
+
+**Verified**: real `GET /api/sources/status` against the live backend returns a real `last_run` (`started_at`, `status: "success"`, `items_processed: 108`) from a prior session; confirmed the fallback path renders it.
+
+**Affects**: `frontend/src/components/SettingsPanel.jsx`
+
+---
+
 ## 2026-08-30 — Removed the model fields' decorative dropdown chevron
 
 **Context**: The Settings redesign entry above ("screen 2 of 3") added a chevron icon to the three model fields, reasoning at the time that it was "visual only" and harmless since it just matched the design's "Options" box styling. Reported directly as confusing: it reads as a real `<select>` dropdown, but these are (correctly, deliberately) plain free-text `<input>`s — model identifiers are arbitrary strings (any Ollama tag, any OpenRouter model slug), not a fixed enum, so a real dropdown would be wrong here. The chevron was misleading about what the field actually does, which is worse than "harmless."
