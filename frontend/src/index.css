@@ -262,24 +262,16 @@ a {
   display: block;
   width: 20px;
   height: 20px;
-  /* The exported Figma icon asset (chat/graph/settings), recolored via
-     currentColor -- same technique the previous inline stroke SVGs used.
-     Figma only exported one fixed fill color per icon (matching its
-     shown state), but each icon needs to render in either the muted
-     (inactive) or --accent-active (active) color depending on the
-     current view, so this masks the asset's shape and paints it with
-     background-color instead of relying on its baked-in fill -- the
-     geometry is the exact exported asset, unmodified; only the paint
-     color is applied via CSS. mask-size: contain preserves each icon's
-     own aspect ratio (20x20, 20x18, 20.1x20) within the fixed box rather
-     than stretching every icon to the same shape. */
-  background-color: currentColor;
-  mask-repeat: no-repeat;
-  mask-position: center;
-  mask-size: contain;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-position: center;
-  -webkit-mask-size: contain;
+  /* Inline SVG components (components/icons/NavIcons.jsx), same path
+     geometry as the exported Figma assets, with fill="currentColor" on
+     the path -- so each icon renders in whichever color .nav-link's own
+     `color` resolves to (muted by default, --accent-active when this
+     tab is the current view), same as the app's other icons. An earlier
+     version used <img> + CSS mask-image to get the same effect from the
+     plain exported SVG files; inlining is the more foolproof approach.
+     preserveAspectRatio isn't set (defaults to "xMidYMid meet"), so each
+     icon's own aspect ratio (20x20, 20x18, 20.1x20) is preserved within
+     the fixed box rather than stretching every icon to the same shape. */
 }
 
 /* ---- Chat window ---- */

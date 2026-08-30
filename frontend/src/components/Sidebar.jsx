@@ -1,6 +1,4 @@
-import chatIcon from "../assets/icons/nav-chat.svg";
-import graphIcon from "../assets/icons/nav-graph.svg";
-import settingsIcon from "../assets/icons/nav-settings.svg";
+import { ChatIcon, GraphIcon, SettingsIcon } from "./icons/NavIcons.jsx";
 
 /**
  * Session list, "New chat" button, and primary navigation (Chat / Graph /
@@ -68,14 +66,7 @@ function Sidebar({
           onClick={onOpenChat}
           aria-current={view === "chat" ? "page" : undefined}
         >
-          <span
-            className="nav-link-icon"
-            style={{
-              maskImage: `url(${chatIcon})`,
-              WebkitMaskImage: `url(${chatIcon})`,
-            }}
-            aria-hidden="true"
-          />
+          <ChatIcon className="nav-link-icon" aria-hidden="true" />
           Chat
         </button>
         <button
@@ -84,14 +75,7 @@ function Sidebar({
           onClick={onOpenGraph}
           aria-current={view === "graph" ? "page" : undefined}
         >
-          <span
-            className="nav-link-icon"
-            style={{
-              maskImage: `url(${graphIcon})`,
-              WebkitMaskImage: `url(${graphIcon})`,
-            }}
-            aria-hidden="true"
-          />
+          <GraphIcon className="nav-link-icon" aria-hidden="true" />
           Graph
         </button>
         <button
@@ -100,14 +84,7 @@ function Sidebar({
           onClick={onOpenSettings}
           aria-current={view === "settings" ? "page" : undefined}
         >
-          <span
-            className="nav-link-icon"
-            style={{
-              maskImage: `url(${settingsIcon})`,
-              WebkitMaskImage: `url(${settingsIcon})`,
-            }}
-            aria-hidden="true"
-          />
+          <SettingsIcon className="nav-link-icon" aria-hidden="true" />
           Settings
         </button>
       </div>

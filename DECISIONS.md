@@ -8,6 +8,18 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-30 — Sidebar nav icons weren't rendering: switched CSS mask-image for inline SVG
+
+**Context**: The Chat redesign's sidebar nav icons (Chat/Graph/Settings) used `<span>` + CSS `mask-image` (recoloring one exported Figma asset via `background-color: currentColor`, since each icon needed to render in either a muted or active-purple color depending on the current view — see the earlier "Figma redesign, screen 1" entry). Reported directly as not showing up at all.
+
+**Decision**: Replaced with inline SVG React components (`components/icons/NavIcons.jsx`) — the exact same path geometry as the exported assets, `fill="currentColor"` on the `<path>`, matching how this app's original (pre-redesign) stroke icons were themed. This is the same pattern already used elsewhere in the app (`Sidebar.jsx`'s pre-redesign Graph/Settings icons, before this redesign existed at all) and removes any dependency on `mask-image` support/behavior entirely — a plain colored SVG has no browser-compatibility question the way a masked element might. The three now-unused exported SVG files (`nav-chat.svg`, `nav-graph.svg`, `nav-settings.svg`) were deleted; every other icon added during the redesign (chat suggestion chips, settings buttons, etc.) is still a plain `<img>` since those only ever need one fixed color, not a state-dependent recolor — the mask/inline-SVG question only applied here.
+
+**Verified**: `eslint` (zero warnings), production `vite build` (succeeds, three fewer bundled SVG assets).
+
+**Affects**: `frontend/src/components/Sidebar.jsx`, `frontend/src/components/icons/NavIcons.jsx` (new), `frontend/src/index.css`, `frontend/src/assets/icons/nav-{chat,graph,settings}.svg` (removed)
+
+---
+
 ## 2026-08-30 — Figma redesign, screen 2 of 3: Settings
 
 **Context**: Requested directly, same Figma file as the Chat redesign — restyle only, functionality unchanged. Branched off `feat/redesign-chat-screen` (not `main` or `feat/relationship-graph-view`) since this screen depends directly on that branch's token palette, Geist font, and icon-asset foundation.

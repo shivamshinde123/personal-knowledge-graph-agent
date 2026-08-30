@@ -1065,11 +1065,15 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    style — "Chat" (added with the Figma redesign, see DECISIONS.md,
    2026-08-30) calls a new `onOpenChat` prop that only switches
    `App.jsx`'s `view`, unlike "New chat"/a session click, which also touch
-   `sessionId`/`chatKey`. Each nav icon is the exact exported Figma asset
-   (`assets/icons/nav-*.svg`), applied via CSS `mask-image` so the same
-   shape can render in either the muted or `--accent-active` color
-   depending on which tab is current, rather than needing two
-   differently-colored exports per icon — see DECISIONS.md, 2026-08-30
+   `sessionId`/`chatKey`. Each nav icon is `components/icons/NavIcons.jsx`
+   (`ChatIcon`/`GraphIcon`/`SettingsIcon`) — the exact exported Figma
+   asset's path geometry, inlined as SVG with `fill="currentColor"`, so
+   the same shape renders in either the muted or `--accent-active` color
+   depending on which tab is current, without needing two
+   differently-colored exports per icon. An earlier version used `<img>`
+   + CSS `mask-image` for the same effect directly from the exported SVG
+   files; switched to inlining after the mask-image version didn't
+   render — see DECISIONS.md, 2026-08-30
 3. `ChatWindow.jsx` — on mount, if given an existing `sessionId`, calls
    `api/client.js::getSessionHistory()` once and populates messages from
    it (see DECISIONS.md, 2026-08-25). On submit, appends the user message
