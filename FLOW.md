@@ -1149,9 +1149,11 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    Ingestion" and "Connected Data Sources" render as one merged card with
    an internal divider (`.settings-section-header-bordered`) rather than
    two separate cards — same two handlers/states as before, just one DOM
-   boundary instead of two. "Save Changes" now sits at the bottom of the
-   left column instead of full-width below both columns — a placement
-   change only, `handleSave()` itself is unchanged
+   boundary instead of two. "Save Changes" sits in `.settings-header`,
+   top-right next to the page title — moved there (from the bottom of
+   the left column, itself moved from full-width below both columns) per
+   direct request; each move is placement only, `handleSave()` itself is
+   unchanged throughout
 5. `Toasts.jsx` — a pure display component: renders whichever
    `{id, kind, text}` entries are in `App.jsx`'s `toasts` state as a
    fixed top-right stack, each auto-removed after 7 seconds

@@ -306,11 +306,29 @@ function SettingsPanel({
     <div className="settings-panel">
       {confirmDialog}
       <div className="settings-header">
-        <h1>Settings</h1>
-        <p className="settings-subtitle">
-          Configure your ambient intelligence environment, models, and data
-          sources.
-        </p>
+        <div>
+          <h1>Settings</h1>
+          <p className="settings-subtitle">
+            Configure your ambient intelligence environment, models, and data
+            sources.
+          </p>
+        </div>
+        <div className="save-action">
+          <button
+            type="button"
+            className="save-button"
+            onClick={handleSave}
+            disabled={isSaving}
+          >
+            {isSaving ? "Saving…" : "Save Changes"}
+            <img src={saveIcon} alt="" aria-hidden="true" />
+          </button>
+          {saveStatus && (
+            <span className={`save-status ${saveStatus.ok ? "" : "error"}`}>
+              {saveStatus.text}
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="settings-columns">
@@ -427,23 +445,6 @@ function SettingsPanel({
               />
             </div>
           </section>
-
-          <div className="save-action">
-            <button
-              type="button"
-              className="save-button"
-              onClick={handleSave}
-              disabled={isSaving}
-            >
-              {isSaving ? "Saving…" : "Save Changes"}
-              <img src={saveIcon} alt="" aria-hidden="true" />
-            </button>
-            {saveStatus && (
-              <span className={`save-status ${saveStatus.ok ? "" : "error"}`}>
-                {saveStatus.text}
-              </span>
-            )}
-          </div>
         </div>
 
         <div className="settings-column">
