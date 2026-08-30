@@ -213,14 +213,16 @@ a {
   padding: 12px 16px;
   border-radius: 14px;
   line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .message-bubble.user {
   background: var(--bg-bubble-user);
   color: var(--text-bubble-user);
   border-bottom-right-radius: 4px;
+  /* Plain text (the user's own typed question, not markdown-rendered) —
+     preserve line breaks from a multi-line (shift+enter) input. */
+  white-space: pre-wrap;
 }
 
 .message-bubble.agent {
@@ -233,6 +235,74 @@ a {
   background: transparent;
   border: 1px solid var(--danger);
   color: var(--danger);
+  /* Plain text (a fixed client-side error message, not markdown). */
+  white-space: pre-wrap;
+}
+
+/* Agent bubbles render markdown (see MessageBubble.jsx) — the "pending"
+   state renders plain text ("Thinking…") through the same markdown path,
+   which is harmless (no markdown syntax in it), so no separate
+   white-space rule is needed there. */
+
+.message-bubble :first-child {
+  margin-top: 0;
+}
+
+.message-bubble :last-child {
+  margin-bottom: 0;
+}
+
+.message-bubble p {
+  margin: 0 0 8px;
+}
+
+.message-bubble ul,
+.message-bubble ol {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+
+.message-bubble li {
+  margin: 2px 0;
+}
+
+.message-bubble li > p {
+  margin: 0;
+}
+
+.message-bubble h1,
+.message-bubble h2,
+.message-bubble h3,
+.message-bubble h4 {
+  margin: 12px 0 8px;
+  font-size: 1em;
+  font-weight: 600;
+}
+
+.message-bubble code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+  background: rgba(127, 127, 127, 0.15);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.message-bubble pre {
+  background: rgba(127, 127, 127, 0.15);
+  padding: 10px 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 0 0 8px;
+}
+
+.message-bubble pre code {
+  background: none;
+  padding: 0;
+}
+
+.message-bubble a {
+  color: inherit;
+  text-decoration: underline;
 }
 
 .message-bubble.pending {
