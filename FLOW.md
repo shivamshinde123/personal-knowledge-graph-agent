@@ -1142,10 +1142,13 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    Per the Figma redesign (see DECISIONS.md, 2026-08-30, "screen 2 of
    3"), the sections render inside two explicit `.settings-column`
    containers in a real CSS Grid (`.settings-columns`), not an
-   auto-balancing multi-column layout — the design groups *specific*
-   sections into *specific* sides (Generation Provider/Models/Save on the
-   left, Local folders/Notion scope/Data Ingestion/Danger Zone on the
-   right), so the DOM reflects that fixed grouping directly. "Data
+   auto-balancing multi-column layout — the design originally grouped
+   *specific* sections into *specific* sides (Generation Provider/Models
+   on the left, Local folders/Notion scope/Data Ingestion/Danger Zone on
+   the right); Danger Zone was later moved into the left column
+   (Generation Provider/Models/Danger Zone) per direct request, so the
+   DOM no longer matches the design's own grouping exactly, but the
+   two-explicit-columns structure itself is unchanged. "Data
    Ingestion" and "Connected Data Sources" render as one merged card with
    an internal divider (`.settings-section-header-bordered`) rather than
    two separate cards — same two handlers/states as before, just one DOM

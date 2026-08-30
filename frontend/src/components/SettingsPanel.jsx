@@ -464,6 +464,26 @@ function SettingsPanel({
               />
             </div>
           </section>
+
+          <section className="settings-section danger-zone">
+            <h2>
+              <img src={dangerIcon} alt="" aria-hidden="true" />
+              Danger Zone
+            </h2>
+            <p className="settings-field-hint">
+              Permanently deletes every ingested item, embedding, and
+              relationship. Use this to recover from a bad ingestion run or to
+              restart from a clean slate — there is no undo.
+            </p>
+            <button
+              type="button"
+              className="danger-button"
+              onClick={handleResetAll}
+              disabled={isResetting}
+            >
+              {isResetting ? "Resetting…" : "Reset all data"}
+            </button>
+          </section>
         </div>
 
         <div className="settings-column">
@@ -606,26 +626,6 @@ function SettingsPanel({
                 );
               })}
             </div>
-          </section>
-
-          <section className="settings-section danger-zone">
-            <h2>
-              <img src={dangerIcon} alt="" aria-hidden="true" />
-              Danger Zone
-            </h2>
-            <p className="settings-field-hint">
-              Permanently deletes every ingested item, embedding, and
-              relationship. Use this to recover from a bad ingestion run or to
-              restart from a clean slate — there is no undo.
-            </p>
-            <button
-              type="button"
-              className="danger-button"
-              onClick={handleResetAll}
-              disabled={isResetting}
-            >
-              {isResetting ? "Resetting…" : "Reset all data"}
-            </button>
           </section>
         </div>
       </div>
