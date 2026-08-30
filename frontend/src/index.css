@@ -735,110 +735,233 @@ a {
 /* ---- Settings panel ---- */
 
 .settings-panel {
+  position: relative;
+  z-index: 1;
   flex: 1;
   overflow-y: auto;
-  padding: 32px;
+  padding: 80px;
+}
+
+.settings-header {
+  max-width: 1440px;
+  margin: 0 0 48px;
 }
 
 .settings-panel h1 {
-  font-size: 22px;
+  font-size: 48px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
   color: var(--text-h);
-  margin: 0 0 24px;
+  margin: 0 0 7px;
+}
+
+.settings-subtitle {
+  margin: 0;
+  font-size: 18px;
+  color: var(--text);
 }
 
 .settings-columns {
-  /* Two-column layout for the settings sections — a single full-width
-     column looked sparse/unbalanced on a wide screen (every section's
-     line length stretched edge to edge). CSS multi-column (not a grid)
-     so uneven section heights self-balance across the two columns
-     instead of pairing up strictly row-by-row. Requested directly. */
-  column-count: 2;
-  column-gap: 48px;
-  max-width: 1400px;
+  /* Two explicit columns, not an auto-balancing masonry layout — the
+     design groups specific sections into specific sides (engine settings
+     on the left, data sources/scope on the right), not just "whichever
+     column is shorter" (see DECISIONS.md, 2026-08-30). */
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 48px;
+  max-width: 1440px;
+  align-items: start;
 }
 
 @media (max-width: 900px) {
   .settings-columns {
-    column-count: 1;
+    grid-template-columns: 1fr;
   }
 }
 
+.settings-column {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
 .settings-section {
-  margin-bottom: 32px;
-  break-inside: avoid;
+  width: 100%;
+  padding: 25px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: var(--bg-elevated);
+  backdrop-filter: blur(10px);
 }
 
 .settings-section h2 {
-  font-size: 15px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 24px;
+  font-weight: 500;
   color: var(--text-h);
-  margin: 0 0 12px;
+  margin: 0 0 4px;
+}
+
+.settings-section h3 {
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--text-h);
+  margin: 0;
 }
 
 .radio-option {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border);
+  gap: 16px;
+  padding: 17px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  margin-top: 16px;
+  cursor: pointer;
 }
 
-.radio-option label {
+.radio-option.selected {
+  background: rgba(139, 92, 246, 0.05);
+  border-color: rgba(139, 92, 246, 0.3);
+}
+
+.radio-option-dot {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.radio-option-dot img {
+  width: 20px;
+  height: 20px;
+}
+
+.radio-option.selected .radio-option-dot {
+  border: none;
+  background: var(--accent);
+}
+
+.radio-option-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.radio-option-label {
+  font-size: 14px;
   font-weight: 500;
+  letter-spacing: 0.02em;
   color: var(--text-h);
-  display: block;
+}
+
+.radio-option.selected .radio-option-label {
+  color: var(--accent);
+}
+
+.radio-option input[type="radio"] {
+  /* The dot itself is the styled .radio-option-dot span next to it — this
+     input stays for real radio semantics/keyboard behavior, visually
+     hidden rather than removed. */
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
 }
 
 .radio-option p {
-  margin: 2px 0 0;
-  font-size: 13px;
-  color: var(--text-muted);
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.model-field {
+  margin-bottom: 16px;
+}
+
+.model-field label {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--text-h);
+  margin-bottom: 8px;
+}
+
+.model-field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.model-field-label-row label {
+  margin-bottom: 0;
+}
+
+.model-field-fixed {
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(139, 92, 246, 0.1);
+  color: var(--accent);
+  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+}
+
+.model-select-wrap {
+  position: relative;
 }
 
 .model-select {
   width: 100%;
-  padding: 8px 10px;
+  padding: 13px 40px 13px 17px;
   border-radius: 8px;
   border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text);
-  font-size: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-h);
+  font-size: 16px;
 }
 
 .model-select:disabled {
   opacity: 0.5;
 }
 
-.model-field {
-  margin-bottom: 12px;
-}
-
-.model-field label {
-  display: block;
-  font-size: 13px;
-  color: var(--text-muted);
-  margin-bottom: 4px;
-}
-
-.model-field-fixed {
-  text-transform: uppercase;
-  font-size: 10px;
-  letter-spacing: 0.03em;
+.model-select-chevron {
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 12px;
+  height: 7.4px;
+  pointer-events: none;
 }
 
 .settings-field-hint {
-  margin: 0 0 8px;
+  margin: 0 0 16px;
   font-size: 12px;
-  color: var(--text-muted);
+  line-height: 1.6;
+  color: var(--text);
 }
 
 .source-scope-textarea {
   width: 100%;
-  padding: 8px 10px;
+  min-height: 128px;
+  padding: 17px;
   border-radius: 8px;
   border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text);
-  font-size: 13px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-h);
+  font-size: 14px;
   font-family: var(--mono);
   resize: vertical;
 }
@@ -850,95 +973,166 @@ a {
 
 .settings-section-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  margin-bottom: 4px;
+  gap: 16px;
+  margin-bottom: 16px;
 }
 
 .settings-section-header h2 {
-  margin: 0;
+  margin: 0 0 4px;
 }
 
-.reverify-button {
-  padding: 6px 12px;
+.settings-section-header-bordered {
+  padding-bottom: 17px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.settings-ghost-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 9px 17px;
   border-radius: 8px;
   border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text);
-  font-size: 13px;
+  background: var(--bg-elevated);
+  color: var(--text-h);
+  font-size: 12px;
+  font-weight: 500;
 }
 
-.reverify-button:hover:not(:disabled) {
+.settings-ghost-button img {
+  width: 10px;
+  height: auto;
+}
+
+.settings-ghost-button:hover:not(:disabled) {
   border-color: var(--accent);
+}
+
+.settings-ghost-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.settings-text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: none;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.settings-text-button img {
+  width: 11px;
+  height: auto;
+}
+
+.settings-text-button:hover:not(:disabled) {
   color: var(--accent);
 }
 
-.reverify-button:disabled {
+.settings-text-button:disabled {
   opacity: 0.5;
   cursor: default;
 }
 
 .connections-checked-at {
-  margin: 0 0 12px;
+  margin: 0 0 16px;
   font-size: 12px;
-  color: var(--text-muted);
+  color: var(--text);
 }
 
 .sources-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: 12px;
 }
 
 .source-status-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
+  padding: 13px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  font-size: 13px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--text-h);
+  text-transform: capitalize;
+}
+
+.source-status-card.dim {
+  opacity: 0.6;
 }
 
 .source-status-value {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
+  font-weight: 500;
+  color: var(--text);
+  text-transform: none;
 }
 
 .source-item-count {
-  color: var(--text-muted);
-  font-size: 11px;
+  display: block;
+  opacity: 0.6;
+  font-size: 10px;
 }
 
 .status-dot {
   display: inline-block;
+  flex-shrink: 0;
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  margin-right: 6px;
 }
 
 .status-dot.not_configured {
-  background: var(--text-muted);
+  background: var(--border-subtle);
 }
 
 .status-dot.ok {
   background: var(--ok);
+  box-shadow: 0 0 8px 0 rgba(16, 185, 129, 0.5);
 }
 
 .status-dot.error {
   background: var(--danger);
+  box-shadow: 0 0 8px 0 rgba(239, 68, 68, 0.5);
+}
+
+.save-action {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding-top: 16px;
 }
 
 .save-button {
-  padding: 10px 20px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 32px;
   border-radius: 8px;
   border: none;
   background: var(--accent);
   color: #fff;
   font-size: 14px;
   font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.save-button img {
+  width: 13.5px;
+  height: 13.5px;
 }
 
 .save-button:hover:not(:disabled) {
@@ -950,29 +1144,39 @@ a {
 }
 
 .danger-zone {
-  max-width: 640px;
-  padding: 16px;
-  border: 1px solid var(--danger);
-  border-radius: 8px;
+  background: rgba(147, 0, 10, 0.05);
+  border-color: rgba(255, 180, 171, 0.2);
 }
 
 .danger-zone h2 {
-  color: var(--danger);
+  color: #ffb4ab;
+}
+
+.danger-zone h2 img {
+  width: 18.3px;
+  height: 15.8px;
+}
+
+.danger-zone .settings-field-hint {
+  opacity: 0.8;
+  font-size: 16px;
+  color: var(--text);
 }
 
 .danger-button {
-  padding: 8px 16px;
+  margin-top: 8px;
+  padding: 9px 25px;
   border-radius: 8px;
-  border: 1px solid var(--danger);
+  border: 1px solid rgba(255, 180, 171, 0.5);
   background: none;
-  color: var(--danger);
-  font-size: 13px;
+  color: #ffb4ab;
+  font-size: 14px;
   font-weight: 500;
+  letter-spacing: 0.02em;
 }
 
 .danger-button:hover:not(:disabled) {
-  background: var(--danger);
-  color: #ffffff;
+  background: rgba(255, 180, 171, 0.1);
 }
 
 .danger-button:disabled {
@@ -1242,7 +1446,7 @@ a {
 /* ---- Ingestion progress ---- */
 
 .ingestion-progress {
-  margin-top: 12px;
+  margin: 12px 0 24px;
 }
 
 .ingestion-progress-header {

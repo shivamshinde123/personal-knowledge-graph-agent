@@ -1135,11 +1135,19 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    items as it streams through each source), filled solid green/red once
    the run finishes; the live `items_processed` count is shown as text
    alongside it. See DECISIONS.md, 2026-08-30 (the live-progress entry).
-   The settings sections render inside a `.settings-columns` wrapper (CSS
-   multi-column, not a grid — see DECISIONS.md, 2026-08-30) so they
-   self-balance into two columns instead of stretching edge to edge on a
-   wide screen; the page heading and the final Save button/status stay
-   outside it, full width
+   Per the Figma redesign (see DECISIONS.md, 2026-08-30, "screen 2 of
+   3"), the sections render inside two explicit `.settings-column`
+   containers in a real CSS Grid (`.settings-columns`), not an
+   auto-balancing multi-column layout — the design groups *specific*
+   sections into *specific* sides (Generation Provider/Models/Save on the
+   left, Local folders/Notion scope/Data Ingestion/Danger Zone on the
+   right), so the DOM reflects that fixed grouping directly. "Data
+   Ingestion" and "Connected Data Sources" render as one merged card with
+   an internal divider (`.settings-section-header-bordered`) rather than
+   two separate cards — same two handlers/states as before, just one DOM
+   boundary instead of two. "Save Changes" now sits at the bottom of the
+   left column instead of full-width below both columns — a placement
+   change only, `handleSave()` itself is unchanged
 5. `Toasts.jsx` — a pure display component: renders whichever
    `{id, kind, text}` entries are in `App.jsx`'s `toasts` state as a
    fixed top-right stack, each auto-removed after 7 seconds

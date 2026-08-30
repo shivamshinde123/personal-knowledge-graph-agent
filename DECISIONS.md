@@ -8,6 +8,28 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-30 — Figma redesign, screen 2 of 3: Settings
+
+**Context**: Requested directly, same Figma file as the Chat redesign — restyle only, functionality unchanged. Branched off `feat/redesign-chat-screen` (not `main` or `feat/relationship-graph-view`) since this screen depends directly on that branch's token palette, Geist font, and icon-asset foundation.
+
+**Two explicit columns, not the earlier multi-column masonry**: the Chat-branch two-column Settings layout (`column-count: 2`, self-balancing by height) predates this redesign and was a reasonable approximation without a real design to match. The actual Figma design groups *specific* sections into *specific* sides — Generation Provider, Models, and Save Changes on the left ("Core Engine Settings"); Local folders, Notion scope, Data Ingestion, and Danger Zone on the right ("Data Sources & Scope") — not just "whichever column is shorter." Replaced with a real two-column CSS Grid and two explicit `.settings-column` containers in the JSX, matching that grouping exactly.
+
+**Data Ingestion and Connected Data Sources merged into one card**: these were two separate `.settings-section` boxes; the design shows them as one card with an internal horizontal divider (a "Run ingestion now" row, then a bordered-off "Connected Data Sources" subsection with its own "Reverify" control). Merged the markup into one `<section>` with an inner `settings-section-header-bordered` divider — no change to either action's handler, state, or behavior, only where the DOM boundary between them falls.
+
+**Save Changes moved into the left column, no longer full-width at the page bottom**: purely a placement change (still the exact same `handleSave()` diff-and-confirm flow) — the design places it directly under the Models card, not spanning the whole page under both columns.
+
+**Radio option restructured as a single `<label>`, not input+label siblings**: needed to swap in a custom purple-dot/checkmark visual instead of the browser's native radio appearance (per the design), which meant visually hiding the native `<input>`. First pass hid the input but left the new dot visual as a sibling *outside* the `<label>`, which regressed a real behavior — clicking the dot didn't toggle the radio, only clicking the text did, unlike the original where clicking the native radio circle itself always worked. Fixed by making `.radio-option` itself the `<label>`, wrapping the (visually hidden) input, the dot, and the text together, so the whole row is one click target again, same as before — see "keep functionality the same" in the request.
+
+**Decorative icons throughout, all exact exported Figma assets** (per the same asset-fidelity approach as the Chat redesign — see the earlier "Figma redesign, screen 1" entry): a checkmark inside the selected radio dot, a chevron on each model field (the fields are still plain free-text `<input>`s, not real dropdowns — the chevron is visual only, matching the design's own "Options" box styling, since model identifiers are arbitrary strings, not a fixed enum, so a real `<select>` would be wrong here), and small icons on the Save/Run-ingestion/Reverify buttons and the Danger Zone heading.
+
+**Skipped the design's footer text** ("Knowledge Agent v2.4.1 • Core Engine Active"): a fabricated version number and status string with no corresponding real data anywhere in the app — adding it would misleadingly imply real version/health tracking that doesn't exist. Omitted rather than inventing fake values to fill it.
+
+**Verified**: `eslint` (zero warnings), production `vite build` (succeeds), and the live dev server against the live backend — every existing Settings behavior (provider/model diffing and confirm-before-save, the embedding-model-change reset+re-ingest flow, Browse…, live ingestion progress, Reverify, Reset all data) exercised unchanged, only the visuals differ.
+
+**Affects**: `frontend/src/index.css`, `frontend/src/components/SettingsPanel.jsx`, `frontend/src/assets/icons/*.svg` (6 new files: radio-check, model-select-chevron, save, ingest, reverify, danger)
+
+---
+
 ## 2026-08-30 — Figma redesign, screen 1 of 3: Chat interface
 
 **Context**: Requested directly — a Figma file (`H5lylGQQm8W8mo7PdL3Syr`, "Untitled") containing a full visual redesign of all three existing screens (Chat, Graph, Settings): ambient blurred-glow backgrounds, translucent/backdrop-blur "glass" cards, a purple accent palette, the Geist typeface. Confirmed with the user up front: roll out one screen/branch/PR at a time starting with Chat, restyle only (no functional/behavioral changes beyond what the design itself implies), dark-only (the design has no light variant, so inventing one would be guessing), and source the Geist font from the official `geist` npm package rather than a Google Fonts CDN link — this is a local-first app with no other runtime network dependency, and self-hosting keeps it that way.
