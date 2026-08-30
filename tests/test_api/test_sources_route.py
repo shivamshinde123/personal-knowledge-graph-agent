@@ -106,6 +106,7 @@ class TestGetConnections:
                     notion_api_key=None,
                     gmail_credentials_path=None,
                     github_token=None,
+                    google_calendar_credentials_path=None,
                     browser_history_path=None,
                 )
             ),

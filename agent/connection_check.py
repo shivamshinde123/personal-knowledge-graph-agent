@@ -12,9 +12,9 @@ built yet, as a green "OK" the moment nothing had ever run, which reads
 as "verified working" when it really means "nothing has been checked."
 This module actually checks: for a configured source, is its
 credential/path valid right now (a real, cheap API call for Notion,
-Gmail, and GitHub; a filesystem check for local files/browser history);
-for an unconfigured or not-yet-built source, says so explicitly rather
-than defaulting to "ok". See ``DECISIONS.md``.
+Gmail, GitHub, and Google Calendar; a filesystem check for local
+files/browser history); for an unconfigured source, says so explicitly
+rather than defaulting to "ok". See ``DECISIONS.md``.
 
 Results are cached in-process (module-level, not persisted) since a live
 check — especially Notion's real API call — is too expensive to repeat on
@@ -35,13 +35,6 @@ from config.settings import EnvSettings, get_settings
 logger = logging.getLogger(__name__)
 
 ConnectionState = Literal["ok", "error", "not_configured"]
-
-# Google Calendar has no extractor built yet — always reported as
-# "not_configured" with a distinct detail message, never silently folded
-# into "ok" or "error". Gmail and GitHub are checked live below.
-_NOT_YET_BUILT = {
-    "calendar": "Google Calendar extractor not yet built.",
-}
 
 _DEFAULT_MAX_AGE_SECONDS = 300
 
@@ -103,18 +96,9 @@ def check_all_connections() -> list[ConnectionStatus]:
         _check_notion(env, now),
         _check_gmail(env, now),
         _check_github(env, now),
-        _not_configured("calendar", now),
+        _check_calendar(env, now),
         _check_browser_history(env, now),
     ]
-
-
-def _not_configured(source_type: str, now: datetime) -> ConnectionStatus:
-    return ConnectionStatus(
-        source_type=source_type,
-        status="not_configured",
-        detail=_NOT_YET_BUILT[source_type],
-        checked_at=now,
-    )
 
 
 def _check_local_files(env: EnvSettings, now: datetime) -> ConnectionStatus:
@@ -246,6 +230,49 @@ def _check_github(env: EnvSettings, now: datetime) -> ConnectionStatus:
         source_type="github",
         status="ok",
         detail="GitHub token verified.",
+        checked_at=now,
+    )
+
+
+def _check_calendar(env: EnvSettings, now: datetime) -> ConnectionStatus:
+    if env.google_calendar_credentials_path is None:
+        return ConnectionStatus(
+            source_type="calendar",
+            status="not_configured",
+            detail="GOOGLE_CALENDAR_CREDENTIALS_PATH is not set.",
+            checked_at=now,
+        )
+    try:
+        from extractors.calendar import _build_service, _get_credentials
+
+        # A one-time interactive consent (extractors/calendar.py::setup_auth())
+        # not having been run yet is reported as "not configured", not
+        # "error" — there's nothing wrong with the setup, it just isn't
+        # finished. Any other failure (revoked/invalid token, unreachable
+        # API) is a real error. Same pattern as _check_gmail().
+        service = _build_service(_get_credentials())
+        service.calendarList().get(calendarId="primary").execute()
+    except Exception as exc:
+        from extractors.base import ExtractorError
+
+        if isinstance(exc, ExtractorError) and "not authorized yet" in str(exc):
+            return ConnectionStatus(
+                source_type="calendar",
+                status="not_configured",
+                detail=str(exc),
+                checked_at=now,
+            )
+        logger.warning("Google Calendar connection check failed: %s", exc)
+        return ConnectionStatus(
+            source_type="calendar",
+            status="error",
+            detail=str(exc),
+            checked_at=now,
+        )
+    return ConnectionStatus(
+        source_type="calendar",
+        status="ok",
+        detail="Google Calendar authorization verified.",
         checked_at=now,
     )
 

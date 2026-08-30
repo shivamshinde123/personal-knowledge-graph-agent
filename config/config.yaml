@@ -26,6 +26,8 @@ filters:
     excluded_labels:
       - CATEGORY_PROMOTIONS
       - CATEGORY_SOCIAL
+  calendar:
+    skip_recurring_without_description: true
 
 chunking:
   target_chunk_size_tokens: 400

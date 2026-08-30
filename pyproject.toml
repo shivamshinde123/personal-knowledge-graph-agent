@@ -52,10 +52,10 @@ convention = "google"
 # Tests are self-documenting via their names; don't require docstrings there.
 # D107/N802/N803 also ignored for tests specifically: a fake test double for
 # an external API (e.g. Gmail/Calendar's Python client, which preserves the
-# REST API's own camelCase parameter names like userId/getProfile verbatim
-# rather than translating to snake_case) must match that real API's method
-# and parameter names exactly to be a faithful fake -- see
-# tests/test_extractors/test_gmail.py.
+# REST API's own camelCase parameter names like userId/calendarId/getProfile
+# verbatim rather than translating to snake_case) must match that real
+# API's method and parameter names exactly to be a faithful fake -- see
+# tests/test_extractors/test_gmail.py and test_calendar.py.
 "tests/**" = ["D100", "D101", "D102", "D103", "D104", "D107", "N802", "N803"]
 
 [tool.pytest.ini_options]

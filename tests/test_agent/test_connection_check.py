@@ -29,6 +29,7 @@ def fake_env(
     notion_api_key=None,
     gmail_credentials_path=None,
     github_token=None,
+    google_calendar_credentials_path=None,
     browser_history_path=None,
 ):
     return SimpleNamespace(
@@ -36,6 +37,7 @@ def fake_env(
         notion_api_key=notion_api_key,
         gmail_credentials_path=gmail_credentials_path,
         github_token=github_token,
+        google_calendar_credentials_path=google_calendar_credentials_path,
         browser_history_path=browser_history_path,
     )
 
@@ -60,16 +62,6 @@ class TestCheckAllConnections:
             "calendar",
             "browser_history",
         ]
-
-    def test_calendar_is_always_not_configured(self, monkeypatch):
-        patch_settings(monkeypatch, fake_env())
-
-        results = check_all_connections()
-
-        by_type = {r.source_type: r for r in results}
-        calendar = by_type["calendar"]
-        assert calendar.status == "not_configured"
-        assert "not yet built" in calendar.detail
 
 
 class TestCheckLocalFiles:
@@ -296,6 +288,83 @@ class TestCheckGitHub:
 
         github = next(r for r in results if r.source_type == "github")
         assert github.status == "error"
+
+
+class TestCheckCalendar:
+    def test_no_credentials_path_is_not_configured(self, monkeypatch):
+        patch_settings(monkeypatch, fake_env(google_calendar_credentials_path=None))
+
+        results = check_all_connections()
+
+        calendar = next(r for r in results if r.source_type == "calendar")
+        assert calendar.status == "not_configured"
+
+    def test_credentials_configured_but_not_yet_authorized_is_not_configured(
+        self, monkeypatch, tmp_path
+    ):
+        from extractors.base import ExtractorError
+
+        patch_settings(
+            monkeypatch,
+            fake_env(google_calendar_credentials_path=tmp_path / "creds.json"),
+        )
+
+        def raise_not_authorized():
+            raise ExtractorError("Google Calendar is not authorized yet. Run ...")
+
+        monkeypatch.setattr(
+            "extractors.calendar._get_credentials", raise_not_authorized
+        )
+
+        results = check_all_connections()
+
+        calendar = next(r for r in results if r.source_type == "calendar")
+        assert calendar.status == "not_configured"
+
+    def test_a_working_authorization_is_ok(self, monkeypatch, tmp_path):
+        patch_settings(
+            monkeypatch,
+            fake_env(google_calendar_credentials_path=tmp_path / "creds.json"),
+        )
+        monkeypatch.setattr("extractors.calendar._get_credentials", lambda: object())
+
+        class FakeCalendarListGet:
+            def execute(self):
+                return {"id": "primary"}
+
+        class FakeCalendarList:
+            def get(self, calendarId):
+                return FakeCalendarListGet()
+
+        class FakeService:
+            def calendarList(self):
+                return FakeCalendarList()
+
+        monkeypatch.setattr(
+            "extractors.calendar._build_service", lambda creds: FakeService()
+        )
+
+        results = check_all_connections()
+
+        calendar = next(r for r in results if r.source_type == "calendar")
+        assert calendar.status == "ok"
+
+    def test_a_revoked_token_is_an_error(self, monkeypatch, tmp_path):
+        patch_settings(
+            monkeypatch,
+            fake_env(google_calendar_credentials_path=tmp_path / "creds.json"),
+        )
+
+        def raise_revoked():
+            raise RuntimeError("invalid_grant: Token has been revoked.")
+
+        monkeypatch.setattr("extractors.calendar._get_credentials", raise_revoked)
+
+        results = check_all_connections()
+
+        calendar = next(r for r in results if r.source_type == "calendar")
+        assert calendar.status == "error"
+        assert "revoked" in calendar.detail
 
 
 class TestGetConnectionStatus:
