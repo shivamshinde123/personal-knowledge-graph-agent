@@ -16,6 +16,7 @@ from providers.openrouter_provider import create_openrouter_provider
 def fake_settings(
     *,
     cloud_generation_model="anthropic/claude-sonnet-4",
+    cloud_embedding_model="openai/text-embedding-3-small",
     cloud_max_tokens=4096,
     api_key="sk-test",
 ):
@@ -23,6 +24,7 @@ def fake_settings(
         config=SimpleNamespace(
             llm=SimpleNamespace(
                 cloud_generation_model=cloud_generation_model,
+                cloud_embedding_model=cloud_embedding_model,
                 cloud_max_tokens=cloud_max_tokens,
             )
         ),
@@ -84,24 +86,24 @@ class TestCreateOpenrouterProvider:
         with pytest.raises(ProviderError, match="OPENROUTER_API_KEY"):
             create_openrouter_provider()
 
-    def test_embed_fn_is_configured_with_the_frozen_model_and_dimensions(
-        self, monkeypatch
-    ):
+    def test_embed_fn_uses_the_configured_embedding_model(self, monkeypatch):
         monkeypatch.setattr(
             "providers.openrouter_provider.get_settings",
-            lambda: fake_settings(api_key="sk-test"),
+            lambda: fake_settings(
+                cloud_embedding_model="openai/text-embedding-3-small",
+                api_key="sk-test",
+            ),
         )
         captured = {}
 
         class FakeEmbeddings:
-            def __init__(self, *, model, dimensions, base_url, api_key):
+            def __init__(self, *, model, base_url, api_key):
                 captured["model"] = model
-                captured["dimensions"] = dimensions
                 captured["base_url"] = base_url
                 captured["api_key"] = api_key
 
             def embed_documents(self, texts):
-                return [[0.0] * captured["dimensions"] for _ in texts]
+                return [[0.0]] * len(texts)
 
         monkeypatch.setattr(
             "providers.openrouter_provider.OpenAIEmbeddings", FakeEmbeddings
@@ -109,8 +111,31 @@ class TestCreateOpenrouterProvider:
 
         provider = create_openrouter_provider()
 
-        assert provider._embed_fn(["a"]) == [[0.0] * captured["dimensions"]]
+        assert provider._embed_fn(["a"]) == [[0.0]]
         assert captured["model"] == "openai/text-embedding-3-small"
-        assert captured["dimensions"] == 384
         assert captured["base_url"] == "https://openrouter.ai/api/v1"
         assert captured["api_key"] == "sk-test"
+
+    def test_explicit_embedding_model_overrides_the_configured_default(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "providers.openrouter_provider.get_settings",
+            lambda: fake_settings(),
+        )
+        captured = {}
+
+        class FakeEmbeddings:
+            def __init__(self, *, model, base_url, api_key):
+                captured["model"] = model
+
+            def embed_documents(self, texts):
+                return [[0.0]] * len(texts)
+
+        monkeypatch.setattr(
+            "providers.openrouter_provider.OpenAIEmbeddings", FakeEmbeddings
+        )
+
+        create_openrouter_provider(embedding_model="a-different-model")
+
+        assert captured["model"] == "a-different-model"

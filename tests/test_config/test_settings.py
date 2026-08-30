@@ -28,16 +28,13 @@ class TestLoadConfig:
         assert config.chunking.chunk_overlap_tokens == 40
         assert config.retrieval.top_k_vector == 8
         assert config.retrieval.relationship_candidate_count == 10
+        assert config.llm.cloud_embedding_model == "openai/text-embedding-3-small"
 
-    def test_llm_config_has_no_embedding_model_fields(self):
-        """Embedding models are frozen provider constants, not config.
-
-        See config/settings.py::LLMConfig's docstring.
-        """
+    def test_llm_config_has_no_local_embedding_model_field(self):
+        """There is no local embedding path — see LLMConfig's docstring."""
         config = load_config()
 
         assert not hasattr(config.llm, "local_embedding_model")
-        assert not hasattr(config.llm, "cloud_embedding_model")
 
     def test_parses_nested_filter_rules(self):
         config = load_config()
@@ -283,17 +280,27 @@ class TestUpdateLlmConfig:
         assert "domain_blocklist:" in written
         assert "google.com/search" in written
 
-    def test_embedding_model_is_not_an_accepted_parameter(self, tmp_path):
-        """Embedding models are frozen.
+    def test_local_embedding_model_is_not_an_accepted_parameter(self, tmp_path):
+        """There is no local embedding path.
 
-        The function signature itself has no parameter for them, not
-        just an ignored one.
+        The function signature has no parameter for one, unlike
+        cloud_embedding_model.
         """
         config_path = tmp_path / "config.yaml"
         config_path.write_text(_SAMPLE_CONFIG, encoding="utf-8")
 
         with pytest.raises(TypeError):
             update_llm_config(local_embedding_model="x", path=config_path)
+
+    def test_updates_the_cloud_embedding_model(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(_SAMPLE_CONFIG, encoding="utf-8")
+
+        result = update_llm_config(
+            cloud_embedding_model="openai/text-embedding-3-large", path=config_path
+        )
+
+        assert result.llm.cloud_embedding_model == "openai/text-embedding-3-large"
 
     def test_invalid_provider_mode_raises_and_does_not_write(self, tmp_path):
         config_path = tmp_path / "config.yaml"

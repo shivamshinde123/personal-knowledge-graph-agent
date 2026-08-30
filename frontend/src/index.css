@@ -717,10 +717,20 @@ a {
   color: var(--danger);
 }
 
+.graph-view-hint {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .graph-view-svg {
   width: 100%;
   max-width: 900px;
   height: auto;
+}
+
+.graph-node:active {
+  cursor: grabbing;
 }
 
 .graph-edge {

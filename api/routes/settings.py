@@ -13,7 +13,6 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from agent.browse import browse_folder
-from agent.embedding_info import get_embedding_model_name
 from api.schemas import (
     BrowseFolderResponse,
     SettingsResponse,
@@ -29,17 +28,13 @@ router = APIRouter()
 
 @router.get("/settings", response_model=SettingsResponse)
 def get_settings_route() -> SettingsResponse:
-    """Return the current LLM provider configuration.
-
-    ``cloud_embedding_model`` comes from the frozen provider constant, not
-    ``config.yaml`` — see ``SettingsResponse``'s docstring.
-    """
+    """Return the current LLM provider configuration."""
     llm = get_settings().config.llm
     return SettingsResponse(
         provider_mode=llm.provider_mode,
         local_generation_model=llm.local_generation_model,
         cloud_generation_model=llm.cloud_generation_model,
-        cloud_embedding_model=get_embedding_model_name(),
+        cloud_embedding_model=llm.cloud_embedding_model,
     )
 
 
@@ -47,20 +42,22 @@ def get_settings_route() -> SettingsResponse:
 def put_settings_route(payload: SettingsUpdateRequest) -> SettingsUpdateResponse:
     """Update the LLM provider configuration; a ``ConfigError`` maps to 500.
 
-    The embedding model isn't settable — ``SettingsUpdateRequest`` has no
-    field for it.
+    A ``cloud_embedding_model`` change isn't specially handled here — the
+    frontend is responsible for confirming with the user and triggering a
+    reset + re-ingest afterward (see ``SettingsResponse``'s docstring).
     """
     config = update_llm_config(
         provider_mode=payload.provider_mode,
         local_generation_model=payload.local_generation_model,
         cloud_generation_model=payload.cloud_generation_model,
+        cloud_embedding_model=payload.cloud_embedding_model,
     )
     return SettingsUpdateResponse(
         status="updated",
         provider_mode=config.llm.provider_mode,
         local_generation_model=config.llm.local_generation_model,
         cloud_generation_model=config.llm.cloud_generation_model,
-        cloud_embedding_model=get_embedding_model_name(),
+        cloud_embedding_model=config.llm.cloud_embedding_model,
     )
 
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   forceCenter,
   forceLink,
@@ -20,48 +20,31 @@ const WIDTH = 900;
 const HEIGHT = 600;
 
 /**
- * Runs a d3-force layout synchronously to convergence and returns
- * positioned nodes/edges — a static picture, not a live simulation, since
- * this graph is expected to stay small (docs/Database_Schema.docx section
- * 5: an item only gets a node once it has a confirmed relationship) and a
- * one-shot layout is simpler than wiring up continuous re-renders for a
- * local, single-user tool. See DECISIONS.md.
- */
-function layoutGraph(nodes, edges) {
-  const simNodes = nodes.map((node) => ({ ...node }));
-  const simLinks = edges.map((edge) => ({
-    source: edge.source_id,
-    target: edge.target_id,
-    label: edge.label,
-    confidence: edge.confidence,
-  }));
-
-  const simulation = forceSimulation(simNodes)
-    .force(
-      "link",
-      forceLink(simLinks)
-        .id((node) => node.id)
-        .distance(140),
-    )
-    .force("charge", forceManyBody().strength(-260))
-    .force("center", forceCenter(WIDTH / 2, HEIGHT / 2))
-    .stop();
-
-  for (let i = 0; i < 300; i += 1) {
-    simulation.tick();
-  }
-
-  return { nodes: simNodes, edges: simLinks };
-}
-
-/**
  * The relationship graph view (Screen 3, extension beyond
  * docs/UIUX_Wireframes.docx — see DECISIONS.md). Fetches the whole graph
- * on mount and renders it as a static force-directed SVG layout.
+ * on mount and renders it as a live, draggable force-directed layout —
+ * Obsidian-style: the simulation keeps running (not a one-shot layout to
+ * convergence), and grabbing a node "reheats" it so neighbors resettle
+ * around wherever it's dropped, rather than a static picture. See
+ * DECISIONS.md.
  */
 function GraphView() {
   const [graph, setGraph] = useState(null);
   const [error, setError] = useState(null);
+  // What's actually rendered: a shallow-copied snapshot of the simulation's
+  // node/link objects, refreshed on every tick. A ref alone can't drive
+  // render (React doesn't re-render on ref mutation, and reading .current
+  // during render bypasses React's model — see the react-hooks/refs lint
+  // rule), so nodesRef/linksRef below hold the real, d3-mutated objects for
+  // drag handlers to act on, while these two states are what JSX reads.
+  const [nodes, setNodes] = useState([]);
+  const [links, setLinks] = useState([]);
+
+  const simulationRef = useRef(null);
+  const nodesRef = useRef([]);
+  const linksRef = useRef([]);
+  const svgRef = useRef(null);
+  const draggingIdRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -77,10 +60,85 @@ function GraphView() {
     };
   }, []);
 
-  const laidOut = useMemo(() => {
-    if (!graph || graph.nodes.length === 0) return null;
-    return layoutGraph(graph.nodes, graph.edges);
+  useEffect(() => {
+    if (!graph || graph.nodes.length === 0) return undefined;
+
+    const simNodes = graph.nodes.map((node) => ({ ...node }));
+    const simLinks = graph.edges.map((edge) => ({
+      source: edge.source_id,
+      target: edge.target_id,
+      label: edge.label,
+      confidence: edge.confidence,
+    }));
+    nodesRef.current = simNodes;
+    linksRef.current = simLinks;
+
+    const simulation = forceSimulation(simNodes)
+      .force(
+        "link",
+        forceLink(simLinks)
+          .id((node) => node.id)
+          .distance(140),
+      )
+      .force("charge", forceManyBody().strength(-260))
+      .force("center", forceCenter(WIDTH / 2, HEIGHT / 2))
+      .on("tick", () => {
+        setNodes([...nodesRef.current]);
+        setLinks([...linksRef.current]);
+      });
+
+    simulationRef.current = simulation;
+
+    return () => {
+      simulation.stop();
+      simulationRef.current = null;
+    };
   }, [graph]);
+
+  /** Converts a pointer event's screen coordinates into the SVG's own
+   * viewBox coordinate space, accounting for however the SVG is scaled to
+   * fit its container — dragging math must stay in the same coordinate
+   * space the simulation itself uses. */
+  function toSimulationPoint(event) {
+    const svg = svgRef.current;
+    const ctm = svg?.getScreenCTM();
+    if (!svg || !ctm) return { x: 0, y: 0 };
+    const point = svg.createSVGPoint();
+    point.x = event.clientX;
+    point.y = event.clientY;
+    const transformed = point.matrixTransform(ctm.inverse());
+    return { x: transformed.x, y: transformed.y };
+  }
+
+  function handlePointerDown(node, event) {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    draggingIdRef.current = node.id;
+    simulationRef.current?.alphaTarget(0.3).restart();
+    const { x, y } = toSimulationPoint(event);
+    node.fx = x;
+    node.fy = y;
+  }
+
+  function handlePointerMove(event) {
+    if (draggingIdRef.current === null) return;
+    const node = nodesRef.current.find((n) => n.id === draggingIdRef.current);
+    if (!node) return;
+    const { x, y } = toSimulationPoint(event);
+    node.fx = x;
+    node.fy = y;
+  }
+
+  function handlePointerUp(event) {
+    if (draggingIdRef.current === null) return;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    const node = nodesRef.current.find((n) => n.id === draggingIdRef.current);
+    if (node) {
+      node.fx = null;
+      node.fy = null;
+    }
+    draggingIdRef.current = null;
+    simulationRef.current?.alphaTarget(0);
+  }
 
   if (error) {
     return (
@@ -111,35 +169,50 @@ function GraphView() {
 
   return (
     <main className="graph-view">
+      <p className="graph-view-hint">Drag a node to move it around.</p>
       <svg
+        ref={svgRef}
         className="graph-view-svg"
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         role="img"
         aria-label="Relationship graph"
       >
         <g>
-          {laidOut.edges.map((edge, index) => (
-            <g key={`${edge.source.id}-${edge.target.id}-${index}`}>
-              <line
-                className="graph-edge"
-                x1={edge.source.x}
-                y1={edge.source.y}
-                x2={edge.target.x}
-                y2={edge.target.y}
-              />
-              <text
-                className="graph-edge-label"
-                x={(edge.source.x + edge.target.x) / 2}
-                y={(edge.source.y + edge.target.y) / 2}
-              >
-                {edge.label}
-              </text>
-            </g>
-          ))}
+          {links.map((edge, index) => {
+            const source = typeof edge.source === "object" ? edge.source : null;
+            const target = typeof edge.target === "object" ? edge.target : null;
+            if (!source || !target) return null;
+            return (
+              <g key={`${source.id}-${target.id}-${index}`}>
+                <line
+                  className="graph-edge"
+                  x1={source.x}
+                  y1={source.y}
+                  x2={target.x}
+                  y2={target.y}
+                />
+                <text
+                  className="graph-edge-label"
+                  x={(source.x + target.x) / 2}
+                  y={(source.y + target.y) / 2}
+                >
+                  {edge.label}
+                </text>
+              </g>
+            );
+          })}
         </g>
         <g>
-          {laidOut.nodes.map((node) => (
-            <g key={node.id} className="graph-node">
+          {nodes.map((node) => (
+            <g
+              key={node.id}
+              className="graph-node"
+              style={{ touchAction: "none", cursor: "grab" }}
+              onPointerDown={(event) => handlePointerDown(node, event)}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerCancel={handlePointerUp}
+            >
               <circle
                 cx={node.x}
                 cy={node.y}

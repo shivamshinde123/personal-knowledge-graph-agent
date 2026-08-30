@@ -3,14 +3,11 @@
 # Reference: docs/Environment_Config_Reference.docx section 4.
 
 llm:
-  provider_mode: fully_local # fully_local | fully_cloud -- generation only; embedding is always cloud, see below
+  provider_mode: fully_local # fully_local | fully_cloud -- controls generation only; embedding is always cloud, see below
   local_generation_model: llama3:8b # used when provider_mode is fully_local
   cloud_generation_model: anthropic/claude-sonnet-4 # used when provider_mode is fully_cloud
+  cloud_embedding_model: openai/text-embedding-3-small # always used, regardless of provider_mode -- there is no local embedding path. OPENROUTER_API_KEY is required even under fully_local. Changing this needs a full reset + re-ingest -- see DECISIONS.md
   cloud_max_tokens: 4096 # response token cap for cloud calls; unset defaults to the model's own max, which can exceed the account's remaining credit balance
-  # No embedding model field — embedding always goes through OpenRouter
-  # (providers/openrouter_provider.py::EMBEDDING_MODEL), regardless of
-  # provider_mode above; there is no local embedding path. This means
-  # OPENROUTER_API_KEY is required even under fully_local. See DECISIONS.md.
 
 ingestion:
   schedule: "0 23 * * *" # cron expression; default 11 PM daily

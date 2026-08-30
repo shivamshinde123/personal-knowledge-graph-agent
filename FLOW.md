@@ -799,40 +799,38 @@ See DECISIONS.md, 2026-08-29.
 
 ## Entry point: `GET /api/settings` (`api/routes/settings.py`)
 
-1. `config/settings.py::get_settings().config.llm` read directly for the
-   two generation model fields — no `agent/` intermediary, since `config`
+1. `config/settings.py::get_settings().config.llm` read directly for all
+   three model fields (the two generation models plus
+   `cloud_embedding_model`) — no `agent/` intermediary, since `config`
    isn't `storage`/`providers` (see DECISIONS.md, 2026-08-25).
-   `agent/embedding_info.py::get_embedding_model_name()` supplies the
-   (single) embedding model name for display — a frozen provider constant,
-   not part of `config`, and `providers/` *is* one of the two layers the
-   API must never reach into directly, so this one field does need the
-   `agent/` thin-wrapper indirection the others don't (see DECISIONS.md,
-   2026-08-30)
+   `cloud_embedding_model` is a normal `config.llm` field like the others
+   now, not a `providers/`-layer constant needing its own thin wrapper —
+   see DECISIONS.md, 2026-08-30 (the un-freeze entry)
 2. Returns `{"provider_mode", "local_generation_model",
    "cloud_generation_model", "cloud_embedding_model"}` — no
-   `local_embedding_model` at all, since there's no local embedding path
-   any more — extends `docs/API_Specification.docx` section 3.6's original
-   two-field shape (see DECISIONS.md, 2026-08-30, all three entries)
+   `local_embedding_model` at all, since there's no local embedding path —
+   extends `docs/API_Specification.docx` section 3.6's original two-field
+   shape (see DECISIONS.md, 2026-08-30, all entries)
 
 ---
 
 ## Entry point: `PUT /api/settings` (`api/routes/settings.py`)
 
 1. Request body validated against `api/schemas.py::SettingsUpdateRequest`
-   (`provider_mode`, `local_generation_model`, `cloud_generation_model` —
-   all optional, a partial update; no embedding-model field at all, since
-   it's frozen — see DECISIONS.md, 2026-08-30) — an invalid
+   (`provider_mode`, `local_generation_model`, `cloud_generation_model`,
+   `cloud_embedding_model` — all optional, a partial update) — an invalid
    `provider_mode` value is a 422 via the shared validation-error handler
 2. `config/settings.py::update_llm_config()` called with whichever fields
    were given (see "Shared: configuration loading" above for its own
    steps) — a `ConfigError` (bad resulting config, or a file I/O failure)
-   is caught by `api/main.py`'s shared handler, mapped to 500
+   is caught by `api/main.py`'s shared handler, mapped to 500. This route
+   itself has no special handling for a `cloud_embedding_model` change —
+   the "confirm, then reset + re-ingest" behavior is entirely
+   `SettingsPanel.jsx`'s responsibility (see below), not enforced here
 3. Returns `{"status": "updated", "provider_mode",
    "local_generation_model", "cloud_generation_model",
-   "cloud_embedding_model"}`, the embedding field again from
-   `agent/embedding_info.py` (frozen, unaffected by the request body) —
-   reflecting the freshly written-and-reread configuration for everything
-   else
+   "cloud_embedding_model"}`, reflecting the freshly written-and-reread
+   configuration
 
 ---
 
@@ -994,34 +992,35 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    new) `session_id` up to `App.jsx` via `onTurnCompleted`
 4. `SettingsPanel.jsx` — on mount, calls `api/client.js::getSettings()`,
    `getSourcesStatus()`, `getSourceConnections()`, and `getSourceConfig()`
-   in parallel; "Save Changes" calls `putSettings()` (provider mode plus
-   the two editable generation model fields —
-   `local_generation_model`/`cloud_generation_model`, only the one
-   matching `provider_mode` actually enabled for editing; the single
-   embedding model field is rendered `disabled`/`readOnly` unconditionally
-   and never sent, since it's frozen and always used regardless of
-   `provider_mode` — see DECISIONS.md, 2026-08-30, all three entries) and
-   `putSourceConfig()` (watch folders/Notion scope, parsed from a
-   one-per-line textarea via `linesToList()`) together, updating local
-   state from the responses. Each connected-source card
-   shows the live
-   connection status (`getSourceConnections()`'s cache-or-fresh result)
-   rather than the batch-run status alone; "Reverify" calls
-   `verifySourceConnections()` (force-refreshes, bypassing the cache) and
-   replaces the connections state with the fresh result — see
-   DECISIONS.md, 2026-08-29 and 2026-08-30. "Run ingestion now" and "Reset
-   all data" (in its own visually separated Danger Zone section, behind a
-   native `window.confirm()` prompt) call the `onTriggerIngestion`/
-   `onResetAll` props from `App.jsx` (see above) rather than the endpoints
-   directly — `SettingsPanel.jsx` only tracks its own button-disabled
-   state and re-fetches `getSourcesStatus()`/`getSourceConnections()`
-   afterward so the displayed counts reflect the change immediately; the
-   completion toast itself is `App.jsx`'s responsibility, not
-   `SettingsPanel.jsx`'s — see DECISIONS.md, 2026-08-30. "Browse…" next to
-   the local folders field calls `postBrowseFolder()`; a non-null result
-   is appended as a new line in `watchDirsText` (skipped if already
-   present), composing with manually pasted paths rather than replacing
-   them — see DECISIONS.md, 2026-08-30
+   in parallel, snapshotting the loaded values into `originalRef` — the
+   baseline every later diff compares against. "Save Changes"
+   (`handleSave()`) first diffs every editable field (`provider_mode`,
+   both generation models, `cloud_embedding_model`, the two source-scope
+   textareas) against that snapshot; if nothing changed it no-ops, else it
+   shows one `window.confirm()` listing the changed fields — appending an
+   extra warning when `cloud_embedding_model` is among them — and aborts
+   entirely if cancelled. Only on confirm does it call `putSettings()` (now
+   sending all three model fields, including `cloud_embedding_model`) and
+   `putSourceConfig()` together; if the embedding model was part of the
+   diff, it then also calls `onResetAll()` followed by
+   `onTriggerIngestion()` (the same `App.jsx`-owned flows the Danger Zone
+   button and "Run ingestion now" button call directly elsewhere) and
+   re-fetches `getSourcesStatus()`/`getSourceConnections()` — see
+   DECISIONS.md, 2026-08-30 (the un-freeze/confirm-dialog entry). Each
+   connected-source card shows the live connection status
+   (`getSourceConnections()`'s cache-or-fresh result) rather than the
+   batch-run status alone; "Reverify" calls `verifySourceConnections()`
+   (force-refreshes, bypassing the cache) and replaces the connections
+   state with the fresh result — see DECISIONS.md, 2026-08-29 and
+   2026-08-30. The Danger Zone's own "Reset all data" button and "Run
+   ingestion now" each still have their own direct call path (with their
+   own confirm, for the reset button) into the same `onResetAll`/
+   `onTriggerIngestion` props — the Save-Changes-triggered path above is
+   an additional caller, not a replacement. "Browse…" next to the local
+   folders field calls `postBrowseFolder()`; a non-null result is
+   appended as a new line in `watchDirsText` (skipped if already present),
+   composing with manually pasted paths rather than replacing them — see
+   DECISIONS.md, 2026-08-30
 5. `Toasts.jsx` — a pure display component: renders whichever
    `{id, kind, text}` entries are in `App.jsx`'s `toasts` state as a
    fixed top-right stack, each auto-removed after 7 seconds
@@ -1033,13 +1032,25 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    DECISIONS.md, 2026-08-30
 6. `GraphView.jsx` — on mount, calls `api/client.js::getGraph()`; an empty
    result (no confirmed relationships yet) renders an explanatory message
-   rather than a blank canvas. A non-empty result is laid out once via
-   `d3-force` (`forceSimulation`/`forceLink`/`forceManyBody`/`forceCenter`,
-   run synchronously to convergence via `simulation.tick()` in a loop, not
-   a live/animated simulation — the graph stays small by construction, see
-   `storage/neo4j_store.py::get_full_graph()`'s own note) and rendered as a
-   static SVG: nodes colored by `source_type`, edges labeled with their
-   relationship `label`. See DECISIONS.md, 2026-08-30
+   rather than a blank canvas. A non-empty result drives a **live**
+   `d3-force` simulation (`forceSimulation`/`forceLink`/`forceManyBody`/
+   `forceCenter`, never `.stop()`-ped) — Obsidian-style, not a one-shot
+   static layout (see DECISIONS.md, 2026-08-30, the interactive-graph
+   entry, for why that changed). The simulation's own node/link objects
+   live in `nodesRef`/`linksRef` (mutated in place by both d3's tick loop
+   and the drag handlers below); a `nodes`/`links` **state** pair,
+   shallow-copied from those refs on every `"tick"` event, is what JSX
+   actually renders from — reading a ref directly during render doesn't
+   trigger a re-render and trips this project's `react-hooks/refs` lint
+   rule. Dragging a node (`onPointerDown`/`onPointerMove`/`onPointerUp` on
+   its `<g>`, using pointer capture so the drag tracks even off the small
+   circle) converts the pointer's screen position into the SVG's own
+   `viewBox` coordinate space (`getScreenCTM().inverse()`) and sets that
+   node's `fx`/`fy`, while `simulation.alphaTarget(0.3).restart()`
+   "reheats" the layout so neighbors visibly respond; releasing clears
+   `fx`/`fy` back to `null` and cools the simulation down again
+   (`alphaTarget(0)`). Nodes are colored by `source_type`, edges labeled
+   with their relationship `label`.
 7. `api/client.js` is the only module making network calls (per
    `docs/Coding_Conventions.docx` section 3) — every function maps
    directly to one `docs/API_Specification.docx` endpoint, talking to

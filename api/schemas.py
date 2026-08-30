@@ -100,12 +100,14 @@ class ConnectionsResponse(BaseModel):
 class SettingsResponse(BaseModel):
     """``GET /api/settings`` response body.
 
-    Two *generation* model fields, settable, plus one *embedding* model
-    field, not settable — ``cloud_embedding_model`` is a frozen constant
-    (``providers/openrouter_provider.py``), included here purely for
-    display. There is no ``local_embedding_model`` — embedding always goes
-    through OpenRouter regardless of ``provider_mode`` (no local embedding
-    path any more). See ``DECISIONS.md``.
+    Two *generation* model fields (follow ``provider_mode``) plus one
+    *embedding* model field (always cloud, regardless of ``provider_mode``
+    — there is no local embedding path). All three are settable. Changing
+    ``cloud_embedding_model`` is a bigger deal than the other two — it
+    changes which embedding space every future vector lands in — but
+    nothing here enforces a reset when it changes; that's the frontend's
+    job (a confirm prompt, then an automatic reset + re-ingest). See
+    ``DECISIONS.md``.
     """
 
     provider_mode: ProviderMode
@@ -115,15 +117,12 @@ class SettingsResponse(BaseModel):
 
 
 class SettingsUpdateRequest(BaseModel):
-    """``PUT /api/settings`` request body — every field is optional (partial update).
-
-    No embedding-model field — see ``SettingsResponse``'s docstring for
-    why it's frozen, not settable.
-    """
+    """``PUT /api/settings`` request body — every field is optional (partial update)."""
 
     provider_mode: ProviderMode | None = None
     local_generation_model: str | None = None
     cloud_generation_model: str | None = None
+    cloud_embedding_model: str | None = None
 
 
 class SettingsUpdateResponse(BaseModel):

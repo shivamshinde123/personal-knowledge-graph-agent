@@ -78,8 +78,10 @@ export function getSettings() {
 }
 
 /**
- * Update the LLM provider configuration (partial update). Per section 3.7.
- * @param {{provider_mode?: string, local_model?: string, cloud_model?: string}} payload
+ * Update the LLM provider configuration (partial update). Extends
+ * API_Specification.docx section 3.7 with cloud_embedding_model — see
+ * DECISIONS.md.
+ * @param {{provider_mode?: string, local_generation_model?: string, cloud_generation_model?: string, cloud_embedding_model?: string}} payload
  */
 export function putSettings(payload) {
   return request("/settings", {

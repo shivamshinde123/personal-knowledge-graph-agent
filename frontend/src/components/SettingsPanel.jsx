@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   getSettings,
   getSourceConfig,
@@ -27,22 +27,24 @@ const CONNECTION_LABELS = {
 const PROVIDER_MODES = [
   {
     value: "fully_local",
-    label: "Fully Local",
+    label: "Local Generation",
     description:
-      "Generation runs through Ollama, no cost. Embedding still uses the fixed cloud model below regardless — an OpenRouter API key is required either way.",
+      "Answers, metadata, and relationship judging run through Ollama — no cost. This only affects generation: embedding always uses the cloud model below regardless, so an OpenRouter API key is still required.",
   },
   {
     value: "fully_cloud",
-    label: "Fully Cloud",
+    label: "Cloud Generation",
     description:
-      "Generation routes through OpenRouter too — highest quality, per-call cost.",
+      "Answers, metadata, and relationship judging route through OpenRouter — highest quality, per-call cost.",
   },
 ];
 
 /**
- * The Settings screen: LLM provider mode, the two editable generation
- * model fields, the one fixed (display-only) embedding model field, and
- * connected data source status. Per docs/UIUX_Wireframes.docx section 3.
+ * The Settings screen: generation provider, the two generation model
+ * fields (gated by provider), the one embedding model field (always
+ * cloud, editable but changing it triggers a confirm + auto reset +
+ * re-ingest), and connected data source status. Per
+ * docs/UIUX_Wireframes.docx section 3.
  *
  * @param {object} props
  * @param {() => Promise<void>} props.onTriggerIngestion - starts a batch
@@ -66,6 +68,10 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
   const [isTriggeringIngest, setIsTriggeringIngest] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [isBrowsing, setIsBrowsing] = useState(false);
+  // The last-saved snapshot of every editable field, for diffing at save
+  // time — a ref, not state, since it's only ever read/written on load and
+  // on a successful save, never rendered directly.
+  const originalRef = useRef(null);
 
   useEffect(() => {
     Promise.all([
@@ -76,11 +82,18 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
     ])
       .then(
         ([settingsResult, sourcesResult, connectionsResult, sourceConfig]) => {
+          const watchDirs = sourceConfig.local_files_watch_dirs.join("\n");
+          const notionPageIds = sourceConfig.notion_page_ids.join("\n");
           setSettings(settingsResult);
           setSources(sourcesResult);
           setConnections(connectionsResult);
-          setWatchDirsText(sourceConfig.local_files_watch_dirs.join("\n"));
-          setNotionPageIdsText(sourceConfig.notion_page_ids.join("\n"));
+          setWatchDirsText(watchDirs);
+          setNotionPageIdsText(notionPageIds);
+          originalRef.current = {
+            ...settingsResult,
+            watchDirsText: watchDirs,
+            notionPageIdsText: notionPageIds,
+          };
         },
       )
       .catch((error) => setLoadError(error.message));
@@ -150,6 +163,48 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
   }
 
   async function handleSave() {
+    const original = originalRef.current;
+    const changes = [];
+    if (settings.provider_mode !== original.provider_mode) {
+      changes.push(`Generation provider → ${settings.provider_mode}`);
+    }
+    if (settings.local_generation_model !== original.local_generation_model) {
+      changes.push(
+        `Local generation model → ${settings.local_generation_model}`,
+      );
+    }
+    if (settings.cloud_generation_model !== original.cloud_generation_model) {
+      changes.push(
+        `Cloud generation model → ${settings.cloud_generation_model}`,
+      );
+    }
+    const embeddingModelChanged =
+      settings.cloud_embedding_model !== original.cloud_embedding_model;
+    if (embeddingModelChanged) {
+      changes.push(`Embedding model → ${settings.cloud_embedding_model}`);
+    }
+    if (watchDirsText !== original.watchDirsText) {
+      changes.push("Local watch folders");
+    }
+    if (notionPageIdsText !== original.notionPageIdsText) {
+      changes.push("Notion page scope");
+    }
+
+    if (changes.length === 0) {
+      setSaveStatus({ ok: true, text: "Nothing changed." });
+      return;
+    }
+
+    let confirmMessage = `Save these changes?\n\n- ${changes.join("\n- ")}`;
+    if (embeddingModelChanged) {
+      confirmMessage +=
+        "\n\n⚠️ Changing the embedding model requires a full data reset and " +
+        "re-ingestion — your existing embeddings won't match the new model. " +
+        "Confirming will save this change, then automatically reset all data " +
+        "and start a fresh ingestion run.";
+    }
+    if (!window.confirm(confirmMessage)) return;
+
     setIsSaving(true);
     setSaveStatus(null);
     try {
@@ -158,6 +213,7 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
           provider_mode: settings.provider_mode,
           local_generation_model: settings.local_generation_model,
           cloud_generation_model: settings.cloud_generation_model,
+          cloud_embedding_model: settings.cloud_embedding_model,
         }),
         putSourceConfig({
           local_files_watch_dirs: linesToList(watchDirsText),
@@ -165,7 +221,28 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
         }),
       ]);
       setSettings(settingsResult);
+      originalRef.current = {
+        ...settingsResult,
+        watchDirsText,
+        notionPageIdsText,
+      };
       setSaveStatus({ ok: true, text: "Saved." });
+
+      if (embeddingModelChanged) {
+        setSaveStatus({
+          ok: true,
+          text: "Saved. Resetting data and re-ingesting…",
+        });
+        await onResetAll();
+        await onTriggerIngestion();
+        const [sourcesResult, connectionsResult] = await Promise.all([
+          getSourcesStatus(),
+          getSourceConnections(),
+        ]);
+        setSources(sourcesResult);
+        setConnections(connectionsResult);
+        setSaveStatus({ ok: true, text: "Saved. Re-ingestion started." });
+      }
     } catch (error) {
       setSaveStatus({ ok: false, text: error.message });
     } finally {
@@ -199,7 +276,7 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
       <h1>Settings</h1>
 
       <section className="settings-section">
-        <h2>LLM Provider</h2>
+        <h2>Generation Provider</h2>
         {PROVIDER_MODES.map((mode) => (
           <div className="radio-option" key={mode.value}>
             <input
@@ -223,11 +300,14 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
       <section className="settings-section">
         <h2>Models</h2>
         <p className="settings-field-hint">
-          Generation: only the model matching the provider mode above is
-          actually used — both are kept here so switching modes doesn't lose the
-          other side's value. Embedding always uses the fixed cloud model below,
-          regardless of provider mode — there's no local embedding option, so
-          this needs an OpenRouter API key configured even under Fully Local.
+          Generation: only the model matching the provider above is actually
+          used — both are kept here so switching doesn't lose the other side's
+          value. Embedding is separate and always cloud, regardless of which
+          generation provider is selected — there's no local embedding option,
+          so an OpenRouter API key is required either way. Changing the
+          embedding model needs a full data reset and re-ingestion, since
+          existing embeddings won't match the new model — saving a change here
+          will ask you to confirm that first.
         </p>
 
         <div className="model-field">
@@ -267,17 +347,22 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
         </div>
 
         <div className="model-field">
-          <label htmlFor="embedding-model">
+          <label htmlFor="cloud-embedding-model">
             Embedding model{" "}
-            <span className="model-field-fixed">(fixed, always cloud)</span>
+            <span className="model-field-fixed">(always cloud)</span>
           </label>
           <input
-            id="embedding-model"
+            id="cloud-embedding-model"
             className="model-select"
             type="text"
-            disabled
             value={settings.cloud_embedding_model}
-            readOnly
+            onChange={(event) =>
+              setSettings((prev) => ({
+                ...prev,
+                cloud_embedding_model: event.target.value,
+              }))
+            }
+            placeholder="e.g. openai/text-embedding-3-small"
           />
         </div>
       </section>

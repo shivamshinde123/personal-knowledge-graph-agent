@@ -229,9 +229,13 @@ class ProviderInterface(ABC):
 
         Unlike generation, embedding does not follow ``provider_mode`` —
         ``get_provider("embedding")`` always resolves to OpenRouter,
-        regardless of mode (see ``get_provider()``'s own docstring for why:
-        a single, frozen embedding model means there's no mode-driven
-        dimension mismatch to guard against at all). Requires
+        regardless of mode (see ``get_provider()``'s own docstring). There
+        is only one embedding model in play at any time
+        (``settings.config.llm.cloud_embedding_model``), user-editable —
+        so a mode switch can never mismatch vectors the way switching
+        between two separate models could, but changing the embedding
+        model itself still can; the frontend confirms with the user and
+        triggers a reset + re-ingest when it changes. Requires
         ``OPENROUTER_API_KEY`` even under ``fully_local``.
 
         Args:
