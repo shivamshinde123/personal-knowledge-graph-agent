@@ -12,8 +12,14 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from api.schemas import SettingsResponse, SettingsUpdateRequest, SettingsUpdateResponse
-from config.settings import get_settings, update_llm_config
+from api.schemas import (
+    SettingsResponse,
+    SettingsUpdateRequest,
+    SettingsUpdateResponse,
+    SourceConfigResponse,
+    SourceConfigUpdateRequest,
+)
+from config.settings import get_settings, update_llm_config, update_source_config
 
 router = APIRouter()
 
@@ -42,4 +48,27 @@ def put_settings_route(payload: SettingsUpdateRequest) -> SettingsUpdateResponse
         provider_mode=config.llm.provider_mode,
         local_model=config.llm.local_model,
         cloud_model=config.llm.cloud_model,
+    )
+
+
+@router.get("/settings/sources", response_model=SourceConfigResponse)
+def get_source_config_route() -> SourceConfigResponse:
+    """Return the current source-scope configuration (watch folders, Notion scope)."""
+    env = get_settings().env
+    return SourceConfigResponse(
+        local_files_watch_dirs=[str(d) for d in env.watch_dirs],
+        notion_page_ids=env.notion_page_ids_list,
+    )
+
+
+@router.put("/settings/sources", response_model=SourceConfigResponse)
+def put_source_config_route(payload: SourceConfigUpdateRequest) -> SourceConfigResponse:
+    """Update the source-scope configuration; a ``ConfigError`` maps to 500."""
+    env = update_source_config(
+        local_files_watch_dirs=payload.local_files_watch_dirs,
+        notion_page_ids=payload.notion_page_ids,
+    )
+    return SourceConfigResponse(
+        local_files_watch_dirs=[str(d) for d in env.watch_dirs],
+        notion_page_ids=env.notion_page_ids_list,
     )

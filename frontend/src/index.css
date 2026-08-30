@@ -445,6 +445,29 @@ a {
   opacity: 0.5;
 }
 
+.settings-field-hint {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.source-scope-textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  font-family: var(--mono);
+  resize: vertical;
+}
+
+.source-scope-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .settings-section-header {
   display: flex;
   align-items: center;

@@ -68,20 +68,40 @@ class FakeBlocks:
         self.children = FakeBlocksChildren(blocks_by_parent)
 
 
+class FakePages:
+    def __init__(self, pages_by_id):
+        """Hold a fake ``retrieve`` endpoint, mirroring ``Client.pages``."""
+        self._pages_by_id = pages_by_id
+        self.calls: list[str] = []
+
+    def retrieve(self, page_id):
+        self.calls.append(page_id)
+        if page_id not in self._pages_by_id:
+            raise ValueError(f"no such page: {page_id}")
+        return self._pages_by_id[page_id]
+
+
 class FakeClient:
     def __init__(self, pages, blocks_by_parent, auth=None):
-        """A fake ``notion_client.Client`` exposing just ``search``/``blocks``."""
+        """A fake ``notion_client.Client`` exposing ``search``/``blocks``/``pages``."""
         self._pages = pages
         self.blocks = FakeBlocks(blocks_by_parent)
+        self.pages = FakePages({page["id"]: page for page in pages})
 
     def search(self, filter=None, start_cursor=None):
         return {"results": self._pages, "has_more": False, "next_cursor": None}
 
 
-def install_fake_client(monkeypatch, pages, blocks_by_parent, api_key="secret"):
+def install_fake_client(
+    monkeypatch, pages, blocks_by_parent, api_key="secret", notion_page_ids=()
+):
     monkeypatch.setattr(
         "extractors.notion.get_settings",
-        lambda: SimpleNamespace(env=SimpleNamespace(notion_api_key=api_key)),
+        lambda: SimpleNamespace(
+            env=SimpleNamespace(
+                notion_api_key=api_key, notion_page_ids_list=list(notion_page_ids)
+            )
+        ),
     )
     monkeypatch.setattr(
         "extractors.notion.Client",
@@ -201,7 +221,9 @@ class TestErrorHandling:
     def test_search_failure_raises_extractor_error(self, monkeypatch):
         monkeypatch.setattr(
             "extractors.notion.get_settings",
-            lambda: SimpleNamespace(env=SimpleNamespace(notion_api_key="secret")),
+            lambda: SimpleNamespace(
+                env=SimpleNamespace(notion_api_key="secret", notion_page_ids_list=[])
+            ),
         )
 
         class ExplodingClient:
@@ -229,7 +251,9 @@ class TestErrorHandling:
 
         monkeypatch.setattr(
             "extractors.notion.get_settings",
-            lambda: SimpleNamespace(env=SimpleNamespace(notion_api_key="secret")),
+            lambda: SimpleNamespace(
+                env=SimpleNamespace(notion_api_key="secret", notion_page_ids_list=[])
+            ),
         )
         fake = FakeClient([bad_page, good_page], blocks_by_parent)
         fake.blocks.children = ExplodingChildren(blocks_by_parent)
@@ -257,3 +281,82 @@ class TestProgressLogging:
         assert any(
             "finished" in r.message and "30" in r.message for r in caplog.records
         )
+
+
+class TestScopedToConfiguredPages:
+    """``notion_page_ids_list`` restricts ingestion to specific pages.
+
+    Fetched directly by id, not via the workspace-wide search — see
+    DECISIONS.md, 2026-08-30.
+    """
+
+    def test_only_the_configured_pages_are_fetched_not_the_whole_workspace(
+        self, monkeypatch
+    ):
+        wanted = make_page("page-wanted", "Wanted")
+        unwanted = make_page("page-unwanted", "Unwanted")
+        blocks_by_parent = {
+            "page-wanted": [block("paragraph", "keep me")],
+            "page-unwanted": [block("paragraph", "should never be fetched")],
+        }
+        install_fake_client(
+            monkeypatch,
+            [wanted, unwanted],
+            blocks_by_parent,
+            notion_page_ids=["page-wanted"],
+        )
+
+        items = extract_new_items()
+
+        assert [item.source_ref_id for item in items] == ["page-wanted"]
+
+    def test_search_is_never_called_when_pages_are_scoped(self, monkeypatch):
+        page = make_page("page-1", "Scoped")
+        blocks_by_parent = {"page-1": [block("paragraph", "text")]}
+
+        class NoSearchFakeClient(FakeClient):
+            def search(self, filter=None, start_cursor=None):
+                raise AssertionError("search() should not be called when scoped")
+
+        monkeypatch.setattr(
+            "extractors.notion.get_settings",
+            lambda: SimpleNamespace(
+                env=SimpleNamespace(
+                    notion_api_key="secret", notion_page_ids_list=["page-1"]
+                )
+            ),
+        )
+        monkeypatch.setattr(
+            "extractors.notion.Client",
+            lambda auth: NoSearchFakeClient([page], blocks_by_parent),
+        )
+
+        items = extract_new_items()
+
+        assert len(items) == 1
+
+    def test_an_unfetchable_configured_page_is_skipped_not_raised(self, monkeypatch):
+        good_page = make_page("page-good", "Good")
+        install_fake_client(
+            monkeypatch,
+            [good_page],
+            {"page-good": [block("paragraph", "fine")]},
+            notion_page_ids=["page-good", "page-does-not-exist"],
+        )
+
+        items = extract_new_items()
+
+        assert [item.source_ref_id for item in items] == ["page-good"]
+
+    def test_an_empty_scope_falls_back_to_the_whole_workspace(self, monkeypatch):
+        page = make_page("page-1", "Unscoped")
+        install_fake_client(
+            monkeypatch,
+            [page],
+            {"page-1": [block("paragraph", "text")]},
+            notion_page_ids=[],
+        )
+
+        items = extract_new_items()
+
+        assert [item.source_ref_id for item in items] == ["page-1"]

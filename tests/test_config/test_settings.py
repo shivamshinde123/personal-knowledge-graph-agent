@@ -15,6 +15,7 @@ from config.settings import (
     load_config,
     reload_settings,
     update_llm_config,
+    update_source_config,
 )
 
 
@@ -292,6 +293,84 @@ class TestUpdateLlmConfig:
         before = get_settings()
 
         update_llm_config(provider_mode="fully_cloud", path=config_path)
+
+        assert get_settings() is before
+
+
+class TestUpdateSourceConfig:
+    def test_updates_watch_dirs(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+
+        result = update_source_config(
+            local_files_watch_dirs=["/a/b", "/c/d"], path=env_path
+        )
+
+        assert [str(p) for p in result.watch_dirs] == [
+            str(anchor_path(Path("/a/b"))),
+            str(anchor_path(Path("/c/d"))),
+        ]
+
+    def test_updates_notion_page_ids(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+
+        result = update_source_config(
+            notion_page_ids=["page-1", "page-2"], path=env_path
+        )
+
+        assert result.notion_page_ids_list == ["page-1", "page-2"]
+
+    def test_omitted_fields_are_left_unchanged(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+        update_source_config(local_files_watch_dirs=["/a"], path=env_path)
+
+        result = update_source_config(notion_page_ids=["page-1"], path=env_path)
+
+        assert [str(p) for p in result.watch_dirs] == [str(anchor_path(Path("/a")))]
+        assert result.notion_page_ids_list == ["page-1"]
+
+    def test_an_empty_list_clears_the_setting(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+        update_source_config(notion_page_ids=["page-1"], path=env_path)
+
+        result = update_source_config(notion_page_ids=[], path=env_path)
+
+        assert result.notion_page_ids_list == []
+
+    def test_other_lines_in_the_file_are_preserved(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text(
+            "NOTION_API_KEY=secret-123\n# a comment\n", encoding="utf-8"
+        )
+
+        update_source_config(local_files_watch_dirs=["/a"], path=env_path)
+
+        written = env_path.read_text(encoding="utf-8")
+        assert "NOTION_API_KEY=secret-123" in written
+        assert "# a comment" in written
+
+    def test_paths_with_backslashes_and_commas_round_trip_correctly(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+        windows_path = r"C:\Users\Test\Documents\Watched"
+
+        result = update_source_config(
+            local_files_watch_dirs=[windows_path], path=env_path
+        )
+
+        assert str(result.watch_dirs[0]) == str(anchor_path(Path(windows_path)))
+
+    def test_a_non_default_path_does_not_touch_the_global_settings_cache(
+        self, tmp_path
+    ):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+        before = get_settings()
+
+        update_source_config(local_files_watch_dirs=["/a"], path=env_path)
 
         assert get_settings() is before
 

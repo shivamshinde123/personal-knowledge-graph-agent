@@ -274,8 +274,11 @@ calls `pipeline/filters.py` next.
   directory is logged and skipped, not fatal — other configured
   directories still get scanned.
 - `extractors/notion.py` — lists every page the integration (`NOTION_API_KEY`)
-  can see via `Client.search()` (paginated), filters by
-  `last_edited_time > since`, then recursively walks each page's blocks via
+  can see via `Client.search()` (paginated), unless `NOTION_PAGE_IDS` is
+  configured, in which case only those pages are fetched directly by id
+  (`Client.pages.retrieve()`) instead — see DECISIONS.md, 2026-08-30.
+  Filters by `last_edited_time > since`, then recursively walks each
+  page's blocks via
   `Client.blocks.children.list()` (`_collect_block_text()`), converting each
   block's `rich_text` to plain text and joining blocks with blank lines so
   headings/paragraphs stay natural chunk boundaries. Title comes from the
@@ -786,6 +789,31 @@ See DECISIONS.md, 2026-08-29.
 
 ---
 
+## Entry point: `GET`/`PUT /api/settings/sources` (`api/routes/settings.py`)
+
+Extension beyond `docs/API_Specification.docx` — configurable ingestion
+scope (local watch folders, Notion page/database ids), not just LLM
+provider config. See DECISIONS.md, 2026-08-30.
+
+1. `GET /settings/sources` → `config/settings.py::get_settings().env`'s
+   `watch_dirs`/`notion_page_ids_list` computed properties, read directly
+   (same "config isn't storage/providers" reasoning as `GET /settings`
+   above)
+2. `PUT /settings/sources` → `config/settings.py::update_source_config()`
+   — writes `LOCAL_FILES_WATCH_DIRS`/`NOTION_PAGE_IDS` to `config/.env` via
+   `python-dotenv`'s `set_key()` (rewrites just those lines in place,
+   leaving every other line/comment untouched), only the given fields (a
+   partial update); a `ConfigError` (file I/O failure) maps to 500 via the
+   shared handler
+3. Both return `{"local_files_watch_dirs": [...], "notion_page_ids": [...]}`
+4. `extractors/notion.py::extract_new_items()` reads
+   `notion_page_ids_list` on its next run: non-empty means fetch exactly
+   those pages by id (`client.pages.retrieve()`) instead of the
+   workspace-wide `client.search()`; empty keeps the original "every page
+   the integration can see" behavior
+
+---
+
 ## Entry point: `GET /api/sessions` (`api/routes/sessions.py`)
 
 1. `storage/sqlite_store.py::list_sessions()` — most recently active first
@@ -857,15 +885,16 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    sources (or an error state) once it resolves, and reports the (possibly
    new) `session_id` up to `App.jsx` via `onTurnCompleted`
 4. `SettingsPanel.jsx` — on mount, calls `api/client.js::getSettings()`,
-   `getSourcesStatus()`, and `getSourceConnections()` in parallel; "Save
-   Changes" calls `putSettings()` with the current
-   `provider_mode`/`cloud_model` and updates local state from the
-   response. Each connected-source card shows the live connection status
-   (`getSourceConnections()`'s cache-or-fresh result) rather than the
-   batch-run status alone; "Reverify" calls
+   `getSourcesStatus()`, `getSourceConnections()`, and `getSourceConfig()`
+   in parallel; "Save Changes" calls `putSettings()` (provider config) and
+   `putSourceConfig()` (watch folders/Notion scope, parsed from a
+   one-per-line textarea via `linesToList()`) together, updating local
+   state from the responses. Each connected-source card shows the live
+   connection status (`getSourceConnections()`'s cache-or-fresh result)
+   rather than the batch-run status alone; "Reverify" calls
    `verifySourceConnections()` (force-refreshes, bypassing the cache) and
    replaces the connections state with the fresh result — see
-   DECISIONS.md, 2026-08-29
+   DECISIONS.md, 2026-08-29 and 2026-08-30
 5. `api/client.js` is the only module making network calls (per
    `docs/Coding_Conventions.docx` section 3) — every function maps
    directly to one `docs/API_Specification.docx` endpoint, talking to
