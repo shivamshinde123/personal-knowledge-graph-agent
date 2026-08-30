@@ -77,7 +77,9 @@ class TestGetSourcesStatus:
 
 
 class TestGetConnections:
-    def test_reports_gmail_github_calendar_as_not_configured(self, monkeypatch, client):
+    def test_reports_every_unconfigured_source_as_not_configured(
+        self, monkeypatch, client
+    ):
         from types import SimpleNamespace
 
         monkeypatch.setattr(
@@ -86,6 +88,7 @@ class TestGetConnections:
                 env=SimpleNamespace(
                     watch_dirs=[],
                     notion_api_key=None,
+                    gmail_credentials_path=None,
                     browser_history_path=None,
                 )
             ),

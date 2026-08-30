@@ -8,6 +8,30 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-30 — Gmail extractor: one item per thread, and a one-time OAuth setup step
+
+**Context**: Building the Gmail extractor (`docs/Data_Extraction_Specification.docx` section 5). Unlike GitHub (a personal access token) or Notion (an integration token), a personal Gmail inbox has no service-account/domain-wide-delegation option — API access requires real OAuth2 user consent, which needs one interactive, browser-based approval.
+
+**One `ExtractedItem` per thread, not per message**: the spec's field table lists "thread ID" as something to extract, but `ExtractedItem` has no generic metadata field to hang it off of (confirmed against `storage/sqlite_store.py`'s `items` table — no metadata/JSON column, same fixed-field shape every other extractor already works within). Rather than storing `thread_id` as inert metadata nothing downstream reads, the extractor groups every message in a thread into one item: `source_ref_id` is the thread id, and `raw_text` is the full conversation (every message, oldest first, each prefixed with its sender/date), so a reply is never embedded in isolation, disconnected from the conversation it's actually part of. A new reply to an existing thread re-extracts and re-embeds the *whole*, now-longer conversation, since `insert_item()` upserts on `(source_type, source_ref_id)` — not a second, disconnected item per reply.
+
+**OAuth is a one-time setup step, never part of the daily batch itself**: `extract_new_items()` only ever loads a *cached* token from `data/gmail_token.json` and silently refreshes it if expired — it never opens a browser. If no cached token exists yet, it raises `ExtractorError` with the exact command to run instead of hanging an unattended cron/Task-Scheduler run waiting on a consent screen nobody's watching. The actual interactive consent lives in `setup_auth()`, run once via `uv run python -m extractors.gmail --setup-auth` — matches `docs/Environment_Config_Reference.docx`'s "Setup Checklist" already treating "Create ... Gmail OAuth credentials" as a one-time initial-setup item, not a per-run step, and doesn't conflict with "fully automatable, zero-manual-work" — that principle is about *ongoing* daily runs, same as GitHub's personal-access-token creation or Notion's integration setup already being one-time manual steps.
+
+**New dependencies**: `google-api-python-client`, `google-auth-oauthlib`, `google-auth` — no way around a real dependency here, unlike GitHub's raw-`httpx` approach; Google's OAuth token refresh and REST client plumbing isn't worth hand-rolling.
+
+**Attachment text extraction reuses `extractors/local_files.py`'s libraries** (`pypdf`, `python-docx`) rather than adding new ones — same "Selectively: relevant document types only" scope as the spec (PDF/DOCX only; images, archives, spreadsheets, etc. skipped).
+
+**HTML-only messages get a crude tag-strip fallback**, not a full HTML parser — Gmail's API returns `text/plain` when a client provides one, but an HTML-only message needs *some* plain-text form for chunking, and preserving HTML structure isn't something chunking needs anyway.
+
+**Live connection check**: `agent/connection_check.py`'s `_check_gmail()` replaces Gmail's previous permanent `"not_configured"` placeholder. Distinguishes "not yet authorized" (`setup_auth()` hasn't been run — reported as `"not_configured"`, not an error, since nothing is actually broken) from a real failure (revoked/invalid token, unreachable API — reported as `"error"`), by checking for the specific `ExtractorError` message `_get_credentials()` raises for the former case.
+
+**Ruff per-file-ignores extended for `tests/**`** (`D107`, `N802`, `N803`): a fake test double for the Gmail (or, later, Calendar) API must mimic that API's own camelCase method/parameter names (`userId`, `getProfile`, `metadataHeaders`) exactly to be a faithful fake — Google's Python client preserves the REST API's camelCase verbatim rather than translating to snake_case, unlike `notion_client`'s own SDK.
+
+**Verified**: `uv run pytest` — new extractor tests (`tests/test_extractors/test_gmail.py`, fake Gmail service objects covering thread grouping, label filtering, and HTML fallback) and updated connection-check tests all pass; full suite passes except the two pre-existing, unrelated failures (`config.yaml`'s real `provider_mode` differing from the committed default — the user's own live setting, not touched here). `black`/`ruff` clean.
+
+**Affects**: `extractors/gmail.py` (new), `agent/connection_check.py`, `scheduler/daily_batch.py`, `pyproject.toml` (new dependencies + ruff per-file-ignores), `tests/test_extractors/test_gmail.py` (new), `tests/test_agent/test_connection_check.py`, `tests/test_api/test_sources_route.py`
+
+---
+
 ## 2026-08-30 — Configurable local watch folders and Notion page scope, from Settings
 
 **Context**: `LOCAL_FILES_WATCH_DIRS` was only editable by hand-editing `config/.env`; Notion had no scoping at all — `extractors/notion.py` always ingested every page the integration could see, with no way to restrict it. Requested directly (see issue #55, partially addressed here — the first-run wizard half is still open).

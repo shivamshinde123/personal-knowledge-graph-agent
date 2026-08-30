@@ -31,7 +31,7 @@ import neo4j
 from chromadb.api.models.Collection import Collection
 
 from config.settings import get_settings
-from extractors import browser_history, local_files, notion
+from extractors import browser_history, gmail, local_files, notion
 from extractors.base import ExtractedItem, ExtractorError
 from pipeline.chunking import chunk_text
 from pipeline.embeddings import embed_chunks
@@ -57,6 +57,7 @@ logger = logging.getLogger(__name__)
 _EXTRACTORS: list[tuple[str, Callable[[datetime | None], list[ExtractedItem]]]] = [
     ("local_file", local_files.extract_new_items),
     ("notion", notion.extract_new_items),
+    ("gmail", gmail.extract_new_items),
     ("browser_history", browser_history.extract_new_items),
 ]
 
