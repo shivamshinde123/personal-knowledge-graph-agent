@@ -27,11 +27,13 @@ def fake_env(
     *,
     watch_dirs=(),
     notion_api_key=None,
+    github_token=None,
     browser_history_path=None,
 ):
     return SimpleNamespace(
         watch_dirs=list(watch_dirs),
         notion_api_key=notion_api_key,
+        github_token=github_token,
         browser_history_path=browser_history_path,
     )
 
@@ -57,13 +59,13 @@ class TestCheckAllConnections:
             "browser_history",
         ]
 
-    def test_gmail_github_calendar_are_always_not_configured(self, monkeypatch):
+    def test_gmail_and_calendar_are_always_not_configured(self, monkeypatch):
         patch_settings(monkeypatch, fake_env())
 
         results = check_all_connections()
 
         by_type = {r.source_type: r for r in results}
-        for source in ("gmail", "github", "calendar"):
+        for source in ("gmail", "calendar"):
             assert by_type[source].status == "not_configured"
             assert "not yet built" in by_type[source].detail
 
@@ -170,6 +172,56 @@ class TestCheckNotion:
         notion = next(r for r in results if r.source_type == "notion")
         assert notion.status == "error"
         assert "invalid" in notion.detail
+
+
+class TestCheckGitHub:
+    def test_no_token_is_not_configured(self, monkeypatch):
+        patch_settings(monkeypatch, fake_env(github_token=None))
+
+        results = check_all_connections()
+
+        github = next(r for r in results if r.source_type == "github")
+        assert github.status == "not_configured"
+
+    def test_a_working_token_is_ok(self, monkeypatch):
+        import httpx
+
+        patch_settings(monkeypatch, fake_env(github_token="fake-token"))
+
+        def handler(request):
+            return httpx.Response(200, json={"login": "octocat"})
+
+        monkeypatch.setattr(
+            "httpx.get",
+            lambda url, **kwargs: httpx.Client(
+                transport=httpx.MockTransport(handler)
+            ).get(url, **{k: v for k, v in kwargs.items() if k != "timeout"}),
+        )
+
+        results = check_all_connections()
+
+        github = next(r for r in results if r.source_type == "github")
+        assert github.status == "ok"
+
+    def test_a_bad_token_is_an_error(self, monkeypatch):
+        import httpx
+
+        patch_settings(monkeypatch, fake_env(github_token="bad-token"))
+
+        def handler(request):
+            return httpx.Response(401, json={"message": "Bad credentials"})
+
+        monkeypatch.setattr(
+            "httpx.get",
+            lambda url, **kwargs: httpx.Client(
+                transport=httpx.MockTransport(handler)
+            ).get(url, **{k: v for k, v in kwargs.items() if k != "timeout"}),
+        )
+
+        results = check_all_connections()
+
+        github = next(r for r in results if r.source_type == "github")
+        assert github.status == "error"
 
 
 class TestGetConnectionStatus:

@@ -7,7 +7,7 @@ change to an entry point or call chain.
 > **Status**: the configuration layer, all three storage backends, the
 > provider layer, the entire pipeline layer (`filters`, `chunking`,
 > `metadata`, `embeddings`, `relationships`), `scheduler/daily_batch.py`,
-> and three extractors (local files, Notion, browser history) are
+> and four extractors (local files, Notion, GitHub, browser history) are
 > implemented and merged to `main`. The agent layer is complete:
 > `agent/router.py`, `agent/search_nodes.py`, `agent/graph_traversal.py`,
 > `agent/merger.py`, `agent/synthesizer.py`, and the LangGraph wiring in
@@ -31,8 +31,8 @@ change to an entry point or call chain.
 > (see DECISIONS.md, all 2026-08-29). The evaluation layer
 > (`eval/test_questions.json`, `eval/evaluators.py`,
 > `eval/run_evaluation.py`, `agent/tracing.py`) is implemented and
-> verified against the real LangSmith account (see below). Remaining: the
-> three extractors not yet built (Gmail, GitHub, Google Calendar).
+> verified against the real LangSmith account (see below). Remaining: two
+> extractors not yet built (Gmail, Google Calendar).
 
 ---
 
@@ -288,6 +288,26 @@ calls `pipeline/filters.py` next.
   2026-08-24. Logs an INFO progress line every 25 pages scanned (a full
   scan visits every visible page and can take a long time on a large
   workspace — see DECISIONS.md, 2026-08-24).
+- `extractors/github.py` — lists every repository `GITHUB_TOKEN` can access
+  via `GET /user/repos` (paginated, `owner,collaborator,organization_member`
+  affiliation), unless `GITHUB_REPOS` is configured, in which case only
+  those `owner/repo` full names are processed instead — same convention as
+  Notion's `NOTION_PAGE_IDS` — see DECISIONS.md, 2026-08-30. Per repo,
+  independently: the README (its own `since` check via the most recent
+  commit touching that path, not re-extracted every run — prefixed with
+  the repo's description/topics), commits (`GET .../commits?since=...`,
+  each with its changed file names via one extra per-commit API call, not
+  raw diffs or an LLM summary), PRs (`GET .../pulls`, no native `since`
+  filter — paginated newest-created-first and stopped once a page's PR
+  predates `since`, with each PR's review comments folded into its text),
+  and issues (`GET .../issues?since=...`, excluding entries with a
+  `pull_request` key — that endpoint also returns PRs). Also extracts every
+  starred repo once per run (`GET /user/starred`, `since`-filtered by
+  `starred_at`) as a lightweight name/description/topics item, independent
+  of the repo scope above. A category (README/commits/PRs/issues) failing
+  for one repo, or a whole repo failing, is logged and skipped — the rest
+  of the run continues. Missing `GITHUB_TOKEN`, or listing accessible
+  repos failing outright, raises `ExtractorError` (source-level).
 - `extractors/browser_history.py` — copies `settings.env.browser_history_path`
   to a temp file before opening it (the browser holds the original locked
   while running — see DECISIONS.md, 2026-08-24), then reads Chrome's `urls`
@@ -444,9 +464,9 @@ test doubles/temp resources instead.
 1. `_run()` reads the watermark via `get_last_run_timestamp(conn)` and
    starts a run record via `start_ingestion_run(conn)`
 2. For each registered extractor in `_EXTRACTORS` (currently
-   `("local_file", local_files.extract_new_items)` and
-   `("notion", notion.extract_new_items)` — adding a source means adding
-   one entry here, per `docs/File_Folder_Structure.docx` section 4;
+   `local_file`, `notion`, `github`, and `browser_history` — adding a
+   source means adding one entry here, per
+   `docs/File_Folder_Structure.docx` section 4;
    `tests/test_scheduler/test_daily_batch.py`'s integration tests pin
    `_EXTRACTORS` to `local_file` only via an autouse fixture, so a new
    entry here never makes those tests real-network-dependent — see
@@ -754,10 +774,11 @@ See DECISIONS.md, 2026-08-29.
    order: `local_file`/`browser_history` — a real filesystem check
    (configured path/dir exists and is reachable); `notion` — a real,
    cheap Notion API call (`Client(auth=...).users.me()`) if
-   `NOTION_API_KEY` is set; `gmail`/`github`/`calendar` — always
-   `"not_configured"` with a "not yet built" detail, since no extractor
-   exists for these yet (see GitHub issues #38-#40) — never silently
-   reported as `"ok"`
+   `NOTION_API_KEY` is set; `github` — a real, cheap GitHub API call
+   (`GET /user` with `GITHUB_TOKEN`) if configured — see DECISIONS.md,
+   2026-08-30; `gmail`/`calendar` — always `"not_configured"` with a "not
+   yet built" detail, since no extractor exists for these yet — never
+   silently reported as `"ok"`
 4. Returns `{"connections": [{"source_type", "status", "detail",
    "checked_at"}, ...]}`, `status` one of `"ok"` / `"error"` /
    `"not_configured"`

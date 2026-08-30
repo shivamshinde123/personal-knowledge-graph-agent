@@ -7,14 +7,14 @@ depends only on the agent's public entrypoints. See ``DECISIONS.md``.
 Distinct from ``agent/sources_status.py``, which reports the *last daily
 batch run's* outcome per source (an item never fails there simply because
 it hasn't run recently, or at all) — before this module existed, that made
-the Settings screen show every source, including the three with no
-extractor built yet (Gmail, GitHub, Calendar), as a green "OK" the moment
-nothing had ever run, which reads as "verified working" when it really
-means "nothing has been checked." This module actually checks: for a
-configured source, is its credential/path valid right now (a real,
-cheap API call for Notion; a filesystem check for local files/browser
-history); for an unconfigured or not-yet-built source, says so explicitly
-rather than defaulting to "ok". See ``DECISIONS.md``.
+the Settings screen show every source, including ones with no extractor
+built yet, as a green "OK" the moment nothing had ever run, which reads
+as "verified working" when it really means "nothing has been checked."
+This module actually checks: for a configured source, is its
+credential/path valid right now (a real, cheap API call for Notion and
+GitHub; a filesystem check for local files/browser history); for an
+unconfigured or not-yet-built source, says so explicitly rather than
+defaulting to "ok". See ``DECISIONS.md``.
 
 Results are cached in-process (module-level, not persisted) since a live
 check — especially Notion's real API call — is too expensive to repeat on
@@ -36,12 +36,11 @@ logger = logging.getLogger(__name__)
 
 ConnectionState = Literal["ok", "error", "not_configured"]
 
-# Gmail, GitHub, and Google Calendar have no extractor built yet (see
-# GitHub issues #38-#40) — always reported as "not_configured" with a
-# distinct detail message, never silently folded into "ok" or "error".
+# Gmail and Google Calendar have no extractor built yet — always reported
+# as "not_configured" with a distinct detail message, never silently
+# folded into "ok" or "error". GitHub is checked live below.
 _NOT_YET_BUILT = {
     "gmail": "Gmail extractor not yet built.",
-    "github": "GitHub extractor not yet built.",
     "calendar": "Google Calendar extractor not yet built.",
 }
 
@@ -104,7 +103,7 @@ def check_all_connections() -> list[ConnectionStatus]:
         _check_local_files(env, now),
         _check_notion(env, now),
         _not_configured("gmail", now),
-        _not_configured("github", now),
+        _check_github(env, now),
         _not_configured("calendar", now),
         _check_browser_history(env, now),
     ]
@@ -169,6 +168,42 @@ def _check_notion(env: EnvSettings, now: datetime) -> ConnectionStatus:
         source_type="notion",
         status="ok",
         detail="Notion API token verified.",
+        checked_at=now,
+    )
+
+
+def _check_github(env: EnvSettings, now: datetime) -> ConnectionStatus:
+    if not env.github_token:
+        return ConnectionStatus(
+            source_type="github",
+            status="not_configured",
+            detail="GITHUB_TOKEN is not set.",
+            checked_at=now,
+        )
+    try:
+        import httpx
+
+        response = httpx.get(
+            "https://api.github.com/user",
+            headers={
+                "Authorization": f"Bearer {env.github_token}",
+                "Accept": "application/vnd.github+json",
+            },
+            timeout=10.0,
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        logger.warning("GitHub connection check failed: %s", exc)
+        return ConnectionStatus(
+            source_type="github",
+            status="error",
+            detail=str(exc),
+            checked_at=now,
+        )
+    return ConnectionStatus(
+        source_type="github",
+        status="ok",
+        detail="GitHub token verified.",
         checked_at=now,
     )
 

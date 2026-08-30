@@ -8,6 +8,30 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-30 — GitHub extractor: raw `httpx` against the REST API, no SDK
+
+**Context**: Building the GitHub extractor (`docs/Data_Extraction_Specification.docx` section 6). Unlike Notion (official `notion_client` SDK, already a dependency), there's no established GitHub client already in the project.
+
+**Decision**: Used raw `httpx` (already a dependency, no new one added) directly against `api.github.com`'s REST v3 endpoints, rather than adding `PyGithub` or another GitHub SDK. The API surface needed — list repos, commits (with a native `since` filter), PRs, issues (also `since`-filterable), PR review comments, starred repos, and a repo's README — is small and well-documented enough that a thin, purpose-built wrapper is simpler than learning and depending on a general-purpose SDK's own object model, and keeps the project's dependency footprint smaller (matching how `browser_history.py` reads the raw SQLite file directly rather than pulling in a browser-history-parsing library).
+
+**Scoping**: Added `GITHUB_REPOS` (env var) / `github_repos_list` (`EnvSettings` property), mirroring `NOTION_PAGE_IDS`/`notion_page_ids_list` exactly — an optional comma-separated `owner/repo` allowlist; empty/unset means "every repository the token can access" (`GET /user/repos` with `affiliation=owner,collaborator,organization_member`), not "nothing." Not yet wired into `PUT /api/settings/sources`/the Settings UI (out of scope for this backend-only branch, same as how `NOTION_PAGE_IDS` originally shipped `.env`-only before that endpoint existed) — settable directly in `.env` for now.
+
+**README re-extraction avoids needless re-embedding**: the spec says READMEs are "pulled once and periodically re-checked for updates," not re-extracted unconditionally on every run. Rather than tracking "have we ever pulled this README" state, the extractor looks up the README's own most recent commit (`GET /repos/{repo}/commits?path=README.md&per_page=1`) and applies the same `since` filter every other item gets — a README with no commits since the last run is skipped, avoiding a wasted re-embed of unchanged content.
+
+**Commit diffs are file names only, never raw code or an LLM summary**: per the spec's "Selectively" note. The extractor includes each commit's changed file names (one extra API call per commit, `GET /repos/{repo}/commits/{sha}`) as plain text alongside the commit message; any LLM summarization of that is `pipeline/metadata.py`'s concern if/when it's extended for it, never this extractor's — extractors never call an LLM provider (`docs/Component_Map.docx`).
+
+**Repo topics folded into the README item, not a separate item kind**: the spec lists "repo topics/tags" as its own extractable element, but a repo typically has only a handful of one-or-two-word topics — not enough standalone content to justify a whole separate `ExtractedItem`. Prefixed onto the README item's text instead (along with the repo's description), where they add useful context for metadata/relationship detection without inflating the item count.
+
+**PR pagination stops early once past `since`**: unlike commits/issues, GitHub's `/pulls` endpoint has no `since` query param. Fetched `sort=created&direction=desc` (newest first) and stopped paginating the moment a page's PR is older than `since`, rather than fetching every PR ever opened on every run.
+
+**Live connection check**: `agent/connection_check.py`'s `_check_github()` replaces GitHub's previous permanent `"not_configured"` placeholder — same shape as `_check_notion()` (a real, cheap API call, `GET /user`, verifying the token), removed from `_NOT_YET_BUILT` accordingly. Gmail and Google Calendar remain permanently `"not_configured"` until their own extractors exist.
+
+**Verified**: `uv run pytest` — new extractor tests (`tests/test_extractors/test_github.py`, `httpx.MockTransport`-faked GitHub API covering README/commits/PRs/issues/starred repos, `since` filtering, repo scoping, and per-repo failure isolation) and updated connection-check tests all pass; full suite passes except the two pre-existing, unrelated failures (`config.yaml`'s real `provider_mode` differing from the committed default — the user's own live setting, not touched here). `black`/`ruff` clean. Also fixed, incidentally: a corrupted `markupsafe` install in `.venv` (missing `__init__.py`, likely from an earlier interrupted install) that broke every test importing `api/` — reinstalled via `uv pip install --reinstall markupsafe`; unrelated to this session's own changes.
+
+**Affects**: `extractors/github.py` (new), `config/settings.py`, `scheduler/daily_batch.py`, `agent/connection_check.py`, `tests/test_extractors/test_github.py` (new), `tests/test_agent/test_connection_check.py`, `tests/test_api/test_sources_route.py`
+
+---
+
 ## 2026-08-30 — Configurable local watch folders and Notion page scope, from Settings
 
 **Context**: `LOCAL_FILES_WATCH_DIRS` was only editable by hand-editing `config/.env`; Notion had no scoping at all — `extractors/notion.py` always ingested every page the integration could see, with no way to restrict it. Requested directly (see issue #55, partially addressed here — the first-run wizard half is still open).
