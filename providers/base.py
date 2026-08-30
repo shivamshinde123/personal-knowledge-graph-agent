@@ -37,7 +37,7 @@ from config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
-Task = Literal["metadata", "relationship", "answer", "condense", "eval"]
+Task = Literal["metadata", "relationship", "answer", "condense", "eval", "embedding"]
 EvalCriterion = Literal["faithfulness", "relevance"]
 
 _MAX_RETRIES = 3
@@ -218,6 +218,30 @@ class ProviderInterface(ABC):
         Returns:
             A score in ``[0.0, 1.0]`` (higher is better) with a short
             explanation.
+
+        Raises:
+            ProviderError: If the call fails after retries are exhausted.
+        """
+
+    @abstractmethod
+    def generate_embeddings(self, texts: Sequence[str]) -> list[list[float]]:
+        """Embed a batch of texts into vectors.
+
+        The active provider's embedding model is driven by the same
+        ``provider_mode`` toggle as its generation model (``fully_local``:
+        ``sentence-transformers``; ``fully_cloud``: OpenRouter) — see
+        ``get_provider()``. Switching modes therefore changes which
+        embedding space new vectors land in; existing Chroma vectors from
+        the other mode are not automatically compatible with it (different
+        dimensionality/semantic space) — see DECISIONS.md for why a
+        mode switch calls for a full reset + re-ingestion, not a silent
+        mix of both.
+
+        Args:
+            texts: The texts to embed, in the order results are returned.
+
+        Returns:
+            One embedding vector per input text, same order, same length.
 
         Raises:
             ProviderError: If the call fails after retries are exhausted.
@@ -475,16 +499,31 @@ class LangChainProvider(ProviderInterface):
     the interface — see the module docstring.
     """
 
-    def __init__(self, chat_model: BaseChatModel, *, provider_name: str) -> None:
+    def __init__(
+        self,
+        chat_model: BaseChatModel,
+        *,
+        provider_name: str,
+        embed_fn: Callable[[Sequence[str]], list[list[float]]] | None = None,
+    ) -> None:
         """Initialize the provider.
 
         Args:
             chat_model: The LangChain chat model to route calls through.
             provider_name: Identifies this provider/model in error messages
                 and retry logs (e.g. ``"ollama:llama3:8b"``).
+            embed_fn: Embeds a batch of texts, backing
+                :meth:`generate_embeddings`. Not a LangChain ``Embeddings``
+                object directly — ``create_local_provider()`` wraps
+                ``sentence-transformers``, ``create_openrouter_provider()``
+                wraps a LangChain ``OpenAIEmbeddings`` — so this stays a
+                plain callable rather than committing to one shape.
+                ``None`` for a provider that never embeds (e.g. tests
+                exercising only the chat-model methods).
         """
         self._chat_model = chat_model
         self._provider_name = provider_name
+        self._embed_fn = embed_fn
 
     def generate_metadata(self, texts: Sequence[str]) -> list[ItemMetadata]:
         """See :meth:`ProviderInterface.generate_metadata`."""
@@ -556,24 +595,31 @@ class LangChainProvider(ProviderInterface):
 
         return _retry_with_backoff(call, provider_name=self._provider_name)
 
+    def generate_embeddings(self, texts: Sequence[str]) -> list[list[float]]:
+        """See :meth:`ProviderInterface.generate_embeddings`."""
+        if not texts:
+            return []
+        if self._embed_fn is None:
+            raise ProviderError(
+                f"{self._provider_name} was constructed without an embedding function"
+            )
+
+        def call() -> list[list[float]]:
+            return self._embed_fn(texts)
+
+        return _retry_with_backoff(call, provider_name=self._provider_name)
+
 
 def get_provider(task: Task) -> ProviderInterface:
     """Select the configured provider for a given task.
 
-    Reads ``settings.config.llm.provider_mode``:
-
-    - ``fully_local``: every task runs through Ollama.
-    - ``fully_cloud``: every task runs through OpenRouter.
-    - ``mixed``: the low-frequency, quality-sensitive ``"answer"`` task runs
-      through OpenRouter, as does ``"eval"`` — judging answer quality
-      deserves the same caliber of model as generating them, and eval runs
-      are infrequent (only ``eval/run_evaluation.py``, not the query path)
-      so the extra cost is acceptable. The cheaper, high-frequency
-      ``"metadata"`` and ``"relationship"`` ingestion tasks run through
-      Ollama, as does ``"condense"`` — it runs on every follow-up question,
-      and a rough rewrite that still improves retrieval over the raw
-      follow-up is good enough; the final answer is what actually needs
-      the better model. See ``DECISIONS.md``.
+    Reads ``settings.config.llm.provider_mode`` — ``fully_local``: every
+    task (generation and embedding alike) runs through Ollama /
+    ``sentence-transformers``. ``fully_cloud``: every task runs through
+    OpenRouter. There is no ``mixed`` mode (removed — see DECISIONS.md):
+    every task, `task` included, always resolves to the same provider, so
+    `task` is currently unused for routing (kept in the signature so a
+    future per-task override doesn't require every call site to change).
 
     Args:
         task: Which kind of call the returned provider will be used for.
@@ -588,13 +634,8 @@ def get_provider(task: Task) -> ProviderInterface:
     from providers.local_provider import create_local_provider
     from providers.openrouter_provider import create_openrouter_provider
 
+    del task  # unused — see docstring
     mode = get_settings().config.llm.provider_mode
-    if mode == "fully_local":
-        return create_local_provider()
     if mode == "fully_cloud":
         return create_openrouter_provider()
-    return (
-        create_openrouter_provider()
-        if task in ("answer", "eval")
-        else create_local_provider()
-    )
+    return create_local_provider()

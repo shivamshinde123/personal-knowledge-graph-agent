@@ -32,8 +32,10 @@ def get_settings_route() -> SettingsResponse:
     llm = get_settings().config.llm
     return SettingsResponse(
         provider_mode=llm.provider_mode,
-        local_model=llm.local_model,
-        cloud_model=llm.cloud_model,
+        local_generation_model=llm.local_generation_model,
+        local_embedding_model=llm.local_embedding_model,
+        cloud_generation_model=llm.cloud_generation_model,
+        cloud_embedding_model=llm.cloud_embedding_model,
     )
 
 
@@ -42,14 +44,18 @@ def put_settings_route(payload: SettingsUpdateRequest) -> SettingsUpdateResponse
     """Update the LLM provider configuration; a ``ConfigError`` maps to 500."""
     config = update_llm_config(
         provider_mode=payload.provider_mode,
-        local_model=payload.local_model,
-        cloud_model=payload.cloud_model,
+        local_generation_model=payload.local_generation_model,
+        local_embedding_model=payload.local_embedding_model,
+        cloud_generation_model=payload.cloud_generation_model,
+        cloud_embedding_model=payload.cloud_embedding_model,
     )
     return SettingsUpdateResponse(
         status="updated",
         provider_mode=config.llm.provider_mode,
-        local_model=config.llm.local_model,
-        cloud_model=config.llm.cloud_model,
+        local_generation_model=config.llm.local_generation_model,
+        local_embedding_model=config.llm.local_embedding_model,
+        cloud_generation_model=config.llm.cloud_generation_model,
+        cloud_embedding_model=config.llm.cloud_embedding_model,
     )
 
 

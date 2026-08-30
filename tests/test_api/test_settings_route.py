@@ -11,13 +11,21 @@ can never touch the real config.yaml.
 from types import SimpleNamespace
 
 
-def fake_settings(provider_mode="mixed", local_model="llama3:8b", cloud_model="x"):
+def fake_settings(
+    provider_mode="fully_local",
+    local_generation_model="llama3:8b",
+    local_embedding_model="sentence-transformers/all-MiniLM-L6-v2",
+    cloud_generation_model="x",
+    cloud_embedding_model="y",
+):
     return SimpleNamespace(
         config=SimpleNamespace(
             llm=SimpleNamespace(
                 provider_mode=provider_mode,
-                local_model=local_model,
-                cloud_model=cloud_model,
+                local_generation_model=local_generation_model,
+                local_embedding_model=local_embedding_model,
+                cloud_generation_model=cloud_generation_model,
+                cloud_embedding_model=cloud_embedding_model,
             )
         )
     )
@@ -28,9 +36,11 @@ class TestGetSettings:
         monkeypatch.setattr(
             "api.routes.settings.get_settings",
             lambda: fake_settings(
-                provider_mode="mixed",
-                local_model="llama3:8b",
-                cloud_model="anthropic/claude-sonnet-4",
+                provider_mode="fully_local",
+                local_generation_model="llama3:8b",
+                local_embedding_model="sentence-transformers/all-MiniLM-L6-v2",
+                cloud_generation_model="anthropic/claude-sonnet-4",
+                cloud_embedding_model="openai/text-embedding-3-small",
             ),
         )
 
@@ -38,9 +48,11 @@ class TestGetSettings:
 
         assert response.status_code == 200
         assert response.json() == {
-            "provider_mode": "mixed",
-            "local_model": "llama3:8b",
-            "cloud_model": "anthropic/claude-sonnet-4",
+            "provider_mode": "fully_local",
+            "local_generation_model": "llama3:8b",
+            "local_embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+            "cloud_generation_model": "anthropic/claude-sonnet-4",
+            "cloud_embedding_model": "openai/text-embedding-3-small",
         }
 
 
@@ -48,14 +60,26 @@ class TestPutSettings:
     def test_updates_and_returns_the_new_config(self, client, monkeypatch):
         captured = {}
 
-        def fake_update(*, provider_mode=None, local_model=None, cloud_model=None):
+        def fake_update(
+            *,
+            provider_mode=None,
+            local_generation_model=None,
+            local_embedding_model=None,
+            cloud_generation_model=None,
+            cloud_embedding_model=None,
+        ):
             captured["provider_mode"] = provider_mode
-            captured["cloud_model"] = cloud_model
+            captured["cloud_generation_model"] = cloud_generation_model
             return SimpleNamespace(
                 llm=SimpleNamespace(
-                    provider_mode=provider_mode or "mixed",
-                    local_model=local_model or "llama3:8b",
-                    cloud_model=cloud_model or "anthropic/claude-sonnet-4",
+                    provider_mode=provider_mode or "fully_local",
+                    local_generation_model=local_generation_model or "llama3:8b",
+                    local_embedding_model=local_embedding_model
+                    or "sentence-transformers/all-MiniLM-L6-v2",
+                    cloud_generation_model=cloud_generation_model
+                    or "anthropic/claude-sonnet-4",
+                    cloud_embedding_model=cloud_embedding_model
+                    or "openai/text-embedding-3-small",
                 )
             )
 
@@ -63,16 +87,19 @@ class TestPutSettings:
 
         response = client.put(
             "/api/settings",
-            json={"provider_mode": "fully_cloud", "cloud_model": "openai/gpt-4o"},
+            json={
+                "provider_mode": "fully_cloud",
+                "cloud_generation_model": "openai/gpt-4o",
+            },
         )
 
         assert response.status_code == 200
         body = response.json()
         assert body["status"] == "updated"
         assert body["provider_mode"] == "fully_cloud"
-        assert body["cloud_model"] == "openai/gpt-4o"
+        assert body["cloud_generation_model"] == "openai/gpt-4o"
         assert captured["provider_mode"] == "fully_cloud"
-        assert captured["cloud_model"] == "openai/gpt-4o"
+        assert captured["cloud_generation_model"] == "openai/gpt-4o"
 
     def test_invalid_provider_mode_returns_422(self, client):
         response = client.put(

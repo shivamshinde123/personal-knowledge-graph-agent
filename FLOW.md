@@ -184,24 +184,28 @@ only `providers/base.py`'s `get_provider()` and its return type,
 `ProviderInterface`.
 
 1. `get_provider(task)` — `task` is `"metadata"`, `"relationship"`,
-   `"condense"`, `"answer"`, or `"eval"`; reads
+   `"condense"`, `"answer"`, `"eval"`, or `"embedding"`; reads
    `settings.config.llm.provider_mode` and returns `create_local_provider()`
-   (Ollama), `create_openrouter_provider()` (OpenRouter), or, under `mixed`,
-   routes `"answer"` and `"eval"` to OpenRouter (judging answer quality
-   deserves the same caliber of model as generating them, and eval runs
-   are infrequent — only `eval/run_evaluation.py`, never the query path)
-   and the three cheaper, higher-frequency tasks (`"metadata"`,
-   `"relationship"`, `"condense"`) to Ollama (see DECISIONS.md, 2026-08-24
-   and 2026-08-29)
+   (Ollama + local `sentence-transformers` embedding) for `fully_local`, or
+   `create_openrouter_provider()` (OpenRouter for both generation and
+   embedding) for `fully_cloud` — every task always resolves to the same
+   provider, so `task` itself is currently unused for routing (there is no
+   `mixed` mode any more — removed, see DECISIONS.md, 2026-08-30)
 2. Both concrete providers construct a `LangChainProvider` around a
-   LangChain chat model (`ChatOllama` / `ChatOpenAI`) — this is where every
-   provider call's prompt building, JSON response parsing, and
-   retry-with-backoff actually live, shared by both. The `ChatOpenAI`
-   (OpenRouter) side always passes an explicit `max_tokens`
-   (`llm.cloud_max_tokens`, default `4096`) — left unset it would default
-   to the routed model's own maximum (64000 for `claude-sonnet-4`), which
-   can exceed the account's remaining credit balance and fail the call
-   outright; verified directly — see DECISIONS.md, 2026-08-29
+   LangChain chat model (`ChatOllama` / `ChatOpenAI`) plus an `embed_fn`
+   callable — this is where every provider call's prompt building, JSON
+   response parsing, and retry-with-backoff actually live, shared by both.
+   `create_local_provider()`'s `embed_fn` wraps a cached
+   `sentence-transformers` model (`llm.local_embedding_model`);
+   `create_openrouter_provider()`'s wraps a LangChain `OpenAIEmbeddings`
+   pointed at OpenRouter's base URL (`llm.cloud_embedding_model`) — verified
+   directly against the real OpenRouter API (see DECISIONS.md, 2026-08-30).
+   The `ChatOpenAI` (OpenRouter) side always passes an explicit
+   `max_tokens` (`llm.cloud_max_tokens`, default `4096`) — left unset it
+   would default to the routed model's own maximum (64000 for
+   `claude-sonnet-4`), which can exceed the account's remaining credit
+   balance and fail the call outright; verified directly — see
+   DECISIONS.md, 2026-08-29
 3. `provider.generate_metadata(texts)` — called by
    `pipeline/metadata.py::generate_metadata()` for the `project_name`/`topic`
    fields (batched: one call per group of `config.yaml`'s
@@ -242,6 +246,12 @@ only `providers/base.py`'s `get_provider()` and its return type,
    `"relevance"` (does `answer` address `question`); returns an
    `EvalJudgment(score, reasoning)`. Same preamble-tolerant parsing as
    `generate_relationship()` (see DECISIONS.md, 2026-08-29)
+8. `provider.generate_embeddings(texts)` — called by
+   `pipeline/embeddings.py::embed_chunks()`/`embed_query()` (see below);
+   returns one vector per input text via the provider's own `embed_fn`.
+   Switching `provider_mode` changes which embedding model — and
+   dimensionality — this returns; see DECISIONS.md, 2026-08-30, for the
+   resulting "reset + re-ingest after switching" constraint
 
 ---
 
@@ -354,11 +364,15 @@ than one call per item.
 Not an entry point itself. Unlike `pipeline/metadata.py`, this stage writes
 to Chroma directly rather than staying storage-free — see DECISIONS.md,
 2026-08-24, for why the two pipeline stages made opposite choices there.
+Embedding itself is not done here directly any more — both functions
+below call `providers/base.py::get_provider("embedding").
+generate_embeddings()`, so which model actually embeds (local
+`sentence-transformers` or OpenRouter) follows `provider_mode` the same
+way generation does — see DECISIONS.md, 2026-08-30.
 
 - `embed_chunks(collection, item_id, source_type, chunk_texts, *,
-  project_name=None, topic=None, created_at=None) -> list[Chunk]` — encodes
-  every chunk with the configured `sentence-transformers` model (loaded
-  once, cached by model name), calls
+  project_name=None, topic=None, created_at=None) -> list[Chunk]` — calls
+  `get_provider("embedding").generate_embeddings(chunk_texts)`, then
   `storage/chroma_store.py::upsert_chunks()` itself, and returns
   SQLite-ready `Chunk` objects (each with a freshly generated
   `embedding_id` pointing at the vector just written) for the caller to
@@ -366,6 +380,9 @@ to Chroma directly rather than staying storage-free — see DECISIONS.md,
   already-open `collection` rather than opening its own, since
   `get_collection()` opens a new client on every call by design — the
   caller opens one collection and reuses it across the whole ingestion run.
+- `embed_query(text) -> list[float]` — the single-text form, used for
+  query-time vector search and by `pipeline/relationships.py`'s candidate
+  search.
 
 ---
 
@@ -955,10 +972,13 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    new) `session_id` up to `App.jsx` via `onTurnCompleted`
 4. `SettingsPanel.jsx` — on mount, calls `api/client.js::getSettings()`,
    `getSourcesStatus()`, `getSourceConnections()`, and `getSourceConfig()`
-   in parallel; "Save Changes" calls `putSettings()` (provider config) and
-   `putSourceConfig()` (watch folders/Notion scope, parsed from a
-   one-per-line textarea via `linesToList()`) together, updating local
-   state from the responses. Each connected-source card shows the live
+   in parallel; "Save Changes" calls `putSettings()` (provider mode plus
+   all four model fields — `local_generation_model`/`local_embedding_model`/
+   `cloud_generation_model`/`cloud_embedding_model`, only the pair matching
+   `provider_mode` actually enabled for editing — see DECISIONS.md,
+   2026-08-30) and `putSourceConfig()` (watch folders/Notion scope, parsed
+   from a one-per-line textarea via `linesToList()`) together, updating
+   local state from the responses. Each connected-source card shows the live
    connection status (`getSourceConnections()`'s cache-or-fresh result)
    rather than the batch-run status alone; "Reverify" calls
    `verifySourceConnections()` (force-refreshes, bypassing the cache) and

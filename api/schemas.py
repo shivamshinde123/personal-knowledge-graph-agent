@@ -98,19 +98,27 @@ class ConnectionsResponse(BaseModel):
 
 
 class SettingsResponse(BaseModel):
-    """``GET /api/settings`` response body."""
+    """``GET /api/settings`` response body.
+
+    Four model fields, not two — generation and embedding are separately
+    configurable on each side. See ``DECISIONS.md``.
+    """
 
     provider_mode: ProviderMode
-    local_model: str
-    cloud_model: str
+    local_generation_model: str
+    local_embedding_model: str
+    cloud_generation_model: str
+    cloud_embedding_model: str
 
 
 class SettingsUpdateRequest(BaseModel):
     """``PUT /api/settings`` request body — every field is optional (partial update)."""
 
     provider_mode: ProviderMode | None = None
-    local_model: str | None = None
-    cloud_model: str | None = None
+    local_generation_model: str | None = None
+    local_embedding_model: str | None = None
+    cloud_generation_model: str | None = None
+    cloud_embedding_model: str | None = None
 
 
 class SettingsUpdateResponse(BaseModel):
@@ -118,8 +126,10 @@ class SettingsUpdateResponse(BaseModel):
 
     status: Literal["updated"]
     provider_mode: ProviderMode
-    local_model: str
-    cloud_model: str
+    local_generation_model: str
+    local_embedding_model: str
+    cloud_generation_model: str
+    cloud_embedding_model: str
 
 
 class SourceConfigResponse(BaseModel):

@@ -456,6 +456,17 @@ a {
   opacity: 0.5;
 }
 
+.model-field {
+  margin-bottom: 12px;
+}
+
+.model-field label {
+  display: block;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
 .settings-field-hint {
   margin: 0 0 8px;
   font-size: 12px;

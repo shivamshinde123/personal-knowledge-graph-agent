@@ -23,12 +23,14 @@ class TestLoadConfig:
     def test_parses_the_committed_config_yaml(self):
         config = load_config()
 
-        assert config.llm.provider_mode == "mixed"
+        assert config.llm.provider_mode == "fully_local"
         assert config.chunking.target_chunk_size_tokens == 400
         assert config.chunking.chunk_overlap_tokens == 40
         assert config.retrieval.top_k_vector == 8
         assert config.retrieval.relationship_candidate_count == 10
-        assert config.embedding.model == "sentence-transformers/all-MiniLM-L6-v2"
+        assert config.llm.local_embedding_model == (
+            "sentence-transformers/all-MiniLM-L6-v2"
+        )
 
     def test_parses_nested_filter_rules(self):
         config = load_config()
@@ -69,7 +71,7 @@ class TestLoadConfig:
         config = load_config(partial)
 
         assert config.llm.provider_mode == "fully_local"
-        assert config.llm.local_model == "llama3:8b"
+        assert config.llm.local_generation_model == "llama3:8b"
         assert config.retrieval.top_k_vector == 8
 
     def test_invalid_provider_mode_is_rejected(self, tmp_path: Path):
@@ -202,9 +204,11 @@ _SAMPLE_CONFIG = """\
 # Reference: docs/Environment_Config_Reference.docx section 4.
 
 llm:
-  provider_mode: mixed # fully_local | fully_cloud | mixed
-  local_model: llama3:8b # used when provider_mode is fully_local or mixed
-  cloud_model: anthropic/claude-sonnet-4 # used for cloud-routed tasks
+  provider_mode: fully_local # fully_local | fully_cloud
+  local_generation_model: llama3:8b # used when fully_local
+  local_embedding_model: sentence-transformers/all-MiniLM-L6-v2 # used when fully_local
+  cloud_generation_model: anthropic/claude-sonnet-4 # used when fully_cloud
+  cloud_embedding_model: openai/text-embedding-3-small # used when fully_cloud
 
 ingestion:
   schedule: "0 23 * * *" # cron expression; default 11 PM daily
@@ -227,9 +231,6 @@ retrieval:
   top_k_keyword: 8
   relationship_candidate_count: 10
   relationship_confidence_threshold: 0.6
-
-embedding:
-  model: sentence-transformers/all-MiniLM-L6-v2
 """
 
 
@@ -241,25 +242,29 @@ class TestUpdateLlmConfig:
         result = update_llm_config(provider_mode="fully_cloud", path=config_path)
 
         assert result.llm.provider_mode == "fully_cloud"
-        assert result.llm.cloud_model == "anthropic/claude-sonnet-4"
-        assert result.llm.local_model == "llama3:8b"
+        assert result.llm.cloud_generation_model == "anthropic/claude-sonnet-4"
+        assert result.llm.local_generation_model == "llama3:8b"
 
     def test_updates_multiple_fields_at_once(self, tmp_path):
         config_path = tmp_path / "config.yaml"
         config_path.write_text(_SAMPLE_CONFIG, encoding="utf-8")
 
         result = update_llm_config(
-            provider_mode="fully_cloud", cloud_model="openai/gpt-4o", path=config_path
+            provider_mode="fully_cloud",
+            cloud_generation_model="openai/gpt-4o",
+            cloud_embedding_model="openai/text-embedding-3-large",
+            path=config_path,
         )
 
         assert result.llm.provider_mode == "fully_cloud"
-        assert result.llm.cloud_model == "openai/gpt-4o"
+        assert result.llm.cloud_generation_model == "openai/gpt-4o"
+        assert result.llm.cloud_embedding_model == "openai/text-embedding-3-large"
 
     def test_the_written_file_is_actually_updated(self, tmp_path):
         config_path = tmp_path / "config.yaml"
         config_path.write_text(_SAMPLE_CONFIG, encoding="utf-8")
 
-        update_llm_config(cloud_model="openai/gpt-4o", path=config_path)
+        update_llm_config(cloud_generation_model="openai/gpt-4o", path=config_path)
 
         assert "openai/gpt-4o" in config_path.read_text(encoding="utf-8")
 
@@ -270,7 +275,7 @@ class TestUpdateLlmConfig:
         update_llm_config(provider_mode="fully_cloud", path=config_path)
 
         written = config_path.read_text(encoding="utf-8")
-        assert "# fully_local | fully_cloud | mixed" in written
+        assert "# fully_local | fully_cloud" in written
         assert '"0 23 * * *"' in written
         assert "domain_blocklist:" in written
         assert "google.com/search" in written
@@ -379,7 +384,7 @@ class TestGetSettings:
     def test_returns_both_halves(self):
         settings = get_settings()
 
-        assert settings.config.llm.provider_mode == "mixed"
+        assert settings.config.llm.provider_mode == "fully_local"
         assert settings.env.fastapi_port > 0
 
     def test_result_is_cached(self):

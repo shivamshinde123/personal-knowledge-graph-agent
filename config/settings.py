@@ -30,7 +30,7 @@ CONFIG_DIR = PROJECT_ROOT / "config"
 DEFAULT_CONFIG_PATH = CONFIG_DIR / "config.yaml"
 DEFAULT_ENV_PATH = CONFIG_DIR / ".env"
 
-ProviderMode = Literal["fully_local", "fully_cloud", "mixed"]
+ProviderMode = Literal["fully_local", "fully_cloud"]
 
 
 class ConfigError(Exception):
@@ -61,11 +61,21 @@ def anchor_path(value: Path) -> Path:
 
 
 class LLMConfig(BaseModel):
-    """LLM provider selection and the models used on each side."""
+    """LLM provider selection and the four models used across it.
 
-    provider_mode: ProviderMode = "mixed"
-    local_model: str = "llama3:8b"
-    cloud_model: str = "anthropic/claude-sonnet-4"
+    Four fields, not two, since generation and embedding are different
+    kinds of call with independently selectable models on each side — see
+    ``DECISIONS.md``. Only the pair matching ``provider_mode`` is actually
+    used at any given time (``providers/base.py::get_provider()``), but
+    both pairs are always present in config so switching modes doesn't
+    require re-entering the other side's models.
+    """
+
+    provider_mode: ProviderMode = "fully_local"
+    local_generation_model: str = "llama3:8b"
+    local_embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    cloud_generation_model: str = "anthropic/claude-sonnet-4"
+    cloud_embedding_model: str = "openai/text-embedding-3-small"
     cloud_max_tokens: int = 4096
 
 
@@ -116,21 +126,20 @@ class RetrievalConfig(BaseModel):
     relationship_candidate_max_distance: float | None = 0.6
 
 
-class EmbeddingConfig(BaseModel):
-    """Local embedding model selection."""
-
-    model: str = "sentence-transformers/all-MiniLM-L6-v2"
-
-
 class AppConfig(BaseModel):
-    """Full contents of ``config/config.yaml``."""
+    """Full contents of ``config/config.yaml``.
+
+    No separate ``embedding`` section — the embedding model selection
+    lives on ``LLMConfig`` alongside the generation models, since which
+    embedding model is active is driven by the same ``provider_mode``
+    toggle. See ``DECISIONS.md``.
+    """
 
     llm: LLMConfig = Field(default_factory=LLMConfig)
     ingestion: IngestionConfig = Field(default_factory=IngestionConfig)
     filters: FiltersConfig = Field(default_factory=FiltersConfig)
     chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
-    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
 
 
 # ---------------------------------------------------------------------------
@@ -270,8 +279,10 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
 def update_llm_config(
     *,
     provider_mode: ProviderMode | None = None,
-    local_model: str | None = None,
-    cloud_model: str | None = None,
+    local_generation_model: str | None = None,
+    local_embedding_model: str | None = None,
+    cloud_generation_model: str | None = None,
+    cloud_embedding_model: str | None = None,
     path: Path = DEFAULT_CONFIG_PATH,
 ) -> AppConfig:
     """Update ``config.yaml``'s ``llm`` section on disk, in place.
@@ -285,8 +296,14 @@ def update_llm_config(
 
     Args:
         provider_mode: New provider mode, or ``None`` to leave unchanged.
-        local_model: New local model tag, or ``None`` to leave unchanged.
-        cloud_model: New cloud model id, or ``None`` to leave unchanged.
+        local_generation_model: New local generation model tag, or
+            ``None`` to leave unchanged.
+        local_embedding_model: New local embedding model name, or ``None``
+            to leave unchanged.
+        cloud_generation_model: New cloud generation model id, or ``None``
+            to leave unchanged.
+        cloud_embedding_model: New cloud embedding model id, or ``None``
+            to leave unchanged.
         path: Path to the YAML configuration file. Defaults to the real
             configuration file; passing a different path (tests) writes
             there instead and leaves the process-wide ``get_settings()``
@@ -317,10 +334,14 @@ def update_llm_config(
     updated = dict(llm_section)
     if provider_mode is not None:
         updated["provider_mode"] = provider_mode
-    if local_model is not None:
-        updated["local_model"] = local_model
-    if cloud_model is not None:
-        updated["cloud_model"] = cloud_model
+    if local_generation_model is not None:
+        updated["local_generation_model"] = local_generation_model
+    if local_embedding_model is not None:
+        updated["local_embedding_model"] = local_embedding_model
+    if cloud_generation_model is not None:
+        updated["cloud_generation_model"] = cloud_generation_model
+    if cloud_embedding_model is not None:
+        updated["cloud_embedding_model"] = cloud_embedding_model
 
     try:
         LLMConfig.model_validate(updated)

@@ -29,25 +29,20 @@ const PROVIDER_MODES = [
     value: "fully_local",
     label: "Fully Local",
     description:
-      "Runs entirely through Ollama — no cost, no network dependency.",
+      "Runs entirely through Ollama and a local embedding model — no cost, no network dependency.",
   },
   {
     value: "fully_cloud",
     label: "Fully Cloud",
     description:
-      "Routes every call through OpenRouter — highest quality, per-call cost.",
-  },
-  {
-    value: "mixed",
-    label: "Mixed",
-    description:
-      "Cheap ingestion tasks run locally; answers are synthesized via OpenRouter.",
+      "Routes every generation and embedding call through OpenRouter — highest quality, per-call cost.",
   },
 ];
 
 /**
- * The Settings screen: LLM provider mode, cloud model, and connected data
- * source status. Per docs/UIUX_Wireframes.docx section 3.
+ * The Settings screen: LLM provider mode, the four generation/embedding
+ * model fields, and connected data source status. Per
+ * docs/UIUX_Wireframes.docx section 3.
  *
  * @param {object} props
  * @param {() => Promise<void>} props.onTriggerIngestion - starts a batch
@@ -161,7 +156,10 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
       const [settingsResult] = await Promise.all([
         putSettings({
           provider_mode: settings.provider_mode,
-          cloud_model: settings.cloud_model,
+          local_generation_model: settings.local_generation_model,
+          local_embedding_model: settings.local_embedding_model,
+          cloud_generation_model: settings.cloud_generation_model,
+          cloud_embedding_model: settings.cloud_embedding_model,
         }),
         putSourceConfig({
           local_files_watch_dirs: linesToList(watchDirsText),
@@ -195,9 +193,8 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
     );
   }
 
-  const cloudModelEnabled =
-    settings.provider_mode === "fully_cloud" ||
-    settings.provider_mode === "mixed";
+  const isLocal = settings.provider_mode === "fully_local";
+  const isCloud = settings.provider_mode === "fully_cloud";
 
   return (
     <div className="settings-panel">
@@ -226,20 +223,86 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
       </section>
 
       <section className="settings-section">
-        <h2>Cloud model</h2>
-        <input
-          className="model-select"
-          type="text"
-          disabled={!cloudModelEnabled}
-          value={settings.cloud_model}
-          onChange={(event) =>
-            setSettings((prev) => ({
-              ...prev,
-              cloud_model: event.target.value,
-            }))
-          }
-          placeholder="e.g. anthropic/claude-sonnet-4"
-        />
+        <h2>Models</h2>
+        <p className="settings-field-hint">
+          Only the pair matching the provider mode above is actually used — both
+          are kept here so switching modes doesn't lose the other side's values.
+          Switching provider mode changes the embedding model, which makes
+          existing embeddings incompatible with new ones; use "Reset all data"
+          below and re-run ingestion after switching.
+        </p>
+
+        <div className="model-field">
+          <label htmlFor="local-generation-model">Local generation model</label>
+          <input
+            id="local-generation-model"
+            className="model-select"
+            type="text"
+            disabled={!isLocal}
+            value={settings.local_generation_model}
+            onChange={(event) =>
+              setSettings((prev) => ({
+                ...prev,
+                local_generation_model: event.target.value,
+              }))
+            }
+            placeholder="e.g. llama3:8b"
+          />
+        </div>
+
+        <div className="model-field">
+          <label htmlFor="local-embedding-model">Local embedding model</label>
+          <input
+            id="local-embedding-model"
+            className="model-select"
+            type="text"
+            disabled={!isLocal}
+            value={settings.local_embedding_model}
+            onChange={(event) =>
+              setSettings((prev) => ({
+                ...prev,
+                local_embedding_model: event.target.value,
+              }))
+            }
+            placeholder="e.g. sentence-transformers/all-MiniLM-L6-v2"
+          />
+        </div>
+
+        <div className="model-field">
+          <label htmlFor="cloud-generation-model">Cloud generation model</label>
+          <input
+            id="cloud-generation-model"
+            className="model-select"
+            type="text"
+            disabled={!isCloud}
+            value={settings.cloud_generation_model}
+            onChange={(event) =>
+              setSettings((prev) => ({
+                ...prev,
+                cloud_generation_model: event.target.value,
+              }))
+            }
+            placeholder="e.g. anthropic/claude-sonnet-4"
+          />
+        </div>
+
+        <div className="model-field">
+          <label htmlFor="cloud-embedding-model">Cloud embedding model</label>
+          <input
+            id="cloud-embedding-model"
+            className="model-select"
+            type="text"
+            disabled={!isCloud}
+            value={settings.cloud_embedding_model}
+            onChange={(event) =>
+              setSettings((prev) => ({
+                ...prev,
+                cloud_embedding_model: event.target.value,
+              }))
+            }
+            placeholder="e.g. openai/text-embedding-3-small"
+          />
+        </div>
       </section>
 
       <section className="settings-section">

@@ -12,9 +12,19 @@ from providers.base import LangChainProvider
 from providers.local_provider import create_local_provider
 
 
-def fake_settings(*, local_model="llama3:8b", ollama_host="http://localhost:11434"):
+def fake_settings(
+    *,
+    local_generation_model="llama3:8b",
+    local_embedding_model="sentence-transformers/all-MiniLM-L6-v2",
+    ollama_host="http://localhost:11434",
+):
     return SimpleNamespace(
-        config=SimpleNamespace(llm=SimpleNamespace(local_model=local_model)),
+        config=SimpleNamespace(
+            llm=SimpleNamespace(
+                local_generation_model=local_generation_model,
+                local_embedding_model=local_embedding_model,
+            )
+        ),
         env=SimpleNamespace(ollama_host=ollama_host),
     )
 
@@ -24,7 +34,8 @@ class TestCreateLocalProvider:
         monkeypatch.setattr(
             "providers.local_provider.get_settings",
             lambda: fake_settings(
-                local_model="llama3:8b", ollama_host="http://example:11434"
+                local_generation_model="llama3:8b",
+                ollama_host="http://example:11434",
             ),
         )
 
@@ -39,7 +50,7 @@ class TestCreateLocalProvider:
     def test_explicit_model_overrides_the_configured_default(self, monkeypatch):
         monkeypatch.setattr(
             "providers.local_provider.get_settings",
-            lambda: fake_settings(local_model="llama3:8b"),
+            lambda: fake_settings(local_generation_model="llama3:8b"),
         )
 
         provider = create_local_provider(model="mistral:7b")
@@ -54,3 +65,41 @@ class TestCreateLocalProvider:
         provider = create_local_provider(model="mistral:7b")
 
         assert provider._provider_name == "ollama:mistral:7b"
+
+    def test_embed_fn_uses_the_configured_embedding_model(self, monkeypatch):
+        monkeypatch.setattr(
+            "providers.local_provider.get_settings",
+            lambda: fake_settings(
+                local_embedding_model="sentence-transformers/all-MiniLM-L6-v2"
+            ),
+        )
+        captured = {}
+
+        def fake_make_embed_fn(model_name):
+            captured["model_name"] = model_name
+            return lambda texts: [[0.0]] * len(texts)
+
+        monkeypatch.setattr(
+            "providers.local_provider._make_embed_fn", fake_make_embed_fn
+        )
+
+        provider = create_local_provider()
+
+        assert captured["model_name"] == "sentence-transformers/all-MiniLM-L6-v2"
+        assert provider._embed_fn(["a", "b"]) == [[0.0], [0.0]]
+
+    def test_explicit_embedding_model_overrides_the_configured_default(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "providers.local_provider.get_settings", lambda: fake_settings()
+        )
+        captured = {}
+        monkeypatch.setattr(
+            "providers.local_provider._make_embed_fn",
+            lambda model_name: captured.setdefault("model_name", model_name),
+        )
+
+        create_local_provider(embedding_model="a-different-model")
+
+        assert captured["model_name"] == "a-different-model"

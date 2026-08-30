@@ -386,11 +386,11 @@ class TestGetProvider:
         assert get_provider("answer") == "CLOUD"
         assert get_provider("relationship") == "CLOUD"
 
-    def test_mixed_routes_answer_to_cloud_and_others_to_local(self, monkeypatch):
+    def test_fully_local_routes_embedding_to_local_too(self, monkeypatch):
         monkeypatch.setattr(
             "providers.base.get_settings",
             lambda: SimpleNamespace(
-                config=SimpleNamespace(llm=SimpleNamespace(provider_mode="mixed"))
+                config=SimpleNamespace(llm=SimpleNamespace(provider_mode="fully_local"))
             ),
         )
         monkeypatch.setattr(
@@ -401,8 +401,21 @@ class TestGetProvider:
             lambda: "CLOUD",
         )
 
-        assert get_provider("answer") == "CLOUD"
-        assert get_provider("eval") == "CLOUD"
-        assert get_provider("metadata") == "LOCAL"
-        assert get_provider("relationship") == "LOCAL"
-        assert get_provider("condense") == "LOCAL"
+        assert get_provider("embedding") == "LOCAL"
+
+    def test_fully_cloud_routes_embedding_to_cloud_too(self, monkeypatch):
+        monkeypatch.setattr(
+            "providers.base.get_settings",
+            lambda: SimpleNamespace(
+                config=SimpleNamespace(llm=SimpleNamespace(provider_mode="fully_cloud"))
+            ),
+        )
+        monkeypatch.setattr(
+            "providers.local_provider.create_local_provider", lambda: "LOCAL"
+        )
+        monkeypatch.setattr(
+            "providers.openrouter_provider.create_openrouter_provider",
+            lambda: "CLOUD",
+        )
+
+        assert get_provider("embedding") == "CLOUD"
