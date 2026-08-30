@@ -348,12 +348,21 @@ a {
 
 .message-bubble.pending {
   color: var(--text-muted);
-  font-style: italic;
-  /* A flex item with overflow-wrap: break-word has a very small automatic
-     minimum width (browsers compute it as though the text could wrap at
-     any character), so this short one-word placeholder could shrink down
-     to a sliver and wrap character-by-character instead of stretching to
-     fit its own content. It never needs to wrap, so pin it to one line. */
+  /* .message-bubble isn't a direct flex item (MessageBubble.jsx wraps it
+     in a plain <div> that's the actual flex item), so its box isn't
+     reliably shrink-wrapped to its own content -- combined with
+     `max-width: 65%` (a percentage against an ancestor with no definite
+     width of its own), the browser could size the box narrower than the
+     text and then either wrap it mid-word or, with plain nowrap alone,
+     let the text overflow the box instead of growing it. `inline-block`
+     makes this element size to its own content directly, independent of
+     that ambiguity, and nowrap keeps the short placeholder on one line.
+     No font-style: italic here (that was the previous look) -- a slanted
+     glyph's ink extends past the upright metrics the box was sized from,
+     so the last character or two visibly overhangs the right edge right
+     up against the padding. Muted color alone still reads as "pending"
+     without that overhang. */
+  display: inline-block;
   white-space: nowrap;
 }
 
