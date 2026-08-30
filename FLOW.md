@@ -993,15 +993,21 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
 4. `SettingsPanel.jsx` — on mount, calls `api/client.js::getSettings()`,
    `getSourcesStatus()`, `getSourceConnections()`, and `getSourceConfig()`
    in parallel, snapshotting the loaded values into `originalRef` — the
-   baseline every later diff compares against. "Save Changes"
-   (`handleSave()`) first diffs every editable field (`provider_mode`,
-   both generation models, `cloud_embedding_model`, the two source-scope
-   textareas) against that snapshot; if nothing changed it no-ops, else it
-   shows one `window.confirm()` listing the changed fields — appending an
-   extra warning when `cloud_embedding_model` is among them — and aborts
-   entirely if cancelled. Only on confirm does it call `putSettings()` (now
-   sending all three model fields, including `cloud_embedding_model`) and
-   `putSourceConfig()` together; if the embedding model was part of the
+   baseline every later diff compares against. Uses `useConfirm()`
+   (`hooks/useConfirm.jsx`, rendering `ConfirmDialog.jsx` — this project's
+   own centered modal, not the native `window.confirm()`, which looked
+   nothing like the rest of the app and couldn't render a bullet list or a
+   highlighted warning — see DECISIONS.md, 2026-08-30) for both of its
+   confirmations. "Save Changes" (`handleSave()`) first diffs every
+   editable field (`provider_mode`, both generation models,
+   `cloud_embedding_model`, the two source-scope textareas) against that
+   snapshot; if nothing changed it no-ops, else it awaits one `confirm()`
+   call whose `body` is a real `<ul>` of the changed fields plus a
+   separately-styled warning paragraph when `cloud_embedding_model` is
+   among them, and aborts entirely if cancelled. Only on confirm does it
+   call `putSettings()` (now sending all three model fields, including
+   `cloud_embedding_model`) and `putSourceConfig()` together; if the
+   embedding model was part of the
    diff, it then also calls `onResetAll()` followed by
    `onTriggerIngestion()` (the same `App.jsx`-owned flows the Danger Zone
    button and "Run ingestion now" button call directly elsewhere) and

@@ -8,6 +8,22 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-30 — Replace `window.confirm()` with a custom modal dialog
+
+**Context**: The native browser `confirm()`/`cancel` dialog looks nothing like the rest of the app (unstyled, can't render structured content like a bullet list or a highlighted warning) — requested directly to replace it with something that matches the app's own design.
+
+**Decision**: Added `frontend/src/components/ConfirmDialog.jsx` (a centered modal: backdrop, card, title, body, Cancel/Confirm buttons, styled with the same CSS custom properties — `--bg`, `--border`, `--accent`, `--danger` — every other component already uses) and `frontend/src/hooks/useConfirm.jsx` (a promise-based `confirm(options) -> Promise<boolean>`, mirroring `window.confirm()`'s call shape so existing `if (!(await confirm(...))) return;` call sites needed minimal changes, but returning a `[confirm, dialog]` pair — the caller renders `{dialog}` once in its own JSX and calls `confirm()` from event handlers). Split into two files, not one — co-locating a hook and the component it renders in a single file trips this project's `react-refresh/only-export-components` lint rule (fast refresh only works cleanly when a file exports only components).
+
+`body` accepts a full `ReactNode`, not just a string — `SettingsPanel.jsx`'s save-confirmation dialog renders an actual `<ul>` of changed fields plus a separately-styled `.confirm-dialog-warning` callout when the embedding model is among them, rather than flattening everything into a single string with `\n` line breaks the way the `window.confirm()` version had to.
+
+Escape key and clicking the backdrop both cancel; the Confirm button receives initial focus. Not a full focus trap (tab still escapes the dialog into the page behind it) — acceptable for a local, single-user tool; a complete trap is future work if it ever matters.
+
+**Verified**: frontend build and `eslint` (zero warnings, including the fast-refresh rule that caught the single-file version) both clean.
+
+**Affects**: `frontend/src/components/ConfirmDialog.jsx` (new), `frontend/src/hooks/useConfirm.jsx` (new), `frontend/src/components/SettingsPanel.jsx`, `frontend/src/index.css`
+
+---
+
 ## 2026-08-30 — Un-freeze the embedding model; confirm-then-auto-reset-and-reingest on every Settings save; interactive graph
 
 **Context**: Three corrections/requests in one round. First, a genuine miscommunication on my part: "freeze the embedding model" (an earlier entry, below) was meant by the user as "cloud-only, not user-toggleable between local/cloud" — not "the user can never type in a different cloud model name." Second: the "Fully Local"/"Fully Cloud" provider-mode labels no longer matched reality once embedding became cloud-only regardless of mode — those labels implied embedding followed the mode too. Third: the graph view (previous entry) rendered a one-shot static layout — the user wanted an Obsidian-style interactive graph, draggable, with a live physics simulation.

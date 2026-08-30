@@ -1,0 +1,81 @@
+import { useEffect, useRef } from "react";
+
+/**
+ * A centered modal confirm/cancel dialog, styled to match the rest of the
+ * app — replaces the native `window.confirm()`, which looks nothing like
+ * the rest of the frontend and can't render structured content (a bullet
+ * list of changes, a highlighted warning) the way this can. See
+ * DECISIONS.md.
+ *
+ * Not used directly — see `useConfirm()` (../hooks/useConfirm.jsx), which
+ * owns showing and dismissing it.
+ *
+ * @param {object} props
+ * @param {string} [props.title]
+ * @param {import("react").ReactNode} props.body - plain text or richer
+ *   JSX (e.g. a bullet list, a highlighted warning paragraph)
+ * @param {boolean} [props.danger] - styles the confirm button red instead
+ *   of the accent color, for destructive/high-consequence actions
+ * @param {string} [props.confirmLabel]
+ * @param {string} [props.cancelLabel]
+ * @param {() => void} props.onConfirm
+ * @param {() => void} props.onCancel
+ */
+function ConfirmDialog({
+  title,
+  body,
+  danger,
+  confirmLabel = "Confirm",
+  cancelLabel = "Cancel",
+  onConfirm,
+  onCancel,
+}) {
+  const confirmButtonRef = useRef(null);
+
+  useEffect(() => {
+    confirmButtonRef.current?.focus();
+    function handleKeyDown(event) {
+      if (event.key === "Escape") onCancel();
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onCancel]);
+
+  return (
+    <div className="confirm-backdrop" onClick={onCancel}>
+      <div
+        className="confirm-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby={title ? "confirm-dialog-title" : undefined}
+        onClick={(event) => event.stopPropagation()}
+      >
+        {title && (
+          <h2 id="confirm-dialog-title" className="confirm-dialog-title">
+            {title}
+          </h2>
+        )}
+        <div className="confirm-dialog-body">{body}</div>
+        <div className="confirm-dialog-actions">
+          <button
+            type="button"
+            className="confirm-dialog-cancel"
+            onClick={onCancel}
+          >
+            {cancelLabel}
+          </button>
+          <button
+            type="button"
+            ref={confirmButtonRef}
+            className={`confirm-dialog-confirm${danger ? " danger" : ""}`}
+            onClick={onConfirm}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default ConfirmDialog;

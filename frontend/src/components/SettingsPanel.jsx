@@ -9,6 +9,7 @@ import {
   putSourceConfig,
   verifySourceConnections,
 } from "../api/client.js";
+import { useConfirm } from "../hooks/useConfirm.jsx";
 
 /** "a\nb\n\nc" -> ["a", "b", "c"] — one entry per non-blank line. */
 function linesToList(text) {
@@ -72,6 +73,7 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
   // time — a ref, not state, since it's only ever read/written on load and
   // on a successful save, never rendered directly.
   const originalRef = useRef(null);
+  const [confirm, confirmDialog] = useConfirm();
 
   useEffect(() => {
     Promise.all([
@@ -139,11 +141,12 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
   }
 
   async function handleResetAll() {
-    const confirmed = window.confirm(
-      "This permanently deletes every ingested item, embedding, and " +
-        "relationship — SQLite, Chroma, and Neo4j are all wiped. This " +
-        "cannot be undone. Continue?",
-    );
+    const confirmed = await confirm({
+      title: "Reset all data?",
+      body: "This permanently deletes every ingested item, embedding, and relationship — SQLite, Chroma, and Neo4j are all wiped. This cannot be undone.",
+      danger: true,
+      confirmLabel: "Reset everything",
+    });
     if (!confirmed) return;
 
     setIsResetting(true);
@@ -195,15 +198,29 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
       return;
     }
 
-    let confirmMessage = `Save these changes?\n\n- ${changes.join("\n- ")}`;
-    if (embeddingModelChanged) {
-      confirmMessage +=
-        "\n\n⚠️ Changing the embedding model requires a full data reset and " +
-        "re-ingestion — your existing embeddings won't match the new model. " +
-        "Confirming will save this change, then automatically reset all data " +
-        "and start a fresh ingestion run.";
-    }
-    if (!window.confirm(confirmMessage)) return;
+    const confirmed = await confirm({
+      title: "Save these changes?",
+      body: (
+        <>
+          <ul className="confirm-dialog-list">
+            {changes.map((change) => (
+              <li key={change}>{change}</li>
+            ))}
+          </ul>
+          {embeddingModelChanged && (
+            <p className="confirm-dialog-warning">
+              Changing the embedding model requires a full data reset and
+              re-ingestion — your existing embeddings won't match the new model.
+              Confirming will save this change, then automatically reset all
+              data and start a fresh ingestion run.
+            </p>
+          )}
+        </>
+      ),
+      danger: embeddingModelChanged,
+      confirmLabel: embeddingModelChanged ? "Save and reset" : "Save",
+    });
+    if (!confirmed) return;
 
     setIsSaving(true);
     setSaveStatus(null);
@@ -273,6 +290,7 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
 
   return (
     <div className="settings-panel">
+      {confirmDialog}
       <h1>Settings</h1>
 
       <section className="settings-section">
