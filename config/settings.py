@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -212,8 +213,16 @@ class EnvSettings(BaseSettings):
     notion_api_key: str | None = None
     notion_page_ids: str = ""
     gmail_credentials_path: Path | None = None
+    # A fixed ingestion window, not just a backfill cap: `_start` also
+    # floors every future run's incremental `since` (via `max()`), and
+    # `_end`, if set, keeps excluding anything newer on every run, not
+    # just the first. See DECISIONS.md.
+    gmail_date_range_start: date | None = None
+    gmail_date_range_end: date | None = None
     github_token: str | None = None
     github_repos: str = ""
+    github_date_range_start: date | None = None
+    github_date_range_end: date | None = None
     google_calendar_credentials_path: Path | None = None
     browser_history_path: Path | None = None
     local_files_watch_dirs: str = ""
@@ -436,6 +445,11 @@ def update_source_config(
     *,
     local_files_watch_dirs: list[str] | None = None,
     notion_page_ids: list[str] | None = None,
+    github_repos: list[str] | None = None,
+    gmail_date_range_start: str | None = None,
+    gmail_date_range_end: str | None = None,
+    github_date_range_start: str | None = None,
+    github_date_range_end: str | None = None,
     path: Path = DEFAULT_ENV_PATH,
 ) -> EnvSettings:
     """Update ``config/.env``'s source-scope variables on disk, in place.
@@ -455,6 +469,17 @@ def update_source_config(
             ingestion to, or ``None`` to leave unchanged. An empty list
             clears the setting (falls back to "every page the integration
             can see" — see ``extractors/notion.py``).
+        github_repos: New list of ``owner/repo`` full names to scope
+            ingestion to, or ``None`` to leave unchanged. An empty list
+            clears the setting (falls back to "every accessible repo" —
+            see ``extractors/github.py``).
+        gmail_date_range_start: New ISO ``YYYY-MM-DD`` floor for Gmail
+            ingestion, ``""`` to clear it, or ``None`` to leave unchanged.
+        gmail_date_range_end: Same, but the ceiling.
+        github_date_range_start: Same as ``gmail_date_range_start``, for
+            GitHub.
+        github_date_range_end: Same as ``gmail_date_range_end``, for
+            GitHub.
         path: Path to the ``.env`` file. Defaults to the real one; passing
             a different path (tests) writes there instead and leaves the
             process-wide ``get_settings()`` cache untouched.
@@ -491,6 +516,24 @@ def update_source_config(
             _retry_on_transient_permission_error(
                 lambda: set_key(path, "NOTION_PAGE_IDS", ",".join(notion_page_ids))
             )
+        if github_repos is not None:
+            _retry_on_transient_permission_error(
+                lambda: set_key(path, "GITHUB_REPOS", ",".join(github_repos))
+            )
+        # Date fields: "" (matching an emptied <input type="date">) clears
+        # the setting; None leaves it untouched. A real "YYYY-MM-DD" value
+        # is written as-is — EnvSettings parses it back into a date.
+        date_fields = {
+            "GMAIL_DATE_RANGE_START": gmail_date_range_start,
+            "GMAIL_DATE_RANGE_END": gmail_date_range_end,
+            "GITHUB_DATE_RANGE_START": github_date_range_start,
+            "GITHUB_DATE_RANGE_END": github_date_range_end,
+        }
+        for key, value in date_fields.items():
+            if value is not None:
+                _retry_on_transient_permission_error(
+                    lambda key=key, value=value: set_key(path, key, value)
+                )
     except OSError as exc:
         raise ConfigError(f"Could not write {path}: {exc}") from exc
 
