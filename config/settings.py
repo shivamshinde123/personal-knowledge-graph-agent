@@ -213,6 +213,7 @@ class EnvSettings(BaseSettings):
     notion_page_ids: str = ""
     gmail_credentials_path: Path | None = None
     github_token: str | None = None
+    github_repos: str = ""
     google_calendar_credentials_path: Path | None = None
     browser_history_path: Path | None = None
     local_files_watch_dirs: str = ""
@@ -290,6 +291,20 @@ class EnvSettings(BaseSettings):
         return [
             part.strip() for part in self.notion_page_ids.split(",") if part.strip()
         ]
+
+    @property
+    def github_repos_list(self) -> list[str]:
+        """Parse ``GITHUB_REPOS`` into a list of ``owner/repo`` full names.
+
+        Returns:
+            The configured repos, empty if the variable is unset — an
+            empty list means "no scope configured," which
+            ``extractors/github.py`` treats as "every repository the
+            token can access" (owned, collaborator, and organization
+            repos), not "nothing." Same convention as
+            :attr:`notion_page_ids_list`.
+        """
+        return [part.strip() for part in self.github_repos.split(",") if part.strip()]
 
 
 class Settings(BaseModel):

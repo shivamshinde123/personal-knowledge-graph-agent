@@ -105,6 +105,7 @@ class TestGetConnections:
                     watch_dirs=[],
                     notion_api_key=None,
                     gmail_credentials_path=None,
+                    github_token=None,
                     browser_history_path=None,
                 )
             ),
