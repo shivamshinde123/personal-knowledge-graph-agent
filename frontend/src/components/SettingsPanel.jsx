@@ -40,9 +40,10 @@ const PROVIDER_MODES = [
 ];
 
 /**
- * The Settings screen: LLM provider mode, the four generation/embedding
- * model fields, and connected data source status. Per
- * docs/UIUX_Wireframes.docx section 3.
+ * The Settings screen: LLM provider mode, the two editable generation
+ * model fields plus the two fixed (display-only) embedding model fields,
+ * and connected data source status. Per docs/UIUX_Wireframes.docx
+ * section 3.
  *
  * @param {object} props
  * @param {() => Promise<void>} props.onTriggerIngestion - starts a batch
@@ -157,9 +158,7 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
         putSettings({
           provider_mode: settings.provider_mode,
           local_generation_model: settings.local_generation_model,
-          local_embedding_model: settings.local_embedding_model,
           cloud_generation_model: settings.cloud_generation_model,
-          cloud_embedding_model: settings.cloud_embedding_model,
         }),
         putSourceConfig({
           local_files_watch_dirs: linesToList(watchDirsText),
@@ -225,11 +224,14 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
       <section className="settings-section">
         <h2>Models</h2>
         <p className="settings-field-hint">
-          Only the pair matching the provider mode above is actually used — both
-          are kept here so switching modes doesn't lose the other side's values.
-          Switching provider mode changes the embedding model, which makes
-          existing embeddings incompatible with new ones; use "Reset all data"
-          below and re-run ingestion after switching.
+          Generation models: only the one matching the provider mode above is
+          actually used — both are kept here so switching modes doesn't lose the
+          other side's value. Embedding models are fixed and can't be edited:
+          they're matched to the same vector size (384 dimensions) on both
+          sides, so switching provider mode never breaks the vector store with a
+          size mismatch. The two are still different embedding spaces though, so
+          switching modes still calls for "Reset all data" below and a
+          re-ingestion run afterward.
         </p>
 
         <div className="model-field">
@@ -251,20 +253,17 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
         </div>
 
         <div className="model-field">
-          <label htmlFor="local-embedding-model">Local embedding model</label>
+          <label htmlFor="local-embedding-model">
+            Local embedding model{" "}
+            <span className="model-field-fixed">(fixed)</span>
+          </label>
           <input
             id="local-embedding-model"
             className="model-select"
             type="text"
-            disabled={!isLocal}
+            disabled
             value={settings.local_embedding_model}
-            onChange={(event) =>
-              setSettings((prev) => ({
-                ...prev,
-                local_embedding_model: event.target.value,
-              }))
-            }
-            placeholder="e.g. sentence-transformers/all-MiniLM-L6-v2"
+            readOnly
           />
         </div>
 
@@ -287,20 +286,17 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
         </div>
 
         <div className="model-field">
-          <label htmlFor="cloud-embedding-model">Cloud embedding model</label>
+          <label htmlFor="cloud-embedding-model">
+            Cloud embedding model{" "}
+            <span className="model-field-fixed">(fixed)</span>
+          </label>
           <input
             id="cloud-embedding-model"
             className="model-select"
             type="text"
-            disabled={!isCloud}
+            disabled
             value={settings.cloud_embedding_model}
-            onChange={(event) =>
-              setSettings((prev) => ({
-                ...prev,
-                cloud_embedding_model: event.target.value,
-              }))
-            }
-            placeholder="e.g. openai/text-embedding-3-small"
+            readOnly
           />
         </div>
       </section>

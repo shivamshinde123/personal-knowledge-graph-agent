@@ -9,21 +9,15 @@ from types import SimpleNamespace
 from langchain_ollama import ChatOllama
 
 from providers.base import LangChainProvider
-from providers.local_provider import create_local_provider
+from providers.local_provider import EMBEDDING_DIMENSIONS, create_local_provider
 
 
 def fake_settings(
-    *,
-    local_generation_model="llama3:8b",
-    local_embedding_model="sentence-transformers/all-MiniLM-L6-v2",
-    ollama_host="http://localhost:11434",
+    *, local_generation_model="llama3:8b", ollama_host="http://localhost:11434"
 ):
     return SimpleNamespace(
         config=SimpleNamespace(
-            llm=SimpleNamespace(
-                local_generation_model=local_generation_model,
-                local_embedding_model=local_embedding_model,
-            )
+            llm=SimpleNamespace(local_generation_model=local_generation_model)
         ),
         env=SimpleNamespace(ollama_host=ollama_host),
     )
@@ -66,40 +60,23 @@ class TestCreateLocalProvider:
 
         assert provider._provider_name == "ollama:mistral:7b"
 
-    def test_embed_fn_uses_the_configured_embedding_model(self, monkeypatch):
+    def test_embedding_model_is_not_configurable(self, monkeypatch):
+        """The embedding model is a frozen constant — no way to override it."""
         monkeypatch.setattr(
-            "providers.local_provider.get_settings",
-            lambda: fake_settings(
-                local_embedding_model="sentence-transformers/all-MiniLM-L6-v2"
-            ),
-        )
-        captured = {}
-
-        def fake_make_embed_fn(model_name):
-            captured["model_name"] = model_name
-            return lambda texts: [[0.0]] * len(texts)
-
-        monkeypatch.setattr(
-            "providers.local_provider._make_embed_fn", fake_make_embed_fn
+            "providers.local_provider.get_settings", lambda: fake_settings()
         )
 
         provider = create_local_provider()
 
-        assert captured["model_name"] == "sentence-transformers/all-MiniLM-L6-v2"
-        assert provider._embed_fn(["a", "b"]) == [[0.0], [0.0]]
+        assert provider._embed_fn is not None
 
-    def test_explicit_embedding_model_overrides_the_configured_default(
-        self, monkeypatch
-    ):
+    def test_embeds_real_text_at_the_frozen_dimensionality(self, monkeypatch):
         monkeypatch.setattr(
             "providers.local_provider.get_settings", lambda: fake_settings()
         )
-        captured = {}
-        monkeypatch.setattr(
-            "providers.local_provider._make_embed_fn",
-            lambda model_name: captured.setdefault("model_name", model_name),
-        )
+        provider = create_local_provider()
 
-        create_local_provider(embedding_model="a-different-model")
+        vectors = provider.generate_embeddings(["hello world"])
 
-        assert captured["model_name"] == "a-different-model"
+        assert len(vectors) == 1
+        assert len(vectors[0]) == EMBEDDING_DIMENSIONS

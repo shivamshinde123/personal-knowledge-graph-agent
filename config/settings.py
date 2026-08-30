@@ -61,21 +61,20 @@ def anchor_path(value: Path) -> Path:
 
 
 class LLMConfig(BaseModel):
-    """LLM provider selection and the four models used across it.
+    """LLM provider selection and the two *generation* models used on each side.
 
-    Four fields, not two, since generation and embedding are different
-    kinds of call with independently selectable models on each side — see
-    ``DECISIONS.md``. Only the pair matching ``provider_mode`` is actually
-    used at any given time (``providers/base.py::get_provider()``), but
-    both pairs are always present in config so switching modes doesn't
-    require re-entering the other side's models.
+    Embedding models are deliberately not configurable here — they're
+    frozen constants (``providers/local_provider.py::EMBEDDING_MODEL``,
+    ``providers/openrouter_provider.py::EMBEDDING_MODEL``), matched to the
+    same vector dimensionality (384) specifically so switching
+    ``provider_mode`` can never produce Chroma vectors of two different
+    sizes. Letting the embedding model be freely edited (as it briefly was)
+    would let a user reintroduce that mismatch by hand. See ``DECISIONS.md``.
     """
 
     provider_mode: ProviderMode = "fully_local"
     local_generation_model: str = "llama3:8b"
-    local_embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     cloud_generation_model: str = "anthropic/claude-sonnet-4"
-    cloud_embedding_model: str = "openai/text-embedding-3-small"
     cloud_max_tokens: int = 4096
 
 
@@ -280,9 +279,7 @@ def update_llm_config(
     *,
     provider_mode: ProviderMode | None = None,
     local_generation_model: str | None = None,
-    local_embedding_model: str | None = None,
     cloud_generation_model: str | None = None,
-    cloud_embedding_model: str | None = None,
     path: Path = DEFAULT_CONFIG_PATH,
 ) -> AppConfig:
     """Update ``config.yaml``'s ``llm`` section on disk, in place.
@@ -294,15 +291,15 @@ def update_llm_config(
     every comment in the file, including the ones documenting each
     setting's valid values — see ``DECISIONS.md``).
 
+    No embedding-model parameters — those are frozen constants, not
+    user-editable, so there's nothing here to change them with. See
+    ``LLMConfig``'s docstring, ``DECISIONS.md``.
+
     Args:
         provider_mode: New provider mode, or ``None`` to leave unchanged.
         local_generation_model: New local generation model tag, or
             ``None`` to leave unchanged.
-        local_embedding_model: New local embedding model name, or ``None``
-            to leave unchanged.
         cloud_generation_model: New cloud generation model id, or ``None``
-            to leave unchanged.
-        cloud_embedding_model: New cloud embedding model id, or ``None``
             to leave unchanged.
         path: Path to the YAML configuration file. Defaults to the real
             configuration file; passing a different path (tests) writes
@@ -336,12 +333,8 @@ def update_llm_config(
         updated["provider_mode"] = provider_mode
     if local_generation_model is not None:
         updated["local_generation_model"] = local_generation_model
-    if local_embedding_model is not None:
-        updated["local_embedding_model"] = local_embedding_model
     if cloud_generation_model is not None:
         updated["cloud_generation_model"] = cloud_generation_model
-    if cloud_embedding_model is not None:
-        updated["cloud_embedding_model"] = cloud_embedding_model
 
     try:
         LLMConfig.model_validate(updated)

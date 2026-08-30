@@ -100,8 +100,13 @@ class ConnectionsResponse(BaseModel):
 class SettingsResponse(BaseModel):
     """``GET /api/settings`` response body.
 
-    Four model fields, not two — generation and embedding are separately
-    configurable on each side. See ``DECISIONS.md``.
+    Four model fields shown, but only the two *generation* ones are
+    settable — ``local_embedding_model``/``cloud_embedding_model`` are
+    frozen constants (``providers/local_provider.py``/
+    ``openrouter_provider.py``), included here purely for display so the
+    frontend can show the user what's actually being used, matched to the
+    same vector dimensionality so a provider-mode switch can never break
+    Chroma with a size mismatch. See ``DECISIONS.md``.
     """
 
     provider_mode: ProviderMode
@@ -112,13 +117,15 @@ class SettingsResponse(BaseModel):
 
 
 class SettingsUpdateRequest(BaseModel):
-    """``PUT /api/settings`` request body — every field is optional (partial update)."""
+    """``PUT /api/settings`` request body — every field is optional (partial update).
+
+    No embedding-model fields — see ``SettingsResponse``'s docstring for
+    why those are frozen, not settable.
+    """
 
     provider_mode: ProviderMode | None = None
     local_generation_model: str | None = None
-    local_embedding_model: str | None = None
     cloud_generation_model: str | None = None
-    cloud_embedding_model: str | None = None
 
 
 class SettingsUpdateResponse(BaseModel):

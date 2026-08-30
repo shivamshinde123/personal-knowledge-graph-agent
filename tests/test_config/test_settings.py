@@ -28,9 +28,16 @@ class TestLoadConfig:
         assert config.chunking.chunk_overlap_tokens == 40
         assert config.retrieval.top_k_vector == 8
         assert config.retrieval.relationship_candidate_count == 10
-        assert config.llm.local_embedding_model == (
-            "sentence-transformers/all-MiniLM-L6-v2"
-        )
+
+    def test_llm_config_has_no_embedding_model_fields(self):
+        """Embedding models are frozen provider constants, not config.
+
+        See config/settings.py::LLMConfig's docstring.
+        """
+        config = load_config()
+
+        assert not hasattr(config.llm, "local_embedding_model")
+        assert not hasattr(config.llm, "cloud_embedding_model")
 
     def test_parses_nested_filter_rules(self):
         config = load_config()
@@ -206,9 +213,7 @@ _SAMPLE_CONFIG = """\
 llm:
   provider_mode: fully_local # fully_local | fully_cloud
   local_generation_model: llama3:8b # used when fully_local
-  local_embedding_model: sentence-transformers/all-MiniLM-L6-v2 # used when fully_local
   cloud_generation_model: anthropic/claude-sonnet-4 # used when fully_cloud
-  cloud_embedding_model: openai/text-embedding-3-small # used when fully_cloud
 
 ingestion:
   schedule: "0 23 * * *" # cron expression; default 11 PM daily
@@ -252,13 +257,11 @@ class TestUpdateLlmConfig:
         result = update_llm_config(
             provider_mode="fully_cloud",
             cloud_generation_model="openai/gpt-4o",
-            cloud_embedding_model="openai/text-embedding-3-large",
             path=config_path,
         )
 
         assert result.llm.provider_mode == "fully_cloud"
         assert result.llm.cloud_generation_model == "openai/gpt-4o"
-        assert result.llm.cloud_embedding_model == "openai/text-embedding-3-large"
 
     def test_the_written_file_is_actually_updated(self, tmp_path):
         config_path = tmp_path / "config.yaml"
@@ -279,6 +282,18 @@ class TestUpdateLlmConfig:
         assert '"0 23 * * *"' in written
         assert "domain_blocklist:" in written
         assert "google.com/search" in written
+
+    def test_embedding_model_is_not_an_accepted_parameter(self, tmp_path):
+        """Embedding models are frozen.
+
+        The function signature itself has no parameter for them, not
+        just an ignored one.
+        """
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(_SAMPLE_CONFIG, encoding="utf-8")
+
+        with pytest.raises(TypeError):
+            update_llm_config(local_embedding_model="x", path=config_path)
 
     def test_invalid_provider_mode_raises_and_does_not_write(self, tmp_path):
         config_path = tmp_path / "config.yaml"

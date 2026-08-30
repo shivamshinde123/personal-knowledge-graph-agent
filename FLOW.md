@@ -195,12 +195,19 @@ only `providers/base.py`'s `get_provider()` and its return type,
    LangChain chat model (`ChatOllama` / `ChatOpenAI`) plus an `embed_fn`
    callable — this is where every provider call's prompt building, JSON
    response parsing, and retry-with-backoff actually live, shared by both.
+   Unlike the generation models (config-driven —
+   `llm.local_generation_model`/`llm.cloud_generation_model`), the
+   embedding models are frozen constants, not configurable at all —
    `create_local_provider()`'s `embed_fn` wraps a cached
-   `sentence-transformers` model (`llm.local_embedding_model`);
-   `create_openrouter_provider()`'s wraps a LangChain `OpenAIEmbeddings`
-   pointed at OpenRouter's base URL (`llm.cloud_embedding_model`) — verified
-   directly against the real OpenRouter API (see DECISIONS.md, 2026-08-30).
-   The `ChatOpenAI` (OpenRouter) side always passes an explicit
+   `sentence-transformers` model (`local_provider.py::EMBEDDING_MODEL`,
+   native 384-dim output); `create_openrouter_provider()`'s wraps a
+   LangChain `OpenAIEmbeddings` pointed at OpenRouter's base URL
+   (`openrouter_provider.py::EMBEDDING_MODEL`, truncated to 384 dimensions
+   via the `dimensions` parameter — verified directly against the real
+   OpenRouter API) — both frozen at the same dimensionality specifically
+   so a `provider_mode` switch can never produce a Chroma vector-size
+   mismatch (see DECISIONS.md, 2026-08-30, both entries). The `ChatOpenAI`
+   (OpenRouter) side always passes an explicit
    `max_tokens` (`llm.cloud_max_tokens`, default `4096`) — left unset it
    would default to the routed model's own maximum (64000 for
    `claude-sonnet-4`), which can exceed the account's remaining credit
@@ -249,9 +256,11 @@ only `providers/base.py`'s `get_provider()` and its return type,
 8. `provider.generate_embeddings(texts)` — called by
    `pipeline/embeddings.py::embed_chunks()`/`embed_query()` (see below);
    returns one vector per input text via the provider's own `embed_fn`.
-   Switching `provider_mode` changes which embedding model — and
-   dimensionality — this returns; see DECISIONS.md, 2026-08-30, for the
-   resulting "reset + re-ingest after switching" constraint
+   Switching `provider_mode` changes which embedding model this returns
+   vectors from, but never the dimensionality (both frozen at 384 — see
+   DECISIONS.md, 2026-08-30) — a mode switch still calls for a reset +
+   re-ingest since the two remain different embedding spaces despite the
+   matching size
 
 ---
 
@@ -791,26 +800,40 @@ See DECISIONS.md, 2026-08-29.
 
 ## Entry point: `GET /api/settings` (`api/routes/settings.py`)
 
-1. `config/settings.py::get_settings().config.llm` read directly — no
-   `agent/` intermediary, since `config` isn't `storage`/`providers` (see
-   DECISIONS.md, 2026-08-25)
-2. Returns `{"provider_mode", "local_model", "cloud_model"}` per
-   `docs/API_Specification.docx` section 3.6
+1. `config/settings.py::get_settings().config.llm` read directly for the
+   two generation model fields — no `agent/` intermediary, since `config`
+   isn't `storage`/`providers` (see DECISIONS.md, 2026-08-25).
+   `agent/embedding_info.py::get_embedding_model_names()` supplies the two
+   embedding model names for display — these are frozen provider
+   constants, not part of `config`, and `providers/` *is* one of the two
+   layers the API must never reach into directly, so this one field does
+   need the `agent/` thin-wrapper indirection the others don't (see
+   DECISIONS.md, 2026-08-30)
+2. Returns `{"provider_mode", "local_generation_model",
+   "local_embedding_model", "cloud_generation_model",
+   "cloud_embedding_model"}` — extends `docs/API_Specification.docx`
+   section 3.6's original two-field shape (see DECISIONS.md, 2026-08-30,
+   both entries)
 
 ---
 
 ## Entry point: `PUT /api/settings` (`api/routes/settings.py`)
 
 1. Request body validated against `api/schemas.py::SettingsUpdateRequest`
-   (all fields optional — a partial update) — an invalid `provider_mode`
-   value is a 422 via the shared validation-error handler
+   (`provider_mode`, `local_generation_model`, `cloud_generation_model` —
+   all optional, a partial update; no embedding-model fields at all, since
+   those are frozen — see DECISIONS.md, 2026-08-30) — an invalid
+   `provider_mode` value is a 422 via the shared validation-error handler
 2. `config/settings.py::update_llm_config()` called with whichever fields
    were given (see "Shared: configuration loading" above for its own
    steps) — a `ConfigError` (bad resulting config, or a file I/O failure)
    is caught by `api/main.py`'s shared handler, mapped to 500
-3. Returns `{"status": "updated", "provider_mode", "local_model",
-   "cloud_model"}` per `docs/API_Specification.docx` section 3.7, reflecting
-   the freshly written-and-reread configuration
+3. Returns `{"status": "updated", "provider_mode",
+   "local_generation_model", "local_embedding_model",
+   "cloud_generation_model", "cloud_embedding_model"}`, the embedding
+   fields again from `agent/embedding_info.py` (frozen, unaffected by the
+   request body) — reflecting the freshly written-and-reread
+   configuration for everything else
 
 ---
 
@@ -973,12 +996,15 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
 4. `SettingsPanel.jsx` — on mount, calls `api/client.js::getSettings()`,
    `getSourcesStatus()`, `getSourceConnections()`, and `getSourceConfig()`
    in parallel; "Save Changes" calls `putSettings()` (provider mode plus
-   all four model fields — `local_generation_model`/`local_embedding_model`/
-   `cloud_generation_model`/`cloud_embedding_model`, only the pair matching
-   `provider_mode` actually enabled for editing — see DECISIONS.md,
-   2026-08-30) and `putSourceConfig()` (watch folders/Notion scope, parsed
-   from a one-per-line textarea via `linesToList()`) together, updating
-   local state from the responses. Each connected-source card shows the live
+   the two editable generation model fields —
+   `local_generation_model`/`cloud_generation_model`, only the one
+   matching `provider_mode` actually enabled for editing; the two
+   embedding model fields are rendered `disabled`/`readOnly` unconditionally
+   and never sent, since they're frozen — see DECISIONS.md, 2026-08-30,
+   both entries) and `putSourceConfig()` (watch folders/Notion scope,
+   parsed from a one-per-line textarea via `linesToList()`) together,
+   updating local state from the responses. Each connected-source card
+   shows the live
    connection status (`getSourceConnections()`'s cache-or-fresh result)
    rather than the batch-run status alone; "Reverify" calls
    `verifySourceConnections()` (force-refreshes, bypassing the cache) and

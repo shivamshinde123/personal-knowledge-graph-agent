@@ -230,12 +230,14 @@ class ProviderInterface(ABC):
         The active provider's embedding model is driven by the same
         ``provider_mode`` toggle as its generation model (``fully_local``:
         ``sentence-transformers``; ``fully_cloud``: OpenRouter) — see
-        ``get_provider()``. Switching modes therefore changes which
-        embedding space new vectors land in; existing Chroma vectors from
-        the other mode are not automatically compatible with it (different
-        dimensionality/semantic space) — see DECISIONS.md for why a
-        mode switch calls for a full reset + re-ingestion, not a silent
-        mix of both.
+        ``get_provider()``. Both are frozen at the same 384-dimension
+        vector size (``providers/local_provider.py``/
+        ``openrouter_provider.py``'s ``EMBEDDING_DIMENSIONS``), so a mode
+        switch can never produce a Chroma dimension mismatch — but the two
+        models are still different embedding spaces, so existing vectors
+        from the other mode aren't semantically compatible with new ones
+        even though they're the same size; see DECISIONS.md for why a mode
+        switch still calls for a full reset + re-ingestion.
 
         Args:
             texts: The texts to embed, in the order results are returned.

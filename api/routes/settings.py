@@ -13,6 +13,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from agent.browse import browse_folder
+from agent.embedding_info import get_embedding_model_names
 from api.schemas import (
     BrowseFolderResponse,
     SettingsResponse,
@@ -28,34 +29,43 @@ router = APIRouter()
 
 @router.get("/settings", response_model=SettingsResponse)
 def get_settings_route() -> SettingsResponse:
-    """Return the current LLM provider configuration."""
+    """Return the current LLM provider configuration.
+
+    ``local_embedding_model``/``cloud_embedding_model`` come from the
+    frozen provider constants, not ``config.yaml`` — see
+    ``SettingsResponse``'s docstring.
+    """
     llm = get_settings().config.llm
+    local_embedding_model, cloud_embedding_model = get_embedding_model_names()
     return SettingsResponse(
         provider_mode=llm.provider_mode,
         local_generation_model=llm.local_generation_model,
-        local_embedding_model=llm.local_embedding_model,
+        local_embedding_model=local_embedding_model,
         cloud_generation_model=llm.cloud_generation_model,
-        cloud_embedding_model=llm.cloud_embedding_model,
+        cloud_embedding_model=cloud_embedding_model,
     )
 
 
 @router.put("/settings", response_model=SettingsUpdateResponse)
 def put_settings_route(payload: SettingsUpdateRequest) -> SettingsUpdateResponse:
-    """Update the LLM provider configuration; a ``ConfigError`` maps to 500."""
+    """Update the LLM provider configuration; a ``ConfigError`` maps to 500.
+
+    Embedding models aren't settable — ``SettingsUpdateRequest`` has no
+    fields for them.
+    """
     config = update_llm_config(
         provider_mode=payload.provider_mode,
         local_generation_model=payload.local_generation_model,
-        local_embedding_model=payload.local_embedding_model,
         cloud_generation_model=payload.cloud_generation_model,
-        cloud_embedding_model=payload.cloud_embedding_model,
     )
+    local_embedding_model, cloud_embedding_model = get_embedding_model_names()
     return SettingsUpdateResponse(
         status="updated",
         provider_mode=config.llm.provider_mode,
         local_generation_model=config.llm.local_generation_model,
-        local_embedding_model=config.llm.local_embedding_model,
+        local_embedding_model=local_embedding_model,
         cloud_generation_model=config.llm.cloud_generation_model,
-        cloud_embedding_model=config.llm.cloud_embedding_model,
+        cloud_embedding_model=cloud_embedding_model,
     )
 
 

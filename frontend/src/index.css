@@ -467,6 +467,12 @@ a {
   margin-bottom: 4px;
 }
 
+.model-field-fixed {
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+}
+
 .settings-field-hint {
   margin: 0 0 8px;
   font-size: 12px;
