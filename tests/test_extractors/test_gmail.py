@@ -81,6 +81,7 @@ class FakeMessages:
         self._world = world
 
     def list(self, userId, q, pageToken=None, maxResults=500):
+        self._world["last_query"] = q
         entries = [{"id": m["id"]} for m in self._world["messages"].values()]
         return FakeExecutor({"messages": entries, "nextPageToken": None})
 
@@ -131,6 +132,8 @@ def install_fake_gmail(
     excluded_labels=(),
     gmail_credentials_path="/fake/creds.json",
     attachments=None,
+    date_range_start=None,
+    date_range_end=None,
 ):
     world = {
         "messages": {m["id"]: m for m in messages},
@@ -139,7 +142,11 @@ def install_fake_gmail(
     monkeypatch.setattr(
         "extractors.gmail.get_settings",
         lambda: SimpleNamespace(
-            env=SimpleNamespace(gmail_credentials_path=gmail_credentials_path),
+            env=SimpleNamespace(
+                gmail_credentials_path=gmail_credentials_path,
+                gmail_date_range_start=date_range_start,
+                gmail_date_range_end=date_range_end,
+            ),
             config=SimpleNamespace(
                 filters=SimpleNamespace(
                     gmail=SimpleNamespace(excluded_labels=list(excluded_labels))
@@ -151,6 +158,7 @@ def install_fake_gmail(
     monkeypatch.setattr(
         "extractors.gmail._build_service", lambda creds: FakeService(world)
     )
+    return world
 
 
 class TestNotConfigured:
@@ -275,6 +283,66 @@ class TestHtmlFallback:
         assert "Hello" in items[0].raw_text
         assert "world" in items[0].raw_text
         assert "<p>" not in items[0].raw_text
+
+
+class TestDateRangeScoping:
+    def test_no_range_configured_has_no_before_or_after(self, monkeypatch):
+        world = install_fake_gmail(monkeypatch, [message("m1", "t1")])
+
+        extract_new_items()
+
+        assert world["last_query"] == ""
+
+    def test_start_date_adds_after_when_no_since_cursor(self, monkeypatch):
+        from datetime import date
+
+        world = install_fake_gmail(
+            monkeypatch, [message("m1", "t1")], date_range_start=date(2026, 1, 1)
+        )
+
+        extract_new_items()
+
+        assert "after:" in world["last_query"]
+        assert "before:" not in world["last_query"]
+
+    def test_start_date_does_not_move_a_later_since_cursor_backward(self, monkeypatch):
+        from datetime import UTC, date, datetime
+
+        world = install_fake_gmail(
+            monkeypatch, [message("m1", "t1")], date_range_start=date(2020, 1, 1)
+        )
+        later_since = datetime(2026, 1, 1, tzinfo=UTC)
+
+        extract_new_items(later_since)
+
+        assert f"after:{int(later_since.timestamp())}" in world["last_query"]
+
+    def test_start_date_floors_an_earlier_since_cursor(self, monkeypatch):
+        from datetime import UTC, date, datetime
+
+        range_start = date(2026, 6, 1)
+        world = install_fake_gmail(
+            monkeypatch, [message("m1", "t1")], date_range_start=range_start
+        )
+        earlier_since = datetime(2020, 1, 1, tzinfo=UTC)
+
+        extract_new_items(earlier_since)
+
+        expected_floor = datetime(2026, 6, 1, tzinfo=UTC)
+        assert f"after:{int(expected_floor.timestamp())}" in world["last_query"]
+
+    def test_end_date_adds_an_inclusive_before(self, monkeypatch):
+        from datetime import UTC, date, datetime
+
+        world = install_fake_gmail(
+            monkeypatch, [message("m1", "t1")], date_range_end=date(2026, 6, 30)
+        )
+
+        extract_new_items()
+
+        # The end date is inclusive, so `before:` targets the day after it.
+        expected_until = datetime(2026, 7, 1, tzinfo=UTC)
+        assert f"before:{int(expected_until.timestamp())}" in world["last_query"]
 
 
 class TestConnectionCheckHelpers:

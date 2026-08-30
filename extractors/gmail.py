@@ -32,7 +32,7 @@ from __future__ import annotations
 import base64
 import logging
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time, timedelta
 from email.utils import parsedate_to_datetime
 from io import BytesIO
 
@@ -63,6 +63,31 @@ def _token_path():
     return PROJECT_ROOT / "data" / "gmail_token.json"
 
 
+def _effective_window(
+    since: datetime | None, range_start, range_end
+) -> tuple[datetime | None, datetime | None]:
+    """Combine the incremental cursor with a configured date-range scope.
+
+    ``range_start`` (``config.yaml``'s ``GMAIL_DATE_RANGE_START``, a
+    ``date``) is a floor: it also caps the very first backfill, but never
+    moves ``since`` backward once the incremental cursor has passed it.
+    ``range_end`` is a ceiling applied on every run, not just the first —
+    a real fixed window. Gmail's own ``before:`` search operator excludes
+    the given day itself, so the day after ``range_end`` is used to make
+    the configured end date inclusive.
+
+    Returns:
+        ``(effective_since, until)`` — either may be ``None``.
+    """
+    if range_start is not None:
+        floor = datetime.combine(range_start, time.min, tzinfo=UTC)
+        since = floor if since is None else max(since, floor)
+    until = None
+    if range_end is not None:
+        until = datetime.combine(range_end + timedelta(days=1), time.min, tzinfo=UTC)
+    return since, until
+
+
 def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
     """Extract Gmail threads with activity after ``since``.
 
@@ -72,6 +97,8 @@ def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
             mailbox. A thread with any qualifying message is extracted in
             full — every message in it, not just the new ones — so the
             conversation is never embedded with earlier context missing.
+            Combined with ``config/.env``'s ``GMAIL_DATE_RANGE_START``/
+            ``GMAIL_DATE_RANGE_END``, if set — see :func:`_effective_window`.
 
     Returns:
         One item per thread with at least one message surviving label
@@ -93,14 +120,25 @@ def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
     service = _build_service(_get_credentials())
     excluded_labels = set(settings.config.filters.gmail.excluded_labels)
 
-    query = f"after:{int(since.timestamp())}" if since is not None else ""
+    since, until = _effective_window(
+        since,
+        settings.env.gmail_date_range_start,
+        settings.env.gmail_date_range_end,
+    )
+    query_parts = []
+    if since is not None:
+        query_parts.append(f"after:{int(since.timestamp())}")
+    if until is not None:
+        query_parts.append(f"before:{int(until.timestamp())}")
+    query = " ".join(query_parts)
     message_ids = _list_message_ids(service, query)
     thread_ids = _distinct_thread_ids(service, message_ids)
 
     logger.info(
-        "Gmail extraction starting (since=%s): %d message(s) matched, "
+        "Gmail extraction starting (since=%s, until=%s): %d message(s) matched, "
         "%d distinct thread(s)",
         since,
+        until,
         len(message_ids),
         len(thread_ids),
     )
