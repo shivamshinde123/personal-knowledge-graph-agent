@@ -11,7 +11,6 @@ import {
 } from "../api/client.js";
 import { useConfirm } from "../hooks/useConfirm.jsx";
 import radioCheckIcon from "../assets/icons/radio-check-icon.svg";
-import modelSelectChevron from "../assets/icons/model-select-chevron.svg";
 import saveIcon from "../assets/icons/save-icon.svg";
 import ingestIcon from "../assets/icons/ingest-icon.svg";
 import reverifyIcon from "../assets/icons/reverify-icon.svg";
@@ -372,56 +371,40 @@ function SettingsPanel({
               <label htmlFor="local-generation-model">
                 Local generation model
               </label>
-              <div className="model-select-wrap">
-                <input
-                  id="local-generation-model"
-                  className="model-select"
-                  type="text"
-                  disabled={!isLocal}
-                  value={settings.local_generation_model}
-                  onChange={(event) =>
-                    setSettings((prev) => ({
-                      ...prev,
-                      local_generation_model: event.target.value,
-                    }))
-                  }
-                  placeholder="e.g. llama3:8b"
-                />
-                <img
-                  src={modelSelectChevron}
-                  alt=""
-                  aria-hidden="true"
-                  className="model-select-chevron"
-                />
-              </div>
+              <input
+                id="local-generation-model"
+                className="model-select"
+                type="text"
+                disabled={!isLocal}
+                value={settings.local_generation_model}
+                onChange={(event) =>
+                  setSettings((prev) => ({
+                    ...prev,
+                    local_generation_model: event.target.value,
+                  }))
+                }
+                placeholder="e.g. llama3:8b"
+              />
             </div>
 
             <div className="model-field">
               <label htmlFor="cloud-generation-model">
                 Cloud generation model
               </label>
-              <div className="model-select-wrap">
-                <input
-                  id="cloud-generation-model"
-                  className="model-select"
-                  type="text"
-                  disabled={!isCloud}
-                  value={settings.cloud_generation_model}
-                  onChange={(event) =>
-                    setSettings((prev) => ({
-                      ...prev,
-                      cloud_generation_model: event.target.value,
-                    }))
-                  }
-                  placeholder="e.g. anthropic/claude-sonnet-4"
-                />
-                <img
-                  src={modelSelectChevron}
-                  alt=""
-                  aria-hidden="true"
-                  className="model-select-chevron"
-                />
-              </div>
+              <input
+                id="cloud-generation-model"
+                className="model-select"
+                type="text"
+                disabled={!isCloud}
+                value={settings.cloud_generation_model}
+                onChange={(event) =>
+                  setSettings((prev) => ({
+                    ...prev,
+                    cloud_generation_model: event.target.value,
+                  }))
+                }
+                placeholder="e.g. anthropic/claude-sonnet-4"
+              />
             </div>
 
             <div className="model-field">
@@ -429,27 +412,19 @@ function SettingsPanel({
                 <label htmlFor="cloud-embedding-model">Embedding model</label>
                 <span className="model-field-fixed">Always cloud</span>
               </div>
-              <div className="model-select-wrap">
-                <input
-                  id="cloud-embedding-model"
-                  className="model-select"
-                  type="text"
-                  value={settings.cloud_embedding_model}
-                  onChange={(event) =>
-                    setSettings((prev) => ({
-                      ...prev,
-                      cloud_embedding_model: event.target.value,
-                    }))
-                  }
-                  placeholder="e.g. openai/text-embedding-3-small"
-                />
-                <img
-                  src={modelSelectChevron}
-                  alt=""
-                  aria-hidden="true"
-                  className="model-select-chevron"
-                />
-              </div>
+              <input
+                id="cloud-embedding-model"
+                className="model-select"
+                type="text"
+                value={settings.cloud_embedding_model}
+                onChange={(event) =>
+                  setSettings((prev) => ({
+                    ...prev,
+                    cloud_embedding_model: event.target.value,
+                  }))
+                }
+                placeholder="e.g. openai/text-embedding-3-small"
+              />
             </div>
           </section>
 

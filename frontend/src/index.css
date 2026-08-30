@@ -910,13 +910,16 @@ a {
   letter-spacing: 0.05em;
 }
 
-.model-select-wrap {
-  position: relative;
-}
-
 .model-select {
+  /* A plain free-text input, not a real <select> -- model identifiers
+     are arbitrary strings the user types (any Ollama tag, any
+     OpenRouter model slug), not a fixed enum, so no dropdown affordance
+     belongs here. An earlier version added a decorative chevron
+     matching the design's "Options" box look, which read as a real
+     dropdown and was misleading about what the field actually does —
+     removed. See DECISIONS.md. */
   width: 100%;
-  padding: 13px 40px 13px 17px;
+  padding: 13px 17px;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.03);
@@ -926,16 +929,6 @@ a {
 
 .model-select:disabled {
   opacity: 0.5;
-}
-
-.model-select-chevron {
-  position: absolute;
-  right: 16px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 12px;
-  height: 7.4px;
-  pointer-events: none;
 }
 
 .settings-field-hint {

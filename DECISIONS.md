@@ -8,6 +8,16 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-30 — Removed the model fields' decorative dropdown chevron
+
+**Context**: The Settings redesign entry above ("screen 2 of 3") added a chevron icon to the three model fields, reasoning at the time that it was "visual only" and harmless since it just matched the design's "Options" box styling. Reported directly as confusing: it reads as a real `<select>` dropdown, but these are (correctly, deliberately) plain free-text `<input>`s — model identifiers are arbitrary strings (any Ollama tag, any OpenRouter model slug), not a fixed enum, so a real dropdown would be wrong here. The chevron was misleading about what the field actually does, which is worse than "harmless."
+
+**Decision**: Removed the chevron from all three model fields (local generation, cloud generation, embedding). The fields themselves are unchanged — still plain text inputs, same handlers, same validation-free behavior as before the redesign entirely.
+
+**Affects**: `frontend/src/components/SettingsPanel.jsx`, `frontend/src/index.css`, `frontend/src/assets/icons/model-select-chevron.svg` (removed)
+
+---
+
 ## 2026-08-30 — Sidebar nav icons weren't rendering: switched CSS mask-image for inline SVG
 
 **Context**: The Chat redesign's sidebar nav icons (Chat/Graph/Settings) used `<span>` + CSS `mask-image` (recoloring one exported Figma asset via `background-color: currentColor`, since each icon needed to render in either a muted or active-purple color depending on the current view — see the earlier "Figma redesign, screen 1" entry). Reported directly as not showing up at all.
