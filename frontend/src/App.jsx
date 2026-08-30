@@ -46,6 +46,12 @@ function App() {
   // load prior history — see ChatWindow's own docstring.
   const [chatKey, setChatKey] = useState(0);
   const [toasts, setToasts] = useState([]);
+  // { startedAt: Date, runId: string, itemsProcessed: number, status:
+  // "running" | "success" | "partial_failure" | "failed" } | null — shown
+  // persistently in Settings (not just the transient toast), so "when did
+  // this start" and "how far along is it" survive longer than the 7s a
+  // toast stays up. See DECISIONS.md.
+  const [ingestionStatus, setIngestionStatus] = useState(null);
   const ingestPollTimeout = useRef(null);
 
   const refreshSessions = useCallback(() => {
@@ -84,7 +90,7 @@ function App() {
   // self-referencing useCallback would need to be turned off instead. A
   // plain function recreated each render is fine here — it's called from
   // event handlers and timeouts, never as a render-time dependency.
-  function pollIngestionCompletion(triggeredAt, attempt = 0) {
+  function pollIngestionCompletion(triggeredAt, runId, attempt = 0) {
     getSourcesStatus()
       .then((result) => {
         const lastRun = result.last_run;
@@ -96,13 +102,22 @@ function App() {
           lastRun &&
           new Date(lastRun.started_at).getTime() >= triggeredAt - 2000;
 
+        if (isThisRun) {
+          setIngestionStatus({
+            startedAt: new Date(triggeredAt),
+            runId,
+            itemsProcessed: lastRun.items_processed,
+            status: lastRun.status,
+          });
+        }
+
         if (isThisRun && lastRun.status !== "running") {
           const succeeded = lastRun.status === "success";
           addToast(
             succeeded ? "success" : "error",
             succeeded
-              ? "Ingestion completed."
-              : `Ingestion finished with errors (${lastRun.status}).`,
+              ? `Ingestion completed — ${lastRun.items_processed} item(s) processed.`
+              : `Ingestion finished with errors (${lastRun.status}) — ${lastRun.items_processed} item(s) processed.`,
           );
           return;
         }
@@ -114,7 +129,7 @@ function App() {
           return;
         }
         ingestPollTimeout.current = setTimeout(
-          () => pollIngestionCompletion(triggeredAt, attempt + 1),
+          () => pollIngestionCompletion(triggeredAt, runId, attempt + 1),
           INGEST_POLL_INTERVAL_MS,
         );
       })
@@ -123,7 +138,7 @@ function App() {
         // toast — just retry on the same schedule.
         if (attempt < INGEST_POLL_MAX_ATTEMPTS) {
           ingestPollTimeout.current = setTimeout(
-            () => pollIngestionCompletion(triggeredAt, attempt + 1),
+            () => pollIngestionCompletion(triggeredAt, runId, attempt + 1),
             INGEST_POLL_INTERVAL_MS,
           );
         }
@@ -133,9 +148,15 @@ function App() {
   async function handleTriggerIngestion() {
     const triggeredAt = Date.now();
     const result = await postIngestTrigger();
+    setIngestionStatus({
+      startedAt: new Date(triggeredAt),
+      runId: result.run_id,
+      itemsProcessed: 0,
+      status: "running",
+    });
     addToast("info", `Ingestion started (${result.run_id}).`);
     clearTimeout(ingestPollTimeout.current);
-    pollIngestionCompletion(triggeredAt);
+    pollIngestionCompletion(triggeredAt, result.run_id);
   }
 
   const handleResetAll = useCallback(async () => {
@@ -190,6 +211,7 @@ function App() {
           onTriggerIngestion={handleTriggerIngestion}
           onResetAll={handleResetAll}
           onError={(text) => addToast("error", text)}
+          ingestionStatus={ingestionStatus}
         />
       )}
       {view === "graph" && <GraphView />}

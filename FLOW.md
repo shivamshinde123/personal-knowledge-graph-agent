@@ -66,7 +66,14 @@ path=DEFAULT_ENV_PATH)` — used by `PUT /api/settings/sources`. `.env` is
 flat `KEY=VALUE` lines, so `python-dotenv`'s own `set_key()` (also routed
 through `_retry_on_transient_permission_error()`) rewrites just the given
 line(s) in place without a custom round-trip parser the way `config.yaml`
-needs.
+needs. Every watch-folder path has a trailing `\`/`/` stripped before
+writing — a path ending in a bare backslash breaks `python-dotenv`'s own
+write-then-read round trip (its writer only escapes literal quote
+characters, not backslashes, so a trailing `\` lands right before the
+closing quote and its *reader* treats that as an escaped quote instead of
+the string ending — corrupting every line after it in the file too,
+verified directly against a real occurrence that silently dropped
+`OPENROUTER_API_KEY`). See DECISIONS.md, 2026-08-30.
 
 `_retry_on_transient_permission_error(call)` — both writers above go
 through this rather than calling their underlying write directly. Windows
@@ -149,10 +156,15 @@ replace-not-append for chunks) matters to anything that calls it.
    this is the keyword half of hybrid search that `agent/search_nodes.py`
    calls
 4. Daily batch bookkeeping: `start_ingestion_run()` →
-   `complete_ingestion_run(status=...)` → `get_last_run_timestamp()` reads
-   the watermark for the next run's `since=`; `get_last_ingestion_run()`
-   returns the most recent run regardless of status (for display, e.g.
-   `agent/sources_status.py` — see DECISIONS.md, 2026-08-25)
+   (`update_ingestion_run_progress(run_id, items_processed)`, called once
+   per item as `_run()` processes each one — not just at the very end, so
+   `items_processed` updates live while `status` is still `"running"`,
+   for a real live-progress readout rather than a start/stop signal — see
+   DECISIONS.md, 2026-08-30) → `complete_ingestion_run(status=...)` →
+   `get_last_run_timestamp()` reads the watermark for the next run's
+   `since=`; `get_last_ingestion_run()` returns the most recent run
+   regardless of status (for display, e.g. `agent/sources_status.py` —
+   see DECISIONS.md, 2026-08-25)
 5. Conversation memory (tables not in `docs/Database_Schema.docx` — see
    DECISIONS.md, 2026-08-25): `record_conversation_turn(conn, session_id,
    question, answer, sources)` is the one write path — upserts the session
@@ -179,7 +191,14 @@ module only persists and searches vectors already produced elsewhere.
 2. Ingesting a chunk: `upsert_chunks(collection, [vector_chunk, ...])` —
    `vector_chunk.id` must equal the corresponding
    `storage/sqlite_store.py::Chunk.embedding_id`, and `vector_chunk.item_id`
-   must equal the SQLite item's effective id from `insert_item()`
+   must equal the SQLite item's effective id from `insert_item()`. A
+   collection is locked to whatever vector dimensionality its first write
+   used — a later write of a different size (the embedding model's output
+   width changed) fails for every item, not just new ones; this function
+   detects that specific Chroma error and raises a `VectorStoreError`
+   naming the real fix ("Reset all data", then re-ingest) instead of the
+   generic message — verified directly against a real, systemic
+   occurrence of this failure. See DECISIONS.md, 2026-08-30.
 3. Querying: `query(collection, query_embedding, top_k, where=...)` — the
    vector half of hybrid search that `agent/search_nodes.py` will call; an
    optional `where` filter narrows by `source_type`/`project_name`/`topic`,
@@ -785,9 +804,14 @@ DECISIONS.md, 2026-08-25.
    `0` whenever the latest run finds nothing new, which reads as "nothing
    has ever been ingested" without `total_items` alongside it (see
    DECISIONS.md, 2026-08-30)
-3. Returns `{"last_run": {...} | null, "sources": [...]}` per
-   `docs/API_Specification.docx` section 3.3 — `last_run` is `null` and
-   every source reports 0 items/`"ok"` if the batch has never run
+3. Returns `{"last_run": {..., "items_processed"} | null, "sources": [...]}`
+   per `docs/API_Specification.docx` section 3.3 — `last_run` is `null` and
+   every source reports 0 items/`"ok"` if the batch has never run.
+   `last_run.items_processed` (extends the documented shape — see
+   DECISIONS.md, 2026-08-30) updates live while `status` is still
+   `"running"`, not just once the run completes — this is what
+   `frontend/src/App.jsx`'s ingestion-completion polling reads to show
+   real, live progress rather than only a start/stop signal
 
 ---
 
@@ -997,7 +1021,14 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    to act (toast a result, in the ingestion case only after polling for
    completion; clear/refresh chat session state, in the reset case) even
    if the user has since navigated away from Settings — see DECISIONS.md,
-   2026-08-30
+   2026-08-30. Also holds `ingestionStatus`
+   (`{startedAt, runId, itemsProcessed, status}` — `null` before anything's
+   been triggered this session), set on trigger and updated on every poll
+   inside `pollIngestionCompletion()`, then passed down to
+   `SettingsPanel.jsx` for a persistent "started at HH:MM:SS" + live
+   progress display that survives both the toast's 7s auto-dismiss and
+   navigating away from Settings and back — see DECISIONS.md, 2026-08-30
+   (the live-progress entry)
 2. `Sidebar.jsx` — "New chat" and clicking a real session both bump
    `App.jsx`'s `chatKey`, forcing `ChatWindow` to remount (see DECISIONS.md,
    2026-08-25, for why a remount rather than watching `sessionId` for
@@ -1048,7 +1079,14 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    folders field calls `postBrowseFolder()`; a non-null result is
    appended as a new line in `watchDirsText` (skipped if already present),
    composing with manually pasted paths rather than replacing them — see
-   DECISIONS.md, 2026-08-30
+   DECISIONS.md, 2026-08-30. The "Data Ingestion" section also renders the
+   `ingestionStatus` prop (from `App.jsx`, see above), when non-null, as a
+   "Started at HH:MM:SS" line plus a progress bar — an indeterminate
+   sliding-segment animation while `status === "running"` (no known total
+   item count to compute a real percentage from — extraction discovers
+   items as it streams through each source), filled solid green/red once
+   the run finishes; the live `items_processed` count is shown as text
+   alongside it. See DECISIONS.md, 2026-08-30 (the live-progress entry)
 5. `Toasts.jsx` — a pure display component: renders whichever
    `{id, kind, text}` entries are in `App.jsx`'s `toasts` state as a
    fixed top-right stack, each auto-removed after 7 seconds

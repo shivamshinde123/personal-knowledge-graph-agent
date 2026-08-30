@@ -560,6 +560,38 @@ def start_ingestion_run(conn: sqlite3.Connection) -> str:
     return run_id
 
 
+def update_ingestion_run_progress(
+    conn: sqlite3.Connection, run_id: str, items_processed: int
+) -> None:
+    """Update a running batch's live item count, without completing it.
+
+    Called once per item as ``scheduler/daily_batch.py::_run()`` processes
+    each one, so ``GET /api/sources/status`` (which reads whichever run is
+    most recent, ``"running"`` included — see :func:`get_last_ingestion_run`)
+    reflects real, live progress rather than only jumping from 0 to a final
+    count once the whole run finishes. See ``DECISIONS.md``.
+
+    Args:
+        conn: An open connection from :func:`connect`.
+        run_id: The run's id, from :func:`start_ingestion_run`.
+        items_processed: The running total processed so far.
+
+    Raises:
+        StorageError: If the update fails.
+    """
+    try:
+        conn.execute(
+            "UPDATE ingestion_runs SET items_processed = ? WHERE id = ?",
+            (items_processed, run_id),
+        )
+        conn.commit()
+    except sqlite3.Error as exc:
+        conn.rollback()
+        raise StorageError(
+            f"Could not update progress for ingestion run {run_id!r}: {exc}"
+        ) from exc
+
+
 def complete_ingestion_run(
     conn: sqlite3.Connection,
     run_id: str,

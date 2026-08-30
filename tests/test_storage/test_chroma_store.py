@@ -90,6 +90,19 @@ class TestUpsertChunks:
 
         assert collection.count() == 0
 
+    def test_a_dimension_mismatch_raises_a_clear_actionable_error(self, collection):
+        """Real-world regression: the embedding model's output width changed.
+
+        (llm.cloud_embedding_model config change, or a dropped forced-
+        truncation), but the collection was already locked to the old
+        dimension — every subsequent write failed with Chroma's own
+        generic message. Verified directly against a real occurrence.
+        """
+        upsert_chunks(collection, [make_chunk(embedding=[0.1, 0.2, 0.3])])
+
+        with pytest.raises(VectorStoreError, match="Reset all data"):
+            upsert_chunks(collection, [make_chunk(id="emb-2", embedding=[0.1] * 10)])
+
 
 class TestQuery:
     def test_orders_results_by_similarity(self, collection):

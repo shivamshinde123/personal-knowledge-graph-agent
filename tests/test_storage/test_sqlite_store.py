@@ -25,6 +25,7 @@ from storage.sqlite_store import (
     replace_chunks,
     reset_all,
     start_ingestion_run,
+    update_ingestion_run_progress,
 )
 
 
@@ -243,6 +244,38 @@ class TestIngestionRuns:
         complete_ingestion_run(conn, second, status="success", items_processed=2)
 
         assert get_last_run_timestamp(conn) >= first_ts
+
+
+class TestUpdateIngestionRunProgress:
+    def test_updates_items_processed_while_still_running(self, conn):
+        run_id = start_ingestion_run(conn)
+
+        update_ingestion_run_progress(conn, run_id, 3)
+
+        run = get_last_ingestion_run(conn)
+        assert run.items_processed == 3
+        assert run.status == "running"
+        assert run.run_completed_at is None
+
+    def test_can_be_called_multiple_times_before_completion(self, conn):
+        run_id = start_ingestion_run(conn)
+
+        update_ingestion_run_progress(conn, run_id, 1)
+        update_ingestion_run_progress(conn, run_id, 2)
+        update_ingestion_run_progress(conn, run_id, 3)
+
+        assert get_last_ingestion_run(conn).items_processed == 3
+
+    def test_does_not_affect_status_or_completion(self, conn):
+        run_id = start_ingestion_run(conn)
+        update_ingestion_run_progress(conn, run_id, 5)
+
+        complete_ingestion_run(conn, run_id, status="success", items_processed=10)
+
+        run = get_last_ingestion_run(conn)
+        assert run.status == "success"
+        assert run.items_processed == 10
+        assert run.run_completed_at is not None
 
 
 class TestGetLastIngestionRun:

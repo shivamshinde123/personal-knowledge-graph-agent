@@ -50,6 +50,7 @@ from storage.sqlite_store import (
     insert_item,
     replace_chunks,
     start_ingestion_run,
+    update_ingestion_run_progress,
 )
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,15 @@ def _run(
             processed_item_ids.append(processed.item_id)
             if processed.was_update:
                 updated_item_ids.append(processed.item_id)
+            # Live progress, not just a final count once everything is
+            # done — see storage/sqlite_store.py::update_ingestion_run_progress()'s
+            # own docstring, DECISIONS.md. A failure here is logged but
+            # never aborts the run — a stale progress count is a display
+            # quirk, not a reason to lose real ingestion work.
+            try:
+                update_ingestion_run_progress(conn, run_id, items_processed)
+            except Exception as exc:
+                logger.warning("Could not update live progress for %r: %s", run_id, exc)
 
     for item_id in updated_item_ids:
         try:

@@ -9,9 +9,20 @@ time it's called, so callers that want a single client for a process's
 lifetime (as ``api/main.py`` startup does) must call it once and hold onto
 the returned collection themselves.
 
-Embeddings are computed elsewhere (``pipeline/embeddings.py``, using the
-local sentence-transformers model configured in ``config.yaml``) and passed
-in already-computed; this module never invokes an embedding model itself.
+Embeddings are computed elsewhere (``pipeline/embeddings.py``, via
+``providers/base.py::get_provider("embedding")`` — always the configured
+cloud model, see DECISIONS.md) and passed in already-computed; this module
+never invokes an embedding model itself.
+
+A Chroma collection is locked to whatever vector dimensionality its first
+write used — a later write of a different size (e.g. after
+``llm.cloud_embedding_model`` changes to a model with a different native
+output width) fails outright, for every item, not just the changed ones.
+``upsert_chunks()`` below detects this specific failure and raises a
+``VectorStoreError`` naming the real fix (reset all data, then
+re-ingest) rather than a generic "could not upsert" message — verified
+directly against a real, systemic occurrence of this exact failure. See
+``DECISIONS.md``.
 
 Typical use::
 
@@ -154,7 +165,10 @@ def upsert_chunks(collection: Collection, chunks: Iterable[VectorChunk]) -> None
             overwritten in place.
 
     Raises:
-        VectorStoreError: If the write fails.
+        VectorStoreError: If the write fails. A dimension mismatch (the
+            collection was created with a different-sized embedding model
+            than the one currently configured) gets its own clearer
+            message — see the module docstring.
     """
     chunks = list(chunks)
     if not chunks:
@@ -167,6 +181,14 @@ def upsert_chunks(collection: Collection, chunks: Iterable[VectorChunk]) -> None
             metadatas=[_to_metadata(c) for c in chunks],
         )
     except Exception as exc:
+        if "expecting embedding with dimension" in str(exc):
+            raise VectorStoreError(
+                f"Could not upsert {len(chunks)} chunk(s): the vector store "
+                "was created with a different-sized embedding model than "
+                "the one currently configured (llm.cloud_embedding_model). "
+                "Use Settings > Danger Zone > 'Reset all data', then "
+                f"re-run ingestion. Original error: {exc}"
+            ) from exc
         raise VectorStoreError(
             f"Could not upsert {len(chunks)} chunk(s): {exc}"
         ) from exc

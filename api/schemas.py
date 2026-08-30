@@ -58,12 +58,19 @@ class ErrorResponse(BaseModel):
 
 
 class LastRunResponse(BaseModel):
-    """The most recent daily batch run, within a ``SourcesStatusResponse``."""
+    """The most recent daily batch run, within a ``SourcesStatusResponse``.
+
+    ``items_processed`` updates live while ``status`` is still
+    ``"running"`` — ``scheduler/daily_batch.py`` persists it after every
+    item, not just once at completion — so polling this gives a real,
+    live progress count, not just a start/stop signal. See DECISIONS.md.
+    """
 
     run_id: str
     started_at: datetime
     completed_at: datetime | None
     status: str
+    items_processed: int
 
 
 class SourceStatusResponse(BaseModel):

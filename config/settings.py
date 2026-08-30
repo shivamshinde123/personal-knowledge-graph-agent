@@ -455,10 +455,22 @@ def update_source_config(
 
     try:
         if local_files_watch_dirs is not None:
+            # A path ending in a trailing "\" (very easy to end up with on
+            # Windows — e.g. a folder picker returning a drive/project
+            # root) breaks python-dotenv's own write-then-read round trip:
+            # it single-quotes the value but only escapes literal quote
+            # characters, not backslashes, so a trailing "\" lands right
+            # before the closing quote and its *parser* reads that as an
+            # escaped quote instead of the string ending — corrupting not
+            # just this line but every line after it in the file (verified
+            # directly: a real .env with this shape silently dropped 12
+            # keys, including OPENROUTER_API_KEY, until the trailing
+            # backslash was removed). A trailing separator is meaningless
+            # for a directory path anyway, so stripping it is always safe.
+            # See DECISIONS.md.
+            cleaned_dirs = [d.rstrip("\\/") for d in local_files_watch_dirs]
             _retry_on_transient_permission_error(
-                lambda: set_key(
-                    path, "LOCAL_FILES_WATCH_DIRS", ",".join(local_files_watch_dirs)
-                )
+                lambda: set_key(path, "LOCAL_FILES_WATCH_DIRS", ",".join(cleaned_dirs))
             )
         if notion_page_ids is not None:
             _retry_on_transient_permission_error(

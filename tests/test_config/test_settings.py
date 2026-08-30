@@ -438,6 +438,37 @@ class TestUpdateSourceConfig:
 
         assert str(result.watch_dirs[0]) == str(anchor_path(Path(windows_path)))
 
+    def test_a_trailing_backslash_does_not_corrupt_the_rest_of_the_file(self, tmp_path):
+        r"""Real-world regression: a path ending in a backslash.
+
+        (e.g. from a folder-picker returning a drive/project root) breaks
+        python-dotenv's own write-then-read round trip — it single-quotes
+        the value but only escapes literal quote characters, not
+        backslashes, so the trailing "\" lands right before the closing
+        quote and its parser reads that as an escaped quote instead of the
+        string ending, corrupting every line after it too. Verified
+        directly against a real .env that silently lost 12 keys, including
+        OPENROUTER_API_KEY, this way.
+        """
+        env_path = tmp_path / ".env"
+        env_path.write_text(
+            "OPENROUTER_API_KEY=sk-test-should-survive\n", encoding="utf-8"
+        )
+        trailing_backslash_path = "C:\\Users\\Test\\Documents\\Watched" + "\\"
+
+        update_source_config(
+            local_files_watch_dirs=[trailing_backslash_path], path=env_path
+        )
+
+        from dotenv import dotenv_values
+
+        values = dotenv_values(env_path)
+        assert values.get("OPENROUTER_API_KEY") == "sk-test-should-survive"
+        assert (
+            values.get("LOCAL_FILES_WATCH_DIRS")
+            == "C:\\Users\\Test\\Documents\\Watched"
+        )
+
     def test_a_non_default_path_does_not_touch_the_global_settings_cache(
         self, tmp_path
     ):

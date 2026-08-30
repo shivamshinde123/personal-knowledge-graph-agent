@@ -55,8 +55,17 @@ const PROVIDER_MODES = [
  *   App.jsx since it also clears the active chat session.
  * @param {(text: string) => void} props.onError - surfaces a failure from
  *   either action as a toast.
+ * @param {{startedAt: Date, runId: string, itemsProcessed: number, status: string} | null} props.ingestionStatus -
+ *   the most recently triggered run's live progress, owned by App.jsx so
+ *   it survives navigating away and back; null before anything's been
+ *   triggered this session.
  */
-function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
+function SettingsPanel({
+  onTriggerIngestion,
+  onResetAll,
+  onError,
+  ingestionStatus,
+}) {
   const [settings, setSettings] = useState(null);
   const [sources, setSources] = useState(null);
   const [connections, setConnections] = useState(null);
@@ -444,6 +453,30 @@ function SettingsPanel({ onTriggerIngestion, onResetAll, onError }) {
           above. A notification appears once it finishes, even from another
           screen.
         </p>
+        {ingestionStatus && (
+          <div className="ingestion-progress">
+            <div className="ingestion-progress-header">
+              <span>
+                Started at {ingestionStatus.startedAt.toLocaleTimeString()}
+                {ingestionStatus.status !== "running" && (
+                  <>
+                    {" "}
+                    ·{" "}
+                    {ingestionStatus.status === "success"
+                      ? "Completed"
+                      : `Finished (${ingestionStatus.status})`}
+                  </>
+                )}
+              </span>
+              <span>{ingestionStatus.itemsProcessed} item(s) processed</span>
+            </div>
+            <div
+              className={`ingestion-progress-bar ${ingestionStatus.status === "running" ? "running" : ingestionStatus.status}`}
+            >
+              <div className="ingestion-progress-bar-fill" />
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="settings-section">
