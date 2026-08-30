@@ -10,6 +10,8 @@ depends on directly, not a layer this rule is about. See ``DECISIONS.md``.
 
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter
 
 from agent.browse import browse_folder
@@ -63,11 +65,20 @@ def put_settings_route(payload: SettingsUpdateRequest) -> SettingsUpdateResponse
 
 @router.get("/settings/sources", response_model=SourceConfigResponse)
 def get_source_config_route() -> SourceConfigResponse:
-    """Return the current source-scope configuration (watch folders, Notion scope)."""
+    """Return the current source-scope configuration.
+
+    Watch folders, Notion scope, GitHub repo scope, and the Gmail/GitHub
+    date ranges.
+    """
     env = get_settings().env
     return SourceConfigResponse(
         local_files_watch_dirs=[str(d) for d in env.watch_dirs],
         notion_page_ids=env.notion_page_ids_list,
+        github_repos=env.github_repos_list,
+        gmail_date_range_start=_isoformat(env.gmail_date_range_start),
+        gmail_date_range_end=_isoformat(env.gmail_date_range_end),
+        github_date_range_start=_isoformat(env.github_date_range_start),
+        github_date_range_end=_isoformat(env.github_date_range_end),
     )
 
 
@@ -88,8 +99,23 @@ def put_source_config_route(payload: SourceConfigUpdateRequest) -> SourceConfigR
     env = update_source_config(
         local_files_watch_dirs=payload.local_files_watch_dirs,
         notion_page_ids=payload.notion_page_ids,
+        github_repos=payload.github_repos,
+        gmail_date_range_start=payload.gmail_date_range_start,
+        gmail_date_range_end=payload.gmail_date_range_end,
+        github_date_range_start=payload.github_date_range_start,
+        github_date_range_end=payload.github_date_range_end,
     )
     return SourceConfigResponse(
         local_files_watch_dirs=[str(d) for d in env.watch_dirs],
         notion_page_ids=env.notion_page_ids_list,
+        github_repos=env.github_repos_list,
+        gmail_date_range_start=_isoformat(env.gmail_date_range_start),
+        gmail_date_range_end=_isoformat(env.gmail_date_range_end),
+        github_date_range_start=_isoformat(env.github_date_range_start),
+        github_date_range_end=_isoformat(env.github_date_range_end),
     )
+
+
+def _isoformat(value: date | None) -> str | None:
+    """``date | None`` -> ``"YYYY-MM-DD" | None``, for ``SourceConfigResponse``."""
+    return value.isoformat() if value is not None else None

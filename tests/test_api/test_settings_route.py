@@ -8,6 +8,7 @@ keeps these tests focused on request/response shape and guarantees they
 can never touch the real config.yaml.
 """
 
+from datetime import date
 from types import SimpleNamespace
 
 
@@ -120,10 +121,24 @@ class TestPutSettings:
         assert response.json()["error"] == "config_error"
 
 
-def fake_env_settings(watch_dirs=(), notion_page_ids=()):
+def fake_env_settings(
+    watch_dirs=(),
+    notion_page_ids=(),
+    github_repos=(),
+    gmail_date_range_start=None,
+    gmail_date_range_end=None,
+    github_date_range_start=None,
+    github_date_range_end=None,
+):
     return SimpleNamespace(
         env=SimpleNamespace(
-            watch_dirs=list(watch_dirs), notion_page_ids_list=list(notion_page_ids)
+            watch_dirs=list(watch_dirs),
+            notion_page_ids_list=list(notion_page_ids),
+            github_repos_list=list(github_repos),
+            gmail_date_range_start=gmail_date_range_start,
+            gmail_date_range_end=gmail_date_range_end,
+            github_date_range_start=github_date_range_start,
+            github_date_range_end=github_date_range_end,
         )
     )
 
@@ -132,7 +147,13 @@ class TestGetSourceConfig:
     def test_returns_the_current_source_scope(self, client, monkeypatch):
         monkeypatch.setattr(
             "api.routes.settings.get_settings",
-            lambda: fake_env_settings(watch_dirs=["/a/b"], notion_page_ids=["page-1"]),
+            lambda: fake_env_settings(
+                watch_dirs=["/a/b"],
+                notion_page_ids=["page-1"],
+                github_repos=["me/repo-a"],
+                gmail_date_range_start=date(2026, 1, 1),
+                gmail_date_range_end=date(2026, 6, 30),
+            ),
         )
 
         response = client.get("/api/settings/sources")
@@ -141,6 +162,11 @@ class TestGetSourceConfig:
         assert response.json() == {
             "local_files_watch_dirs": ["/a/b"],
             "notion_page_ids": ["page-1"],
+            "github_repos": ["me/repo-a"],
+            "gmail_date_range_start": "2026-01-01",
+            "gmail_date_range_end": "2026-06-30",
+            "github_date_range_start": None,
+            "github_date_range_end": None,
         }
 
 
@@ -148,12 +174,36 @@ class TestPutSourceConfig:
     def test_updates_and_returns_the_new_scope(self, client, monkeypatch):
         captured = {}
 
-        def fake_update(*, local_files_watch_dirs=None, notion_page_ids=None):
+        def fake_update(
+            *,
+            local_files_watch_dirs=None,
+            notion_page_ids=None,
+            github_repos=None,
+            gmail_date_range_start=None,
+            gmail_date_range_end=None,
+            github_date_range_start=None,
+            github_date_range_end=None,
+        ):
             captured["local_files_watch_dirs"] = local_files_watch_dirs
             captured["notion_page_ids"] = notion_page_ids
+            captured["github_repos"] = github_repos
+            captured["gmail_date_range_start"] = gmail_date_range_start
             return SimpleNamespace(
                 watch_dirs=local_files_watch_dirs or [],
                 notion_page_ids_list=notion_page_ids or [],
+                github_repos_list=github_repos or [],
+                gmail_date_range_start=(
+                    date.fromisoformat(gmail_date_range_start)
+                    if gmail_date_range_start
+                    else None
+                ),
+                gmail_date_range_end=(
+                    date.fromisoformat(gmail_date_range_end)
+                    if gmail_date_range_end
+                    else None
+                ),
+                github_date_range_start=None,
+                github_date_range_end=None,
             )
 
         monkeypatch.setattr("api.routes.settings.update_source_config", fake_update)
@@ -163,6 +213,8 @@ class TestPutSourceConfig:
             json={
                 "local_files_watch_dirs": ["/a/b"],
                 "notion_page_ids": ["page-1", "page-2"],
+                "github_repos": ["me/repo-a"],
+                "gmail_date_range_start": "2026-01-01",
             },
         )
 
@@ -170,8 +222,12 @@ class TestPutSourceConfig:
         body = response.json()
         assert body["local_files_watch_dirs"] == ["/a/b"]
         assert body["notion_page_ids"] == ["page-1", "page-2"]
+        assert body["github_repos"] == ["me/repo-a"]
+        assert body["gmail_date_range_start"] == "2026-01-01"
         assert captured["local_files_watch_dirs"] == ["/a/b"]
         assert captured["notion_page_ids"] == ["page-1", "page-2"]
+        assert captured["github_repos"] == ["me/repo-a"]
+        assert captured["gmail_date_range_start"] == "2026-01-01"
 
     def test_config_error_is_mapped_to_500(self, client, monkeypatch):
         from config.settings import ConfigError

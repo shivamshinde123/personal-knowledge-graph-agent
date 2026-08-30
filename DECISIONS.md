@@ -8,6 +8,20 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-30 — Gmail/GitHub ingestion date-range scoping
+
+**Context**: Gmail and GitHub can pull a large amount of history on first backfill (every message ever, every commit/PR/issue across every accessible repo). Wanted a way to bound that from the Settings screen — both an explicit start/end date range, and (for GitHub, which already supported it at the extractor level via `GITHUB_REPOS` but had no UI/API path to set it) a specific list of repos.
+
+**Decision**: Four new `EnvSettings` fields — `gmail_date_range_start/end`, `github_date_range_start/end` — typed `date | None`, living in `config/.env` alongside `LOCAL_FILES_WATCH_DIRS`/`NOTION_PAGE_IDS`/`GITHUB_REPOS` (the existing precedent for non-secret *scope* settings, as opposed to `config.yaml`'s behavioral settings). Semantics: a start date is a **floor** — `effective_since = max(incremental_since, range_start)` — so it also naturally caps the very first backfill without disabling the normal incremental cursor on later runs. An end date is a **ceiling** applied on every run, not just the first — a real fixed window, since the ask was an explicit start/end range, not just a one-time backfill cap.
+
+`update_source_config()`'s date parameters are plain `str | None` (ISO `"YYYY-MM-DD"` or `""` to clear), not `date | None` — this matches an HTML `<input type="date">`'s value directly (always a string, empty when cleared), so no parsing boundary is needed between the API layer and `.env`. `EnvSettings` itself does the real `date` parsing (pydantic-settings coerces the env string automatically), so extractors get real `date`/`datetime` objects.
+
+**Alternatives considered**: Storing the range in `config.yaml` under `filters` — rejected for consistency: `GITHUB_REPOS` and `NOTION_PAGE_IDS` (identical "scope, not behavior" character) already live in `.env` and are already edited via `update_source_config()`/`PUT /api/settings/sources`; splitting date ranges into `config.yaml` would mean two different edit paths for what's conceptually the same kind of setting.
+
+**Affects**: `config/settings.py` (`EnvSettings`, `update_source_config`), `api/schemas.py`, `api/routes/settings.py`, `extractors/gmail.py`, `extractors/github.py`, `frontend/src/components/SettingsPanel.jsx`.
+
+---
+
 ## 2026-08-30 — Ingestion "Started at" timestamp now persists like "Last checked" does
 
 **Context**: `SettingsPanel.jsx`'s "Started at HH:MM:SS" line only ever read `ingestionStatus` (an `App.jsx`-owned, session-only value set when ingestion is triggered/polled) — so a fresh page load, or opening Settings without having triggered a run yet this session, showed nothing at all, even though a real run happened recently. Reported directly: wanted it to "stick" the way "Last checked" (Reverify) already does — that one always shows a real value because it reads `connections.connections[0].checked_at`, fetched fresh on every mount, not session state.
