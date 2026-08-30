@@ -7,8 +7,9 @@ change to an entry point or call chain.
 > **Status**: the configuration layer, all three storage backends, the
 > provider layer, the entire pipeline layer (`filters`, `chunking`,
 > `metadata`, `embeddings`, `relationships`), `scheduler/daily_batch.py`,
-> and three extractors (local files, Notion, browser history) are
-> implemented and merged to `main`. The agent layer is complete:
+> and four extractors (local files, Notion, Google Calendar, browser
+> history) are implemented and merged to `main`. The agent layer is
+> complete:
 > `agent/router.py`, `agent/search_nodes.py`, `agent/graph_traversal.py`,
 > `agent/merger.py`, `agent/synthesizer.py`, and the LangGraph wiring in
 > `agent/graph.py` (including the `condense_query` follow-up node) are all
@@ -31,8 +32,8 @@ change to an entry point or call chain.
 > (see DECISIONS.md, all 2026-08-29). The evaluation layer
 > (`eval/test_questions.json`, `eval/evaluators.py`,
 > `eval/run_evaluation.py`, `agent/tracing.py`) is implemented and
-> verified against the real LangSmith account (see below). Remaining: the
-> three extractors not yet built (Gmail, GitHub, Google Calendar).
+> verified against the real LangSmith account (see below). Remaining: two
+> extractors not yet built (Gmail, GitHub).
 
 ---
 
@@ -288,6 +289,26 @@ calls `pipeline/filters.py` next.
   2026-08-24. Logs an INFO progress line every 25 pages scanned (a full
   scan visits every visible page and can take a long time on a large
   workspace — see DECISIONS.md, 2026-08-24).
+- `extractors/calendar.py` — lists the primary calendar's events via
+  `events().list(singleEvents=False, updatedMin=<since>)` — the
+  `singleEvents=False` is what keeps a recurring series as one event
+  (carrying a `recurrence` rule) instead of expanding it into one entry
+  per occurrence, satisfying "recurrence pattern stored once" for free,
+  server-side — see DECISIONS.md, 2026-08-30. Auth: same cached-OAuth-
+  token pattern as `extractors/gmail.py` (own credentials/token file,
+  `GOOGLE_CALENDAR_CREDENTIALS_PATH` / `data/calendar_token.json`), same
+  one-time `setup_auth()` step
+  (`uv run python -m extractors.calendar --setup-auth`). Per event: a
+  `status: "cancelled"` event is skipped; a recurring event with no
+  description is dropped when `filters.calendar.skip_recurring_without_description`
+  is set (default `true`) — a standing reminder, not a real meeting; a
+  timed event's `start`/`end` carries `dateTime` directly, an all-day
+  event's bare `date` is anchored to UTC midnight. `raw_text` is title +
+  time + attendees + description together (not description-only — most
+  personal events have no description at all, which would otherwise
+  leave nothing to embed); location and color/category tag are dropped
+  entirely (no metadata field to put them in, same limitation as Gmail's
+  thread id).
 - `extractors/browser_history.py` — copies `settings.env.browser_history_path`
   to a temp file before opening it (the browser holds the original locked
   while running — see DECISIONS.md, 2026-08-24), then reads Chrome's `urls`
@@ -444,9 +465,9 @@ test doubles/temp resources instead.
 1. `_run()` reads the watermark via `get_last_run_timestamp(conn)` and
    starts a run record via `start_ingestion_run(conn)`
 2. For each registered extractor in `_EXTRACTORS` (currently
-   `("local_file", local_files.extract_new_items)` and
-   `("notion", notion.extract_new_items)` — adding a source means adding
-   one entry here, per `docs/File_Folder_Structure.docx` section 4;
+   `local_file`, `notion`, `calendar`, and `browser_history` — adding a
+   source means adding one entry here, per
+   `docs/File_Folder_Structure.docx` section 4;
    `tests/test_scheduler/test_daily_batch.py`'s integration tests pin
    `_EXTRACTORS` to `local_file` only via an autouse fixture, so a new
    entry here never makes those tests real-network-dependent — see
@@ -754,10 +775,15 @@ See DECISIONS.md, 2026-08-29.
    order: `local_file`/`browser_history` — a real filesystem check
    (configured path/dir exists and is reachable); `notion` — a real,
    cheap Notion API call (`Client(auth=...).users.me()`) if
-   `NOTION_API_KEY` is set; `gmail`/`github`/`calendar` — always
+   `NOTION_API_KEY` is set; `calendar` — a real, cheap Calendar API call
+   (`calendarList().get(calendarId="primary")`) using the cached OAuth
+   token if `GOOGLE_CALENDAR_CREDENTIALS_PATH` is set — "not yet
+   authorized" (the one-time `setup_auth()` step hasn't been run)
+   reports `"not_configured"`, not an error, since nothing is actually
+   broken; any other failure (revoked token, unreachable API) reports
+   `"error"` — see DECISIONS.md, 2026-08-30; `gmail`/`github` — always
    `"not_configured"` with a "not yet built" detail, since no extractor
-   exists for these yet (see GitHub issues #38-#40) — never silently
-   reported as `"ok"`
+   exists for these yet — never silently reported as `"ok"`
 4. Returns `{"connections": [{"source_type", "status", "detail",
    "checked_at"}, ...]}`, `status` one of `"ok"` / `"error"` /
    `"not_configured"`

@@ -89,6 +89,18 @@ class GmailFilters(BaseModel):
     excluded_labels: list[str] = Field(default_factory=list)
 
 
+class CalendarFilters(BaseModel):
+    """Noise filtering rules specific to the Google Calendar source."""
+
+    # Per docs/Technical_Design_Document.docx section 3.4: "a rule filters
+    # out pure recurring noise (e.g. daily reminders)" -- a recurring
+    # event with no description is almost always exactly that (a
+    # standing reminder, not a real meeting worth ingesting), while one
+    # with a description ("Weekly 1:1 -- discuss X") is genuinely
+    # meaningful and should still be kept.
+    skip_recurring_without_description: bool = True
+
+
 class FiltersConfig(BaseModel):
     """Per-source noise filtering rules, plus the cross-source content filter."""
 
@@ -96,6 +108,7 @@ class FiltersConfig(BaseModel):
         default_factory=BrowserHistoryFilters
     )
     gmail: GmailFilters = Field(default_factory=GmailFilters)
+    calendar: CalendarFilters = Field(default_factory=CalendarFilters)
     min_content_length: int = 20
 
 

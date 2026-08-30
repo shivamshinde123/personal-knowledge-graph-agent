@@ -8,6 +8,24 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-30 — Google Calendar extractor: server-side recurrence collapsing, a configurable noise rule, and dropped low-signal fields
+
+**Context**: Building the Google Calendar extractor (`docs/Data_Extraction_Specification.docx` section 7 and `docs/Technical_Design_Document.docx` section 3.4) — the last of the three previously-unbuilt sources. Auth follows the exact same one-time-OAuth-then-cached-token pattern as `extractors/gmail.py` (a personal calendar has no service-account option either) — see that module's DECISIONS.md entry for the full reasoning; not repeated here. Separate credentials/token files from Gmail (`GOOGLE_CALENDAR_CREDENTIALS_PATH` / `data/calendar_token.json`), matching their already-separate `.env` variables — no assumption that one Google Cloud OAuth app necessarily covers both scopes.
+
+**Recurring events collapse to one item per series, for free, server-side**: the spec requires "recurrence pattern stored once, not per instance." Google's `events().list()` API has a `singleEvents` parameter — `false` (the default) returns each recurring series as a single event carrying a `recurrence` rule; `true` expands it into one entry per occurrence. Simply never passing `singleEvents=True` gets the required behavior directly from the API, with no client-side deduplication logic needed at all.
+
+**"Filters out pure recurring noise" made into a real, configurable rule**, not a hardcoded heuristic: added `filters.calendar.skip_recurring_without_description` to `config.yaml`/`config/settings.py` (default `true`, mirroring the `browser_history`/`gmail` per-source filter sections already established there) — a recurring event with no description is almost always a standing reminder ("daily standup," "take vitamins"), not a real meeting worth ingesting, while a recurring event *with* a description ("Weekly 1:1 — discuss roadmap") is genuinely meaningful and kept regardless of its recurrence.
+
+**Location and color/category tag are dropped entirely, not stored anywhere**: same limitation already hit for Gmail's thread id — `ExtractedItem` has no generic metadata field, and the spec itself marks both "metadata only, not embedded" (location) or "lightweight" (color tag), so neither is worth the complexity of inventing somewhere to put it for genuinely low signal.
+
+**Title/time/attendees are still folded into `raw_text` alongside the description**, not description-only: the spec frames description as "the main embedded text" and title as "mainly...metadata," but *most personal calendar events have no description at all* — a strict "embed only the description" reading would produce an empty, filtered-out item for the common case (e.g. "Dentist appointment," blank description). Time and attendees are also genuinely useful signals in their own right (timeline correlation; "who a meeting was with" — both explicitly called out elsewhere in the design docs as valuable relationship-detection inputs), so all three are included as short context lines around the description rather than reserved as inert metadata with nowhere to live.
+
+**Verified**: `uv run pytest` — new extractor tests (`tests/test_extractors/test_calendar.py`, fake Calendar service objects covering basic extraction, cancelled-event skipping, all-day-event time anchoring, and the recurring-event noise filter both on and off) and updated connection-check tests all pass; **full suite passes with zero failures** (this branch's `config.yaml` currently matches its own committed default exactly — the usual two pre-existing failures from the user's real, differing `provider_mode` choice only reappear once that live override is reapplied after this commit, same as every other extractor branch). `black`/`ruff` clean (reuses the `D107`/`N802`/`N803` test per-file-ignores added on the Gmail branch, reapplied here independently since these are separate branches off `main`).
+
+**Affects**: `extractors/calendar.py` (new), `config/settings.py`, `config/config.yaml`, `agent/connection_check.py`, `scheduler/daily_batch.py`, `pyproject.toml` (new dependencies + ruff per-file-ignores), `tests/test_extractors/test_calendar.py` (new), `tests/test_agent/test_connection_check.py`, `tests/test_api/test_sources_route.py`
+
+---
+
 ## 2026-08-30 — Configurable local watch folders and Notion page scope, from Settings
 
 **Context**: `LOCAL_FILES_WATCH_DIRS` was only editable by hand-editing `config/.env`; Notion had no scoping at all — `extractors/notion.py` always ingested every page the integration could see, with no way to restrict it. Requested directly (see issue #55, partially addressed here — the first-run wizard half is still open).
