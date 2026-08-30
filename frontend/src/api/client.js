@@ -11,7 +11,7 @@
 // port-forward) is already listening on ::1:8080 — silently talking to the
 // wrong service instead of this API. 127.0.0.1 is unambiguous. See
 // DECISIONS.md.
-const API_BASE_URL = "http://127.0.0.1:8080/api";
+const API_BASE_URL = "http://127.0.0.1:8081/api";
 
 class ApiError extends Error {
   constructor(status, body) {
@@ -83,6 +83,25 @@ export function getSettings() {
  */
 export function putSettings(payload) {
   return request("/settings", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Current source-scope configuration (local watch folders, Notion page
+ * scope). Extension beyond API_Specification.docx — see DECISIONS.md.
+ */
+export function getSourceConfig() {
+  return request("/settings/sources");
+}
+
+/**
+ * Update the source-scope configuration (partial update).
+ * @param {{local_files_watch_dirs?: string[], notion_page_ids?: string[]}} payload
+ */
+export function putSourceConfig(payload) {
+  return request("/settings/sources", {
     method: "PUT",
     body: JSON.stringify(payload),
   });

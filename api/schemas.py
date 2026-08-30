@@ -122,6 +122,24 @@ class SettingsUpdateResponse(BaseModel):
     cloud_model: str
 
 
+class SourceConfigResponse(BaseModel):
+    """``GET``/``PUT /api/settings/sources`` response body.
+
+    Extension beyond ``docs/API_Specification.docx`` — configurable
+    ingestion scope, not just credentials. See ``DECISIONS.md``.
+    """
+
+    local_files_watch_dirs: list[str]
+    notion_page_ids: list[str]
+
+
+class SourceConfigUpdateRequest(BaseModel):
+    """``PUT /api/settings/sources`` request body — both fields optional."""
+
+    local_files_watch_dirs: list[str] | None = None
+    notion_page_ids: list[str] | None = None
+
+
 class SessionSummary(BaseModel):
     """One session, within a ``SessionsListResponse``."""
 

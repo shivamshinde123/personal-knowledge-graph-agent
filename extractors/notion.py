@@ -1,12 +1,18 @@
 """Notion extractor: workspace pages → normalized items.
 
-Per ``docs/Data_Extraction_Specification.docx`` section 4: during the daily
-batch, every page reachable by the configured integration is listed via the
-Notion API, filtered to those whose ``last_edited_time`` is after ``since``,
-and their content pulled as structured blocks (paragraphs, headings, bullet
-lists, ...) and converted to plain text. Blocks are joined with blank lines
-so headings and paragraph breaks remain natural chunking boundaries for
+Per ``docs/Data_Extraction_Specification.docx`` section 4: every page
+reachable by the configured integration is listed via the Notion API,
+filtered to those whose ``last_edited_time`` is after ``since``, and their
+content pulled as structured blocks (paragraphs, headings, bullet lists,
+...) and converted to plain text. Blocks are joined with blank lines so
+headings and paragraph breaks remain natural chunking boundaries for
 ``pipeline/chunking.py``, per section 4.3.
+
+If ``settings.env.notion_page_ids_list`` is non-empty, ingestion is scoped
+to just those pages (fetched directly by id) instead of every page the
+integration can see — an extension beyond the original spec, configurable
+via ``PUT /api/settings/sources``. An empty/unset list keeps the original,
+unscoped "whole workspace" behavior. See ``DECISIONS.md``.
 """
 
 from __future__ import annotations
@@ -47,15 +53,25 @@ def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
             pages fails outright (bad token, unreachable API) — a
             source-level failure the daily batch records and moves past.
     """
-    api_key = get_settings().env.notion_api_key
+    settings = get_settings().env
+    api_key = settings.notion_api_key
     if not api_key:
         raise ExtractorError("NOTION_API_KEY is not configured")
     client = Client(auth=api_key)
 
-    logger.info("Notion extraction starting (since=%s)", since)
+    page_ids = settings.notion_page_ids_list
+    pages_iter = (
+        _iter_specific_pages(client, page_ids) if page_ids else _iter_pages(client)
+    )
+
+    logger.info(
+        "Notion extraction starting (since=%s, scope=%s)",
+        since,
+        f"{len(page_ids)} configured page(s)" if page_ids else "whole workspace",
+    )
     items: list[ExtractedItem] = []
     scanned = 0
-    for page in _iter_pages(client):
+    for page in pages_iter:
         scanned += 1
         if scanned % _PROGRESS_LOG_INTERVAL == 0:
             logger.info(
@@ -72,6 +88,26 @@ def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
         len(items),
     )
     return items
+
+
+def _iter_specific_pages(client: Client, page_ids: list[str]):
+    """Fetch each configured page directly by id, skipping the workspace search.
+
+    A page fetched via ``client.pages.retrieve()`` is the same shape
+    (``id``, ``properties``, ``url``, ``last_edited_time``,
+    ``created_time``) as one returned by ``client.search()`` in
+    :func:`_iter_pages`, so :func:`_extract_item` works identically either
+    way. A page id that's been deleted, or that the integration no longer
+    has access to, is logged and skipped rather than aborting the rest of
+    the configured scope.
+    """
+    for page_id in page_ids:
+        try:
+            yield client.pages.retrieve(page_id=page_id)
+        except Exception as exc:
+            logger.warning(
+                "Could not fetch configured Notion page %s: %s", page_id, exc
+            )
 
 
 def _iter_pages(client: Client):

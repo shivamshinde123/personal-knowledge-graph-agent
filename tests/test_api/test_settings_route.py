@@ -94,3 +94,72 @@ class TestPutSettings:
 
         assert response.status_code == 500
         assert response.json()["error"] == "config_error"
+
+
+def fake_env_settings(watch_dirs=(), notion_page_ids=()):
+    return SimpleNamespace(
+        env=SimpleNamespace(
+            watch_dirs=list(watch_dirs), notion_page_ids_list=list(notion_page_ids)
+        )
+    )
+
+
+class TestGetSourceConfig:
+    def test_returns_the_current_source_scope(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "api.routes.settings.get_settings",
+            lambda: fake_env_settings(watch_dirs=["/a/b"], notion_page_ids=["page-1"]),
+        )
+
+        response = client.get("/api/settings/sources")
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "local_files_watch_dirs": ["/a/b"],
+            "notion_page_ids": ["page-1"],
+        }
+
+
+class TestPutSourceConfig:
+    def test_updates_and_returns_the_new_scope(self, client, monkeypatch):
+        captured = {}
+
+        def fake_update(*, local_files_watch_dirs=None, notion_page_ids=None):
+            captured["local_files_watch_dirs"] = local_files_watch_dirs
+            captured["notion_page_ids"] = notion_page_ids
+            return SimpleNamespace(
+                watch_dirs=local_files_watch_dirs or [],
+                notion_page_ids_list=notion_page_ids or [],
+            )
+
+        monkeypatch.setattr("api.routes.settings.update_source_config", fake_update)
+
+        response = client.put(
+            "/api/settings/sources",
+            json={
+                "local_files_watch_dirs": ["/a/b"],
+                "notion_page_ids": ["page-1", "page-2"],
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["local_files_watch_dirs"] == ["/a/b"]
+        assert body["notion_page_ids"] == ["page-1", "page-2"]
+        assert captured["local_files_watch_dirs"] == ["/a/b"]
+        assert captured["notion_page_ids"] == ["page-1", "page-2"]
+
+    def test_config_error_is_mapped_to_500(self, client, monkeypatch):
+        from config.settings import ConfigError
+
+        def boom(**kwargs):
+            raise ConfigError("could not write .env")
+
+        monkeypatch.setattr("api.routes.settings.update_source_config", boom)
+
+        response = client.put(
+            "/api/settings/sources", json={"local_files_watch_dirs": ["/a"]}
+        )
+
+        assert response.status_code == 500
+        assert response.json()["error"] == "config_error"

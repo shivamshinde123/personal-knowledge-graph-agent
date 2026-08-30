@@ -8,6 +8,20 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-30 — Configurable local watch folders and Notion page scope, from Settings
+
+**Context**: `LOCAL_FILES_WATCH_DIRS` was only editable by hand-editing `config/.env`; Notion had no scoping at all — `extractors/notion.py` always ingested every page the integration could see, with no way to restrict it. Requested directly (see issue #55, partially addressed here — the first-run wizard half is still open).
+
+**Decision**: Added `NOTION_PAGE_IDS` (comma-separated, same pattern as `LOCAL_FILES_WATCH_DIRS`) to `EnvSettings`, with a `notion_page_ids_list` computed property mirroring `watch_dirs`. `extractors/notion.py::extract_new_items()` now fetches each configured page directly by id (`client.pages.retrieve()`) instead of the workspace-wide `client.search()` when `notion_page_ids_list` is non-empty — an unfetchable configured page (deleted, access revoked) is logged and skipped rather than aborting the rest, same resilience pattern as everything else in the pipeline. An empty list keeps the original "whole workspace" behavior unchanged.
+
+Added `config/settings.py::update_source_config()` — the `.env` equivalent of `update_llm_config()`, but simpler: `.env` is flat `KEY=VALUE` lines, so `python-dotenv`'s own `set_key()` already rewrites one line in place without a custom round-trip parser the way `config.yaml`'s structured, commented format needed. New endpoints `GET`/`PUT /api/settings/sources`, and a Settings screen section with a one-folder/id-per-line textarea for each field.
+
+**Verified against real data**: real `dotenv.set_key()` round-trip test confirmed a Windows path with backslashes and spaces (`C:\Users\Shivam D Shinde\...`) and a comma-separated list both survive being written and re-read correctly (single-quoted in the file, not escaped or corrupted). Then, against the real running backend and the real `config/.env`: `GET /api/settings/sources` returned the real configured watch dir; a real `PUT` setting `notion_page_ids` to a test value round-tripped correctly on a follow-up `GET`, and was then restored to its original (empty) value — confirmed the real `.env` file was left correctly restored, not corrupted, afterward.
+
+**Affects**: `config/settings.py`, `extractors/notion.py`, `api/schemas.py`, `api/routes/settings.py`, `frontend/src/api/client.js`, `frontend/src/components/SettingsPanel.jsx`, `frontend/src/index.css`
+
+---
+
 ## 2026-08-30 — `SourceStatus` reports a running total, not just the last run's count
 
 **Context**: `agent/sources_status.py::get_sources_status()`'s `items_processed` is, by design, the count ingested during the *most recent run's window* — legitimately `0` whenever a run finds nothing new (nothing changed since last time). Flagged directly from real use of the running Settings screen: 16 real items existed across three sources, but the screen showed "0 ingested" for all of them, because the most recent run happened to process nothing new. Technically correct, but reads as "nothing has ever been ingested," which isn't true.

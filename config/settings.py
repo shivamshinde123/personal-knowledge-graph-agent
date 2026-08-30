@@ -155,6 +155,7 @@ class EnvSettings(BaseSettings):
 
     # Source API credentials
     notion_api_key: str | None = None
+    notion_page_ids: str = ""
     gmail_credentials_path: Path | None = None
     github_token: str | None = None
     google_calendar_credentials_path: Path | None = None
@@ -219,6 +220,20 @@ class EnvSettings(BaseSettings):
             anchor_path(Path(part.strip()))
             for part in self.local_files_watch_dirs.split(",")
             if part.strip()
+        ]
+
+    @property
+    def notion_page_ids_list(self) -> list[str]:
+        """Parse ``NOTION_PAGE_IDS`` into a list of page/database ids.
+
+        Returns:
+            The configured page ids, empty if the variable is unset — an
+            empty list means "no scope configured," which
+            ``extractors/notion.py`` treats as "every page the integration
+            can see" (the original, unscoped behavior), not "nothing."
+        """
+        return [
+            part.strip() for part in self.notion_page_ids.split(",") if part.strip()
         ]
 
 
@@ -330,6 +345,57 @@ def update_llm_config(
     if path == DEFAULT_CONFIG_PATH:
         return reload_settings().config
     return load_config(path)
+
+
+def update_source_config(
+    *,
+    local_files_watch_dirs: list[str] | None = None,
+    notion_page_ids: list[str] | None = None,
+    path: Path = DEFAULT_ENV_PATH,
+) -> EnvSettings:
+    """Update ``config/.env``'s source-scope variables on disk, in place.
+
+    Used by ``PUT /api/settings/sources``. Unlike ``update_llm_config()``
+    (``config.yaml``, structured, comments preserved via ``ruamel.yaml``),
+    ``.env`` is flat ``KEY=VALUE`` lines — ``python-dotenv``'s own
+    ``set_key()`` already handles rewriting just one line in place without
+    disturbing the rest of the file, so no custom round-trip logic is
+    needed here.
+
+    Args:
+        local_files_watch_dirs: New list of folders to watch, or ``None``
+            to leave unchanged. An empty list clears the setting (no
+            folders watched).
+        notion_page_ids: New list of Notion page/database ids to scope
+            ingestion to, or ``None`` to leave unchanged. An empty list
+            clears the setting (falls back to "every page the integration
+            can see" — see ``extractors/notion.py``).
+        path: Path to the ``.env`` file. Defaults to the real one; passing
+            a different path (tests) writes there instead and leaves the
+            process-wide ``get_settings()`` cache untouched.
+
+    Returns:
+        The freshly reloaded environment settings, read back from ``path``
+        itself rather than assumed from the in-memory update.
+
+    Raises:
+        ConfigError: If the file can't be written to.
+    """
+    from dotenv import set_key
+
+    try:
+        if local_files_watch_dirs is not None:
+            set_key(path, "LOCAL_FILES_WATCH_DIRS", ",".join(local_files_watch_dirs))
+        if notion_page_ids is not None:
+            set_key(path, "NOTION_PAGE_IDS", ",".join(notion_page_ids))
+    except OSError as exc:
+        raise ConfigError(f"Could not write {path}: {exc}") from exc
+
+    # Same reasoning as update_llm_config(): only the real default file's
+    # write should invalidate the process-wide cache.
+    if path == DEFAULT_ENV_PATH:
+        return reload_settings().env
+    return EnvSettings(_env_file=path)
 
 
 @lru_cache(maxsize=1)

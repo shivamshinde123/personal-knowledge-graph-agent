@@ -1,11 +1,21 @@
 import { useEffect, useState } from "react";
 import {
   getSettings,
+  getSourceConfig,
   getSourceConnections,
   getSourcesStatus,
   putSettings,
+  putSourceConfig,
   verifySourceConnections,
 } from "../api/client.js";
+
+/** "a\nb\n\nc" -> ["a", "b", "c"] — one entry per non-blank line. */
+function linesToList(text) {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
 
 const CONNECTION_LABELS = {
   ok: "Connected",
@@ -42,17 +52,26 @@ function SettingsPanel() {
   const [settings, setSettings] = useState(null);
   const [sources, setSources] = useState(null);
   const [connections, setConnections] = useState(null);
+  const [watchDirsText, setWatchDirsText] = useState("");
+  const [notionPageIdsText, setNotionPageIdsText] = useState("");
   const [loadError, setLoadError] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null);
   const [isVerifying, setIsVerifying] = useState(false);
 
   useEffect(() => {
-    Promise.all([getSettings(), getSourcesStatus(), getSourceConnections()])
-      .then(([settingsResult, sourcesResult, connectionsResult]) => {
+    Promise.all([
+      getSettings(),
+      getSourcesStatus(),
+      getSourceConnections(),
+      getSourceConfig(),
+    ])
+      .then(([settingsResult, sourcesResult, connectionsResult, sourceConfig]) => {
         setSettings(settingsResult);
         setSources(sourcesResult);
         setConnections(connectionsResult);
+        setWatchDirsText(sourceConfig.local_files_watch_dirs.join("\n"));
+        setNotionPageIdsText(sourceConfig.notion_page_ids.join("\n"));
       })
       .catch((error) => setLoadError(error.message));
   }, []);
@@ -72,11 +91,17 @@ function SettingsPanel() {
     setIsSaving(true);
     setSaveStatus(null);
     try {
-      const result = await putSettings({
-        provider_mode: settings.provider_mode,
-        cloud_model: settings.cloud_model,
-      });
-      setSettings(result);
+      const [settingsResult] = await Promise.all([
+        putSettings({
+          provider_mode: settings.provider_mode,
+          cloud_model: settings.cloud_model,
+        }),
+        putSourceConfig({
+          local_files_watch_dirs: linesToList(watchDirsText),
+          notion_page_ids: linesToList(notionPageIdsText),
+        }),
+      ]);
+      setSettings(settingsResult);
       setSaveStatus({ ok: true, text: "Saved." });
     } catch (error) {
       setSaveStatus({ ok: false, text: error.message });
@@ -147,6 +172,36 @@ function SettingsPanel() {
             }))
           }
           placeholder="e.g. anthropic/claude-sonnet-4"
+        />
+      </section>
+
+      <section className="settings-section">
+        <h2>Local folders to watch</h2>
+        <p className="settings-field-hint">
+          One folder path per line. Files added or changed in these folders
+          are picked up on the next ingestion run.
+        </p>
+        <textarea
+          className="source-scope-textarea"
+          rows={3}
+          value={watchDirsText}
+          onChange={(event) => setWatchDirsText(event.target.value)}
+          placeholder={"C:\\Users\\you\\Documents\\Notes"}
+        />
+      </section>
+
+      <section className="settings-section">
+        <h2>Notion page scope</h2>
+        <p className="settings-field-hint">
+          One page or database ID per line. Leave empty to ingest every
+          page the Notion integration can see.
+        </p>
+        <textarea
+          className="source-scope-textarea"
+          rows={3}
+          value={notionPageIdsText}
+          onChange={(event) => setNotionPageIdsText(event.target.value)}
+          placeholder="e.g. 1a2b3c4d5e6f7890abcd1234ef567890"
         />
       </section>
 
