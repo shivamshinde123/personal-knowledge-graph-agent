@@ -25,7 +25,59 @@ function ChatWindow({ sessionId: initialSessionId, onTurnCompleted }) {
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(!!initialSessionId);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const nextMessageId = useRef(0);
+  const messageListRef = useRef(null);
+  // Tracks whether the reader was at the bottom *before* the message list's
+  // content just changed — updated continuously by the scroll handler, so
+  // it reflects the scroll position from before a new message was appended,
+  // not after. Reading scroll metrics fresh inside the messages-changed
+  // effect below would be too late: by then the DOM already includes the
+  // new (possibly tall) message, so "distance from bottom" would measure
+  // that message's own height instead of whether the reader had scrolled
+  // away — a long answer would then wrongly look like "not at the bottom"
+  // even when the reader was.
+  const wasAtBottomRef = useRef(true);
+
+  // How far (px) from the true bottom still counts as "at the bottom" —
+  // small enough that ordinary sub-pixel scroll rounding doesn't spuriously
+  // show the button, large enough to tolerate the last message's own height
+  // settling in (e.g. markdown images loading).
+  const NEAR_BOTTOM_THRESHOLD = 48;
+
+  function isNearBottom() {
+    const el = messageListRef.current;
+    if (!el) return true;
+    return (
+      el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_THRESHOLD
+    );
+  }
+
+  function scrollToBottom(behavior = "smooth") {
+    const el = messageListRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+    wasAtBottomRef.current = true;
+    setShowScrollToBottom(false);
+  }
+
+  function handleMessageListScroll() {
+    const atBottom = isNearBottom();
+    wasAtBottomRef.current = atBottom;
+    setShowScrollToBottom(!atBottom);
+  }
+
+  // Keeps the reader pinned to the newest message as the conversation
+  // grows (a new question, or the pending "Thinking…" bubble resolving
+  // into the real answer) -- but only while they were already at the
+  // bottom; someone scrolled up to reread something earlier shouldn't get
+  // yanked back down by an unrelated answer streaming in. Also covers the
+  // initial history load finishing, so an existing conversation opens
+  // already scrolled to its latest message rather than its first.
+  useEffect(() => {
+    if (wasAtBottomRef.current) scrollToBottom("auto");
+    else setShowScrollToBottom(true);
+  }, [messages, isLoadingHistory]);
 
   useEffect(() => {
     if (!initialSessionId) {
@@ -116,7 +168,11 @@ function ChatWindow({ sessionId: initialSessionId, onTurnCompleted }) {
 
   return (
     <div className="chat-window">
-      <div className="message-list">
+      <div
+        className="message-list"
+        ref={messageListRef}
+        onScroll={handleMessageListScroll}
+      >
         {isLoadingHistory && <p className="message-list-empty">Loading…</p>}
         {!isLoadingHistory && messages.length === 0 && (
           <p className="message-list-empty">
@@ -128,6 +184,16 @@ function ChatWindow({ sessionId: initialSessionId, onTurnCompleted }) {
           <MessageBubble key={message.id} message={message} />
         ))}
       </div>
+      {showScrollToBottom && (
+        <button
+          type="button"
+          className="scroll-to-bottom-button"
+          onClick={() => scrollToBottom("smooth")}
+          aria-label="Scroll to the latest message"
+        >
+          ↓ Latest
+        </button>
+      )}
       <form className="chat-input-form" onSubmit={handleSubmit}>
         <textarea
           className="chat-input"

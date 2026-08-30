@@ -186,10 +186,39 @@ a {
 /* ---- Chat window ---- */
 
 .chat-window {
+  position: relative;
   flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+
+.scroll-to-bottom-button {
+  /* Floats just above the input form rather than taking its own row in
+     .chat-window's flex column, so it doesn't shift the message list's
+     height when it appears/disappears. Shown only once the reader has
+     scrolled away from the latest message — see ChatWindow.jsx. */
+  position: absolute;
+  left: 50%;
+  bottom: 88px;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-bubble-agent);
+  color: var(--text-h);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  z-index: 5;
+}
+
+.scroll-to-bottom-button:hover {
+  background: var(--bg-bubble-user);
 }
 
 .message-list {
@@ -320,6 +349,12 @@ a {
 .message-bubble.pending {
   color: var(--text-muted);
   font-style: italic;
+  /* A flex item with overflow-wrap: break-word has a very small automatic
+     minimum width (browsers compute it as though the text could wrap at
+     any character), so this short one-word placeholder could shrink down
+     to a sliver and wrap character-by-character instead of stretching to
+     fit its own content. It never needs to wrap, so pin it to one line. */
+  white-space: nowrap;
 }
 
 .message-sources {
@@ -412,8 +447,26 @@ a {
   margin: 0 0 24px;
 }
 
+.settings-columns {
+  /* Two-column layout for the settings sections — a single full-width
+     column looked sparse/unbalanced on a wide screen (every section's
+     line length stretched edge to edge). CSS multi-column (not a grid)
+     so uneven section heights self-balance across the two columns
+     instead of pairing up strictly row-by-row. Requested directly. */
+  column-count: 2;
+  column-gap: 48px;
+  max-width: 1400px;
+}
+
+@media (max-width: 900px) {
+  .settings-columns {
+    column-count: 1;
+  }
+}
+
 .settings-section {
   margin-bottom: 32px;
+  break-inside: avoid;
 }
 
 .settings-section h2 {
@@ -699,9 +752,9 @@ a {
   flex: 1;
   display: flex;
   flex-direction: column;
-  align-items: center;
   padding: 24px;
-  overflow: auto;
+  overflow: hidden;
+  min-height: 0;
 }
 
 .graph-view-loading,
@@ -723,10 +776,21 @@ a {
   color: var(--text-muted);
 }
 
+.graph-view-canvas {
+  /* Fills whatever space is left after the hint line and legend — measured
+     by GraphView.jsx's ResizeObserver and used as both the simulation's
+     center point and the SVG's viewBox, so the graph genuinely spreads
+     across the available screen rather than being visually stretched
+     inside a fixed 900x600 coordinate space. Requested directly. */
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
 .graph-view-svg {
   width: 100%;
-  max-width: 900px;
-  height: auto;
+  height: 100%;
+  display: block;
 }
 
 .graph-node:active {

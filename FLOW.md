@@ -1069,7 +1069,13 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    `api/client.js::postQuery(question, sessionId)`, then fills the
    placeholder in with the real answer and `SourceChip.jsx`-rendered
    sources (or an error state) once it resolves, and reports the (possibly
-   new) `session_id` up to `App.jsx` via `onTurnCompleted`
+   new) `session_id` up to `App.jsx` via `onTurnCompleted`. The message
+   list auto-scrolls to the newest message whenever `messages` changes,
+   but only if the reader was already at the bottom (tracked by a ref the
+   scroll handler updates continuously, not a fresh measurement taken
+   after the new message is already in the DOM — see DECISIONS.md,
+   2026-08-30); a floating "↓ Latest" button appears once they've
+   scrolled away from the bottom, for jumping back without hand-scrolling
 4. `SettingsPanel.jsx` — on mount, calls `api/client.js::getSettings()`,
    `getSourcesStatus()`, `getSourceConnections()`, and `getSourceConfig()`
    in parallel, snapshotting the loaded values into `originalRef` — the
@@ -1113,7 +1119,12 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    item count to compute a real percentage from — extraction discovers
    items as it streams through each source), filled solid green/red once
    the run finishes; the live `items_processed` count is shown as text
-   alongside it. See DECISIONS.md, 2026-08-30 (the live-progress entry)
+   alongside it. See DECISIONS.md, 2026-08-30 (the live-progress entry).
+   The settings sections render inside a `.settings-columns` wrapper (CSS
+   multi-column, not a grid — see DECISIONS.md, 2026-08-30) so they
+   self-balance into two columns instead of stretching edge to edge on a
+   wide screen; the page heading and the final Save button/status stay
+   outside it, full width
 5. `Toasts.jsx` — a pure display component: renders whichever
    `{id, kind, text}` entries are in `App.jsx`'s `toasts` state as a
    fixed top-right stack, each auto-removed after 7 seconds
@@ -1129,9 +1140,16 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    `d3-force` simulation (`forceSimulation`/`forceLink`/`forceManyBody`/
    `forceCenter`, never `.stop()`-ped) — Obsidian-style, not a one-shot
    static layout (see DECISIONS.md, 2026-08-30, the interactive-graph
-   entry, for why that changed). The simulation's own node/link objects
-   live in `nodesRef`/`linksRef` (mutated in place by both d3's tick loop
-   and the drag handlers below); a `nodes`/`links` **state** pair,
+   entry, for why that changed). The canvas fills whatever space is
+   available rather than a fixed 900x600 box: a `ResizeObserver` on the
+   canvas element drives both the SVG `viewBox` and the simulation's
+   `forceCenter`, updated on every resize via a separate effect that
+   nudges the existing simulation (`alpha(0.3)`, not `.restart()`) so
+   nodes drift toward the new center instead of snapping — see
+   DECISIONS.md, 2026-08-30 (the full-screen-graph entry). The
+   simulation's own node/link objects live in `nodesRef`/`linksRef`
+   (mutated in place by both d3's tick loop and the drag handlers below);
+   a `nodes`/`links` **state** pair,
    shallow-copied from those refs on every `"tick"` event, is what JSX
    actually renders from — reading a ref directly during render doesn't
    trigger a re-render and trips this project's `react-hooks/refs` lint

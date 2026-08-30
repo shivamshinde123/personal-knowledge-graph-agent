@@ -302,248 +302,258 @@ function SettingsPanel({
       {confirmDialog}
       <h1>Settings</h1>
 
-      <section className="settings-section">
-        <h2>Generation Provider</h2>
-        {PROVIDER_MODES.map((mode) => (
-          <div className="radio-option" key={mode.value}>
-            <input
-              type="radio"
-              id={`provider-${mode.value}`}
-              name="provider_mode"
-              value={mode.value}
-              checked={settings.provider_mode === mode.value}
-              onChange={() =>
-                setSettings((prev) => ({ ...prev, provider_mode: mode.value }))
-              }
-            />
-            <div>
-              <label htmlFor={`provider-${mode.value}`}>{mode.label}</label>
-              <p>{mode.description}</p>
+      <div className="settings-columns">
+        <section className="settings-section">
+          <h2>Generation Provider</h2>
+          {PROVIDER_MODES.map((mode) => (
+            <div className="radio-option" key={mode.value}>
+              <input
+                type="radio"
+                id={`provider-${mode.value}`}
+                name="provider_mode"
+                value={mode.value}
+                checked={settings.provider_mode === mode.value}
+                onChange={() =>
+                  setSettings((prev) => ({
+                    ...prev,
+                    provider_mode: mode.value,
+                  }))
+                }
+              />
+              <div>
+                <label htmlFor={`provider-${mode.value}`}>{mode.label}</label>
+                <p>{mode.description}</p>
+              </div>
             </div>
-          </div>
-        ))}
-      </section>
+          ))}
+        </section>
 
-      <section className="settings-section">
-        <h2>Models</h2>
-        <p className="settings-field-hint">
-          Generation: only the model matching the provider above is actually
-          used — both are kept here so switching doesn't lose the other side's
-          value. Embedding is separate and always cloud, regardless of which
-          generation provider is selected — there's no local embedding option,
-          so an OpenRouter API key is required either way. Changing the
-          embedding model needs a full data reset and re-ingestion, since
-          existing embeddings won't match the new model — saving a change here
-          will ask you to confirm that first.
-        </p>
-
-        <div className="model-field">
-          <label htmlFor="local-generation-model">Local generation model</label>
-          <input
-            id="local-generation-model"
-            className="model-select"
-            type="text"
-            disabled={!isLocal}
-            value={settings.local_generation_model}
-            onChange={(event) =>
-              setSettings((prev) => ({
-                ...prev,
-                local_generation_model: event.target.value,
-              }))
-            }
-            placeholder="e.g. llama3:8b"
-          />
-        </div>
-
-        <div className="model-field">
-          <label htmlFor="cloud-generation-model">Cloud generation model</label>
-          <input
-            id="cloud-generation-model"
-            className="model-select"
-            type="text"
-            disabled={!isCloud}
-            value={settings.cloud_generation_model}
-            onChange={(event) =>
-              setSettings((prev) => ({
-                ...prev,
-                cloud_generation_model: event.target.value,
-              }))
-            }
-            placeholder="e.g. anthropic/claude-sonnet-4"
-          />
-        </div>
-
-        <div className="model-field">
-          <label htmlFor="cloud-embedding-model">
-            Embedding model{" "}
-            <span className="model-field-fixed">(always cloud)</span>
-          </label>
-          <input
-            id="cloud-embedding-model"
-            className="model-select"
-            type="text"
-            value={settings.cloud_embedding_model}
-            onChange={(event) =>
-              setSettings((prev) => ({
-                ...prev,
-                cloud_embedding_model: event.target.value,
-              }))
-            }
-            placeholder="e.g. openai/text-embedding-3-small"
-          />
-        </div>
-      </section>
-
-      <section className="settings-section">
-        <div className="settings-section-header">
-          <h2>Local folders to watch</h2>
-          <button
-            type="button"
-            className="reverify-button"
-            onClick={handleBrowseFolder}
-            disabled={isBrowsing}
-          >
-            {isBrowsing ? "Browsing…" : "Browse…"}
-          </button>
-        </div>
-        <p className="settings-field-hint">
-          One folder path per line — paste a path, or use "Browse…" to pick one.
-          Files added or changed in these folders are picked up on the next
-          ingestion run.
-        </p>
-        <textarea
-          className="source-scope-textarea"
-          rows={3}
-          value={watchDirsText}
-          onChange={(event) => setWatchDirsText(event.target.value)}
-          placeholder={"C:\\Users\\you\\Documents\\Notes"}
-        />
-      </section>
-
-      <section className="settings-section">
-        <h2>Notion page scope</h2>
-        <p className="settings-field-hint">
-          One page or database ID per line. Leave empty to ingest every page the
-          Notion integration can see.
-        </p>
-        <textarea
-          className="source-scope-textarea"
-          rows={3}
-          value={notionPageIdsText}
-          onChange={(event) => setNotionPageIdsText(event.target.value)}
-          placeholder="e.g. 1a2b3c4d5e6f7890abcd1234ef567890"
-        />
-      </section>
-
-      <section className="settings-section">
-        <div className="settings-section-header">
-          <h2>Data Ingestion</h2>
-          <button
-            type="button"
-            className="reverify-button"
-            onClick={handleTriggerIngestion}
-            disabled={isTriggeringIngest}
-          >
-            {isTriggeringIngest ? "Starting…" : "Run ingestion now"}
-          </button>
-        </div>
-        <p className="settings-field-hint">
-          Normally runs once a day on a schedule. This starts a run immediately,
-          outside the schedule — useful right after changing the folders/pages
-          above. A notification appears once it finishes, even from another
-          screen.
-        </p>
-        {ingestionStatus && (
-          <div className="ingestion-progress">
-            <div className="ingestion-progress-header">
-              <span>
-                Started at {ingestionStatus.startedAt.toLocaleTimeString()}
-                {ingestionStatus.status !== "running" && (
-                  <>
-                    {" "}
-                    ·{" "}
-                    {ingestionStatus.status === "success"
-                      ? "Completed"
-                      : `Finished (${ingestionStatus.status})`}
-                  </>
-                )}
-              </span>
-              <span>{ingestionStatus.itemsProcessed} item(s) processed</span>
-            </div>
-            <div
-              className={`ingestion-progress-bar ${ingestionStatus.status === "running" ? "running" : ingestionStatus.status}`}
-            >
-              <div className="ingestion-progress-bar-fill" />
-            </div>
-          </div>
-        )}
-      </section>
-
-      <section className="settings-section">
-        <div className="settings-section-header">
-          <h2>Connected Data Sources</h2>
-          <button
-            type="button"
-            className="reverify-button"
-            onClick={handleReverify}
-            disabled={isVerifying}
-          >
-            {isVerifying ? "Checking…" : "Reverify"}
-          </button>
-        </div>
-        {connections.connections.length > 0 && (
-          <p className="connections-checked-at">
-            Last checked:{" "}
-            {new Date(connections.connections[0].checked_at).toLocaleString()}
+        <section className="settings-section">
+          <h2>Models</h2>
+          <p className="settings-field-hint">
+            Generation: only the model matching the provider above is actually
+            used — both are kept here so switching doesn't lose the other side's
+            value. Embedding is separate and always cloud, regardless of which
+            generation provider is selected — there's no local embedding option,
+            so an OpenRouter API key is required either way. Changing the
+            embedding model needs a full data reset and re-ingestion, since
+            existing embeddings won't match the new model — saving a change here
+            will ask you to confirm that first.
           </p>
-        )}
-        <div className="sources-grid">
-          {connections.connections.map((connection) => {
-            const sourceCounts = sources.sources.find(
-              (source) => source.source_type === connection.source_type,
-            );
-            return (
-              <div
-                className="source-status-card"
-                key={connection.source_type}
-                title={connection.detail ?? undefined}
-              >
-                <span>{connection.source_type.replace("_", " ")}</span>
-                <span className="source-status-value">
-                  <span className={`status-dot ${connection.status}`} />
-                  {CONNECTION_LABELS[connection.status] ?? connection.status}
-                  {connection.status === "ok" && sourceCounts !== undefined && (
-                    <span className="source-item-count">
-                      ({sourceCounts.total_items} total
-                      {sourceCounts.items_processed > 0
-                        ? `, ${sourceCounts.items_processed} new`
-                        : ""}
-                      )
-                    </span>
+
+          <div className="model-field">
+            <label htmlFor="local-generation-model">
+              Local generation model
+            </label>
+            <input
+              id="local-generation-model"
+              className="model-select"
+              type="text"
+              disabled={!isLocal}
+              value={settings.local_generation_model}
+              onChange={(event) =>
+                setSettings((prev) => ({
+                  ...prev,
+                  local_generation_model: event.target.value,
+                }))
+              }
+              placeholder="e.g. llama3:8b"
+            />
+          </div>
+
+          <div className="model-field">
+            <label htmlFor="cloud-generation-model">
+              Cloud generation model
+            </label>
+            <input
+              id="cloud-generation-model"
+              className="model-select"
+              type="text"
+              disabled={!isCloud}
+              value={settings.cloud_generation_model}
+              onChange={(event) =>
+                setSettings((prev) => ({
+                  ...prev,
+                  cloud_generation_model: event.target.value,
+                }))
+              }
+              placeholder="e.g. anthropic/claude-sonnet-4"
+            />
+          </div>
+
+          <div className="model-field">
+            <label htmlFor="cloud-embedding-model">
+              Embedding model{" "}
+              <span className="model-field-fixed">(always cloud)</span>
+            </label>
+            <input
+              id="cloud-embedding-model"
+              className="model-select"
+              type="text"
+              value={settings.cloud_embedding_model}
+              onChange={(event) =>
+                setSettings((prev) => ({
+                  ...prev,
+                  cloud_embedding_model: event.target.value,
+                }))
+              }
+              placeholder="e.g. openai/text-embedding-3-small"
+            />
+          </div>
+        </section>
+
+        <section className="settings-section">
+          <div className="settings-section-header">
+            <h2>Local folders to watch</h2>
+            <button
+              type="button"
+              className="reverify-button"
+              onClick={handleBrowseFolder}
+              disabled={isBrowsing}
+            >
+              {isBrowsing ? "Browsing…" : "Browse…"}
+            </button>
+          </div>
+          <p className="settings-field-hint">
+            One folder path per line — paste a path, or use "Browse…" to pick
+            one. Files added or changed in these folders are picked up on the
+            next ingestion run.
+          </p>
+          <textarea
+            className="source-scope-textarea"
+            rows={3}
+            value={watchDirsText}
+            onChange={(event) => setWatchDirsText(event.target.value)}
+            placeholder={"C:\\Users\\you\\Documents\\Notes"}
+          />
+        </section>
+
+        <section className="settings-section">
+          <h2>Notion page scope</h2>
+          <p className="settings-field-hint">
+            One page or database ID per line. Leave empty to ingest every page
+            the Notion integration can see.
+          </p>
+          <textarea
+            className="source-scope-textarea"
+            rows={3}
+            value={notionPageIdsText}
+            onChange={(event) => setNotionPageIdsText(event.target.value)}
+            placeholder="e.g. 1a2b3c4d5e6f7890abcd1234ef567890"
+          />
+        </section>
+
+        <section className="settings-section">
+          <div className="settings-section-header">
+            <h2>Data Ingestion</h2>
+            <button
+              type="button"
+              className="reverify-button"
+              onClick={handleTriggerIngestion}
+              disabled={isTriggeringIngest}
+            >
+              {isTriggeringIngest ? "Starting…" : "Run ingestion now"}
+            </button>
+          </div>
+          <p className="settings-field-hint">
+            Normally runs once a day on a schedule. This starts a run
+            immediately, outside the schedule — useful right after changing the
+            folders/pages above. A notification appears once it finishes, even
+            from another screen.
+          </p>
+          {ingestionStatus && (
+            <div className="ingestion-progress">
+              <div className="ingestion-progress-header">
+                <span>
+                  Started at {ingestionStatus.startedAt.toLocaleTimeString()}
+                  {ingestionStatus.status !== "running" && (
+                    <>
+                      {" "}
+                      ·{" "}
+                      {ingestionStatus.status === "success"
+                        ? "Completed"
+                        : `Finished (${ingestionStatus.status})`}
+                    </>
                   )}
                 </span>
+                <span>{ingestionStatus.itemsProcessed} item(s) processed</span>
               </div>
-            );
-          })}
-        </div>
-      </section>
+              <div
+                className={`ingestion-progress-bar ${ingestionStatus.status === "running" ? "running" : ingestionStatus.status}`}
+              >
+                <div className="ingestion-progress-bar-fill" />
+              </div>
+            </div>
+          )}
+        </section>
 
-      <section className="settings-section danger-zone">
-        <h2>Danger Zone</h2>
-        <p className="settings-field-hint">
-          Permanently deletes every ingested item, embedding, and relationship.
-          Use this to recover from a bad ingestion run or to restart from a
-          clean slate — there is no undo.
-        </p>
-        <button
-          type="button"
-          className="danger-button"
-          onClick={handleResetAll}
-          disabled={isResetting}
-        >
-          {isResetting ? "Resetting…" : "Reset all data"}
-        </button>
-      </section>
+        <section className="settings-section">
+          <div className="settings-section-header">
+            <h2>Connected Data Sources</h2>
+            <button
+              type="button"
+              className="reverify-button"
+              onClick={handleReverify}
+              disabled={isVerifying}
+            >
+              {isVerifying ? "Checking…" : "Reverify"}
+            </button>
+          </div>
+          {connections.connections.length > 0 && (
+            <p className="connections-checked-at">
+              Last checked:{" "}
+              {new Date(connections.connections[0].checked_at).toLocaleString()}
+            </p>
+          )}
+          <div className="sources-grid">
+            {connections.connections.map((connection) => {
+              const sourceCounts = sources.sources.find(
+                (source) => source.source_type === connection.source_type,
+              );
+              return (
+                <div
+                  className="source-status-card"
+                  key={connection.source_type}
+                  title={connection.detail ?? undefined}
+                >
+                  <span>{connection.source_type.replace("_", " ")}</span>
+                  <span className="source-status-value">
+                    <span className={`status-dot ${connection.status}`} />
+                    {CONNECTION_LABELS[connection.status] ?? connection.status}
+                    {connection.status === "ok" &&
+                      sourceCounts !== undefined && (
+                        <span className="source-item-count">
+                          ({sourceCounts.total_items} total
+                          {sourceCounts.items_processed > 0
+                            ? `, ${sourceCounts.items_processed} new`
+                            : ""}
+                          )
+                        </span>
+                      )}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="settings-section danger-zone">
+          <h2>Danger Zone</h2>
+          <p className="settings-field-hint">
+            Permanently deletes every ingested item, embedding, and
+            relationship. Use this to recover from a bad ingestion run or to
+            restart from a clean slate — there is no undo.
+          </p>
+          <button
+            type="button"
+            className="danger-button"
+            onClick={handleResetAll}
+            disabled={isResetting}
+          >
+            {isResetting ? "Resetting…" : "Reset all data"}
+          </button>
+        </section>
+      </div>
 
       <button
         type="button"

@@ -8,6 +8,22 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-30 — Four UI fixes: pending-bubble wrap, full-screen graph, scroll-to-bottom, two-column Settings
+
+**Context**: Requested directly, four separate small UI issues from actually using the app.
+
+**"Thinking…" wrapping character-by-character**: `.message-bubble` sits in a `display: flex` row and has `overflow-wrap: break-word`. A flex item with that combination has a very small automatic minimum width (browsers compute it as though the text could wrap at any character), so the short one-word pending placeholder could shrink to a sliver and wrap mid-word instead of sizing to its own content. Fixed with `white-space: nowrap` scoped to `.message-bubble.pending` only — real (potentially long) agent answers still wrap normally.
+
+**Graph view not using the full screen**: `GraphView.jsx` used a fixed `WIDTH=900, HEIGHT=600` for both the SVG `viewBox` and the `d3-force` simulation's center, with the SVG capped at `max-width: 900px` and centered — so on any wider screen there was dead space around a small, fixed-size graph. Replaced with a `ResizeObserver` on the actual canvas element; its measured size now drives both the SVG `viewBox` and the simulation's `forceCenter`, updated on every resize. The simulation itself isn't recreated on resize (that would snap every node back to its start position) — a separate effect just nudges the existing simulation's center force (`alpha(0.3)`, not `.restart()`) so nodes drift toward the new center instead of jumping.
+
+**No way to jump back to the latest message**: `ChatWindow.jsx`'s message list never auto-scrolled and had no way to jump to the bottom once you'd scrolled up. Added a floating "↓ Latest" button, shown once the reader scrolls more than 48px from the bottom, plus auto-scroll-to-newest when a new message arrives *while already at the bottom* (a new question, or the pending bubble resolving into a real answer) — someone who scrolled up to reread something earlier doesn't get yanked back down by an unrelated answer streaming in. The "was at the bottom" check reads a ref updated continuously by the scroll handler, not a fresh measurement taken after the new message is already in the DOM — measuring after the fact would confuse "distance from bottom" with the new message's own height (a long answer would then wrongly look like "the reader had scrolled away" even when they hadn't).
+
+**Settings page using the whole screen looked bad**: A single full-width column meant every section's text/inputs stretched edge-to-edge on a wide screen. Wrapped the settings sections in a CSS multi-column container (`column-count: 2`, `break-inside: avoid` on each section, collapsing to one column under 900px) rather than a grid — sections have uneven heights, and multi-column self-balances content across the two columns instead of pairing sections up strictly row-by-row the way a two-column grid would. The page heading and the final Save button/status stay outside the column container, full width.
+
+**Affects**: `frontend/src/index.css`, `frontend/src/components/GraphView.jsx`, `frontend/src/components/ChatWindow.jsx`, `frontend/src/components/SettingsPanel.jsx`
+
+---
+
 ## 2026-08-30 — Graph legend omits `browser_history`
 
 **Context**: Requested directly after noticing browser history never appears on the relationship graph. Verified this is by design, not a bug: `pipeline/relationships.py` excludes `browser_history` from relationship detection entirely, in both directions (as source and as candidate — see the module's `_NO_RELATIONSHIP_DETECTION_SOURCE` filtering, and `CLAUDE.md`'s locked-in decision that browser history gets no relationship detection). `storage/neo4j_store.py::get_full_graph()`'s own docstring confirms a node only exists once it has at least one confirmed relationship — so a `browser_history` node can never exist on this graph, structurally, not just in practice.
