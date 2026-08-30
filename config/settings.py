@@ -16,6 +16,8 @@ Typical use::
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -35,6 +37,48 @@ ProviderMode = Literal["fully_local", "fully_cloud"]
 
 class ConfigError(Exception):
     """Raised when configuration is missing, unreadable, or invalid."""
+
+
+_FILE_WRITE_RETRY_ATTEMPTS = 5
+_FILE_WRITE_RETRY_BASE_DELAY_SECONDS = 0.1
+
+
+def _retry_on_transient_permission_error[T](call: Callable[[], T]) -> T:
+    """Retry a file-write call a few times on a transient permission error.
+
+    Windows can transiently deny a file rename/replace — the mechanism
+    both ``update_llm_config()`` and ``update_source_config()`` use to
+    write their target file — if another process has briefly opened it,
+    even just for reading (a real-time antivirus scanner, the search
+    indexer, an editor's file-watcher). This surfaces as a
+    ``PermissionError`` (WinError 5 on Windows) that clears itself within
+    milliseconds once that other process releases its handle; verified
+    directly — the exact same write that failed once succeeded
+    immediately on retry, both called directly and through the real
+    running API. See ``DECISIONS.md``.
+
+    Args:
+        call: A zero-argument callable performing one write attempt.
+
+    Returns:
+        The result of the first successful attempt.
+
+    Raises:
+        PermissionError: If every attempt fails — the caller's own
+            ``except OSError`` (``PermissionError`` is a subclass) still
+            catches this and wraps it in ``ConfigError`` as before.
+    """
+    last_exc: PermissionError | None = None
+    for attempt in range(_FILE_WRITE_RETRY_ATTEMPTS):
+        try:
+            return call()
+        except PermissionError as exc:
+            last_exc = exc
+            if attempt == _FILE_WRITE_RETRY_ATTEMPTS - 1:
+                break
+            time.sleep(_FILE_WRITE_RETRY_BASE_DELAY_SECONDS * (attempt + 1))
+    assert last_exc is not None  # loop always assigns before breaking
+    raise last_exc
 
 
 def anchor_path(value: Path) -> Path:
@@ -354,9 +398,12 @@ def update_llm_config(
         llm_section[key] = value
     data["llm"] = llm_section
 
-    try:
+    def write() -> None:
         with path.open("w", encoding="utf-8") as f:
             yaml_rt.dump(data, f)
+
+    try:
+        _retry_on_transient_permission_error(write)
     except OSError as exc:
         raise ConfigError(f"Could not write {path}: {exc}") from exc
 
@@ -408,9 +455,15 @@ def update_source_config(
 
     try:
         if local_files_watch_dirs is not None:
-            set_key(path, "LOCAL_FILES_WATCH_DIRS", ",".join(local_files_watch_dirs))
+            _retry_on_transient_permission_error(
+                lambda: set_key(
+                    path, "LOCAL_FILES_WATCH_DIRS", ",".join(local_files_watch_dirs)
+                )
+            )
         if notion_page_ids is not None:
-            set_key(path, "NOTION_PAGE_IDS", ",".join(notion_page_ids))
+            _retry_on_transient_permission_error(
+                lambda: set_key(path, "NOTION_PAGE_IDS", ",".join(notion_page_ids))
+            )
     except OSError as exc:
         raise ConfigError(f"Could not write {path}: {exc}") from exc
 

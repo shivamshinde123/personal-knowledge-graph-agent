@@ -10,6 +10,7 @@ from config.settings import (
     AppConfig,
     ConfigError,
     EnvSettings,
+    _retry_on_transient_permission_error,
     anchor_path,
     get_settings,
     load_config,
@@ -324,6 +325,53 @@ class TestUpdateLlmConfig:
         assert get_settings() is before
 
 
+class TestRetryOnTransientPermissionError:
+    """Tests for the transient-permission-error retry helper.
+
+    Windows can transiently deny a file rename/replace if another process
+    (an antivirus scanner, the search indexer, an editor) has briefly
+    opened the target — see DECISIONS.md for how this was root-caused
+    against a real WinError 5 report.
+    """
+
+    def test_returns_the_result_on_first_success(self):
+        assert _retry_on_transient_permission_error(lambda: "ok") == "ok"
+
+    def test_retries_and_succeeds_after_transient_failures(self, monkeypatch):
+        monkeypatch.setattr("config.settings.time.sleep", lambda _seconds: None)
+        calls = {"count": 0}
+
+        def flaky():
+            calls["count"] += 1
+            if calls["count"] < 3:
+                raise PermissionError("WinError 5: Access is denied")
+            return "eventually ok"
+
+        assert _retry_on_transient_permission_error(flaky) == "eventually ok"
+        assert calls["count"] == 3
+
+    def test_raises_after_exhausting_every_attempt(self, monkeypatch):
+        monkeypatch.setattr("config.settings.time.sleep", lambda _seconds: None)
+
+        def always_fails():
+            raise PermissionError("WinError 5: Access is denied")
+
+        with pytest.raises(PermissionError):
+            _retry_on_transient_permission_error(always_fails)
+
+    def test_a_non_permission_error_is_not_retried(self, monkeypatch):
+        monkeypatch.setattr("config.settings.time.sleep", lambda _seconds: None)
+        calls = {"count": 0}
+
+        def raises_something_else():
+            calls["count"] += 1
+            raise ValueError("not a permission error")
+
+        with pytest.raises(ValueError):
+            _retry_on_transient_permission_error(raises_something_else)
+        assert calls["count"] == 1
+
+
 class TestUpdateSourceConfig:
     def test_updates_watch_dirs(self, tmp_path):
         env_path = tmp_path / ".env"
@@ -400,6 +448,40 @@ class TestUpdateSourceConfig:
         update_source_config(local_files_watch_dirs=["/a"], path=env_path)
 
         assert get_settings() is before
+
+    def test_a_transient_permission_error_is_retried_and_recovers(
+        self, tmp_path, monkeypatch
+    ):
+        """Real-world regression: a user hit exactly this.
+
+        WinError 5 on the rename set_key() does internally, while saving a
+        changed watch folder. Verified directly that a retry resolves it;
+        this confirms update_source_config() actually retries rather than
+        failing on the first transient denial.
+        """
+        monkeypatch.setattr("config.settings.time.sleep", lambda _seconds: None)
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+
+        import dotenv
+
+        real_set_key = dotenv.set_key
+        calls = {"count": 0}
+
+        def flaky_set_key(*args, **kwargs):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise PermissionError(
+                    "[WinError 5] Access is denied: '.tmp_xyz' -> '.env'"
+                )
+            return real_set_key(*args, **kwargs)
+
+        monkeypatch.setattr(dotenv, "set_key", flaky_set_key)
+
+        result = update_source_config(local_files_watch_dirs=["/a/b"], path=env_path)
+
+        assert calls["count"] == 2
+        assert [str(p) for p in result.watch_dirs] == [str(anchor_path(Path("/a/b")))]
 
 
 class TestGetSettings:

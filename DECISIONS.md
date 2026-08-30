@@ -8,6 +8,20 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-30 — Retry on transient Windows `PermissionError` when writing `.env`/`config.yaml`
+
+**Context**: A real, reported error while changing the watch folder through Settings: `Could not write config\.env: [WinError 5] Access is denied: '.tmp_5vxf83gc' -> '.env'`. Root-caused directly: `python-dotenv`'s `set_key()` writes a temp file (`.tmp_...`) next to `.env` and atomically `os.replace()`s it over the real file — a well-known Windows failure mode is that this rename gets transiently denied if another process (a real-time antivirus scanner, the search indexer, an editor's file-watcher) has briefly opened the destination file, even just for reading. Confirmed transient, not deterministic: the exact same write succeeded immediately when retried by hand, both called directly and through the real running API, seconds after the reported failure.
+
+**Decision**: Added `config/settings.py::_retry_on_transient_permission_error()` — retries a zero-argument write callable up to 5 times with a short, linearly-increasing backoff (0.1s, 0.2s, 0.3s, 0.4s) specifically on `PermissionError` (not any other `OSError` — a genuinely-invalid path or a real permissions problem should still fail immediately, not silently retry 5 times first). Wrapped around both `update_llm_config()`'s `config.yaml` write and `update_source_config()`'s `.env` `set_key()` calls — the same underlying Windows quirk can equally hit the direct `path.open("w")` `config.yaml` write, even though that one doesn't do the temp-file-rename dance `.env`'s write does. Both functions' existing `except OSError` (which `PermissionError` is a subclass of) still catches an exhausted-retries failure and wraps it in `ConfigError` exactly as before — this only adds a few quick retries before that path is reached, not a behavior change for a genuinely broken write.
+
+**Also fixed along the way**: my own diagnostic reproduction (a real, non-fixture-isolated call to `set_key()` against the real `config/.env`, to confirm whether the write itself was broken) accidentally overwrote the real `LOCAL_FILES_WATCH_DIRS` value with a placeholder — a mistake, not something the fix required; should have used a temp-path fixture the way the existing test suite already does. No local files had actually been ingested yet in the real database (confirmed directly — zero `local_file` rows), so there was no way to recover the original value from ingested data either; asked the user directly and restored it to the confirmed-correct folder.
+
+**Verified against real data**: real `update_source_config()` call against the real `config/.env` succeeded and was confirmed via `GET /api/settings/sources` against the real running backend after a restart. New tests (`TestRetryOnTransientPermissionError`, plus one `TestUpdateSourceConfig` case that makes `dotenv.set_key()` fail once before succeeding) pass; full backend suite passes except two pre-existing, unrelated failures (`TestLoadConfig::test_parses_the_committed_config_yaml`, `TestGetSettings::test_returns_both_halves`) — both read the *real* `config.yaml` directly rather than a fixture, and now reflect the user's own real `provider_mode: fully_cloud` choice made through Settings rather than the file's committed default; not something this fix touched or should "correct" by overwriting a real, deliberate user setting.
+
+**Affects**: `config/settings.py`, `tests/test_config/test_settings.py`
+
+---
+
 ## 2026-08-30 — Replace `window.confirm()` with a custom modal dialog
 
 **Context**: The native browser `confirm()`/`cancel` dialog looks nothing like the rest of the app (unstyled, can't render structured content like a bullet list or a highlighted warning) — requested directly to replace it with something that matches the app's own design.

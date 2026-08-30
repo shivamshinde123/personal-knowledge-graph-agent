@@ -47,17 +47,39 @@ Every entry point resolves configuration the same way, on first use:
 
 `reload_settings()` clears the cache and re-reads both sources.
 
-`update_llm_config(*, provider_mode=None, local_model=None, cloud_model=None,
+`update_llm_config(*, provider_mode=None, local_generation_model=None,
+cloud_generation_model=None, cloud_embedding_model=None,
 path=DEFAULT_CONFIG_PATH)` — used by `PUT /api/settings` (see below) to
-apply a provider change without a restart. Loads `config.yaml` with
+apply a provider/model change without a restart. Loads `config.yaml` with
 `ruamel.yaml`'s round-trip mode (not plain PyYAML — see DECISIONS.md,
 2026-08-25, for why: comments/quotes/list formatting must survive a write),
 updates only the given `llm` fields, validates via
 `LLMConfig.model_validate()` *before* writing anything to disk, then writes
-back and returns the freshly re-read config. Only invalidates the
-process-wide `get_settings()` cache when `path` is the real default file —
-a caller using a different path (tests) gets that file's own config back
-without touching the global cache.
+back (through `_retry_on_transient_permission_error()` — see below) and
+returns the freshly re-read config. Only invalidates the process-wide
+`get_settings()` cache when `path` is the real default file — a caller
+using a different path (tests) gets that file's own config back without
+touching the global cache.
+
+`update_source_config(*, local_files_watch_dirs=None, notion_page_ids=None,
+path=DEFAULT_ENV_PATH)` — used by `PUT /api/settings/sources`. `.env` is
+flat `KEY=VALUE` lines, so `python-dotenv`'s own `set_key()` (also routed
+through `_retry_on_transient_permission_error()`) rewrites just the given
+line(s) in place without a custom round-trip parser the way `config.yaml`
+needs.
+
+`_retry_on_transient_permission_error(call)` — both writers above go
+through this rather than calling their underlying write directly. Windows
+can transiently deny the rename/replace either write does (a real-time
+antivirus scanner, the search indexer, an editor's file-watcher briefly
+holding the target open) with a `PermissionError` (WinError 5) that
+clears itself within milliseconds — verified directly against a real
+user-reported failure, where the identical write succeeded immediately on
+manual retry. Retries up to 5 times with a short linear backoff before
+letting the error propagate to the caller's own `except OSError` →
+`ConfigError` handling unchanged; a non-`PermissionError` `OSError` (a
+genuinely bad path, real permissions) is never retried. See DECISIONS.md,
+2026-08-30.
 
 ---
 
