@@ -8,6 +8,16 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-31 — Graph view: GitHub node color changed from near-black to blue
+
+**Context**: `SOURCE_TYPE_COLORS.github` was `#16151a` — an almost-black color, presumably chosen to evoke GitHub's own octocat-black branding, but barely distinguishable from the dark theme's background for both node circles and the legend swatch. See issue #70.
+
+**Decision**: changed to `#3b82f6` — reusing the app's existing `--info-blue` CSS token (`frontend/src/index.css`) rather than inventing a new one, for consistency with the rest of the palette. Distinct from the other five source colors already in use (`local_file` purple, `notion` red, `gmail` green, `calendar` amber, `browser_history` gray).
+
+**Affects**: `frontend/src/components/GraphView.jsx`.
+
+---
+
 ## 2026-08-31 — Default local watch folder when none is configured
 
 **Context**: `EnvSettings.watch_dirs` returned an empty list when `LOCAL_FILES_WATCH_DIRS` was unset — a fresh install (or a user who never touches Settings) silently ingests zero local files with no indication anything is missing. See issue #55 (originally scoped as a full first-run onboarding wizard; trimmed down to just this piece, with the wizard itself moved to #52 since its real value only shows up once there's an actual stranger-facing Docker install — see that issue's discussion).
