@@ -8,6 +8,16 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-31 — Graph view: truncate long node labels, full title on hover
+
+**Context**: GitHub-sourced node titles (commit messages, PR/issue titles) run long and, rendered in full next to every node, overlap and clutter the layout with more than a handful of nodes nearby — see issue #69.
+
+**Decision**: `GraphView.jsx`'s node label is truncated to 32 characters (`MAX_LABEL_LENGTH`, ellipsis appended) via a new `truncateLabel()` helper. The full, untruncated title is still available via a native SVG `<title>` element inside each node's `<g>` — a browser-native hover tooltip, no extra state, positioning, or custom tooltip component needed. Chosen over the other options considered in the issue (zoom-based visibility, dimming by zoom level) as the simplest fix that fully solves the immediate clutter problem; those remain reasonable follow-ups if 32 characters proves too aggressive or too lenient in practice.
+
+**Affects**: `frontend/src/components/GraphView.jsx`.
+
+---
+
 ## 2026-08-31 — Default local watch folder when none is configured
 
 **Context**: `EnvSettings.watch_dirs` returned an empty list when `LOCAL_FILES_WATCH_DIRS` was unset — a fresh install (or a user who never touches Settings) silently ingests zero local files with no indication anything is missing. See issue #55 (originally scoped as a full first-run onboarding wizard; trimmed down to just this piece, with the wizard itself moved to #52 since its real value only shows up once there's an actual stranger-facing Docker install — see that issue's discussion).
