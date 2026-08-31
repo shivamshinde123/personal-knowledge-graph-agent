@@ -27,6 +27,7 @@ from storage.sqlite_store import (
     get_item,
     get_last_run_timestamp,
     keyword_search,
+    request_ingestion_cancellation,
 )
 
 TEST_URI = os.environ.get("NEO4J_TEST_URI", "bolt://localhost:7687")
@@ -337,6 +338,79 @@ class TestRelationshipStalenessOnEdit:
         assert related_after == related_before
 
 
+class TestCancellation:
+    @pytest.fixture(autouse=True)
+    def local_files_only(self, monkeypatch):
+        """See ``TestFullRun.local_files_only`` — same reasoning applies here."""
+        monkeypatch.setattr(
+            daily_batch, "_EXTRACTORS", [("local_file", local_files.extract_new_items)]
+        )
+
+    def test_cancelling_mid_source_keeps_already_processed_items(
+        self, conn, driver, collection, watch_dir, monkeypatch
+    ):
+        (watch_dir / "a.txt").write_text(
+            "Some content here that is long enough", encoding="utf-8"
+        )
+        (watch_dir / "b.txt").write_text(
+            "Some more content here that is also long enough", encoding="utf-8"
+        )
+
+        # First call is the coarse pre-extract check (source boundary);
+        # the second is the check inside on_progress() after the first
+        # file — requesting cancellation there should stop local_files'
+        # own loop after "a.txt" and never reach "b.txt".
+        calls = {"n": 0}
+
+        def fake_is_cancellation_requested(conn, run_id):
+            calls["n"] += 1
+            return calls["n"] > 1
+
+        monkeypatch.setattr(
+            daily_batch, "is_cancellation_requested", fake_is_cancellation_requested
+        )
+
+        daily_batch._run(conn, collection, driver)
+
+        run = conn.execute(
+            "SELECT * FROM ingestion_runs ORDER BY run_started_at DESC LIMIT 1"
+        ).fetchone()
+        assert run["status"] == "cancelled"
+        assert run["items_processed"] == 1
+        assert "Cancelled by user" in run["error_log"]
+        rows = conn.execute("SELECT title FROM items").fetchall()
+        assert [r["title"] for r in rows] == ["a.txt"]
+        # Cancelling mid-run must not advance the watermark past what was
+        # actually, fully processed — same reasoning as a hard failure.
+        assert get_last_run_timestamp(conn) is None
+
+    def test_cancellation_requested_before_any_source_runs_processes_nothing(
+        self, conn, driver, collection, watch_dir, monkeypatch
+    ):
+        (watch_dir / "a.txt").write_text(
+            "Some content here that is long enough", encoding="utf-8"
+        )
+        real_start_ingestion_run = daily_batch.start_ingestion_run
+
+        def spying_start_ingestion_run(conn):
+            run_id = real_start_ingestion_run(conn)
+            request_ingestion_cancellation(conn, run_id)
+            return run_id
+
+        monkeypatch.setattr(
+            daily_batch, "start_ingestion_run", spying_start_ingestion_run
+        )
+
+        daily_batch._run(conn, collection, driver)
+
+        run = conn.execute(
+            "SELECT * FROM ingestion_runs ORDER BY run_started_at DESC LIMIT 1"
+        ).fetchone()
+        assert run["status"] == "cancelled"
+        assert run["items_processed"] == 0
+        assert conn.execute("SELECT * FROM items").fetchall() == []
+
+
 class TestFailureHandling:
     @pytest.fixture(autouse=True)
     def local_files_only(self, monkeypatch):
@@ -348,7 +422,7 @@ class TestFailureHandling:
     def test_extractor_level_failure_leaves_watermark_unchanged(
         self, conn, driver, collection, monkeypatch
     ):
-        def boom(since):
+        def boom(since, on_progress=None):
             raise ExtractorError("source is unreachable")
 
         monkeypatch.setattr(daily_batch, "_EXTRACTORS", [("local_file", boom)])

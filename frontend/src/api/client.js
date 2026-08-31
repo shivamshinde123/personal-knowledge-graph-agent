@@ -159,6 +159,22 @@ export function postIngestTrigger() {
   return request("/ingest/trigger", { method: "POST" });
 }
 
+/**
+ * Ask a running ingestion to stop at its next check point. Acknowledges the
+ * request only — items already processed are kept, not rolled back — the
+ * actual outcome (status: "cancelled") is observed afterward via
+ * getSourcesStatus(). Extension beyond API_Specification.docx — see
+ * DECISIONS.md.
+ * @param {string} runId - ingestion_runs.id, from getSourcesStatus()'s
+ *   last_run.run_id (not postIngestTrigger()'s display-label run_id).
+ */
+export function postIngestCancel(runId) {
+  return request("/ingest/cancel", {
+    method: "POST",
+    body: JSON.stringify({ run_id: runId }),
+  });
+}
+
 /** List past conversation sessions, most recently active first. Per section 3.4. */
 export function getSessions() {
   return request("/sessions");

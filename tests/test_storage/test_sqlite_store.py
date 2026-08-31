@@ -19,10 +19,12 @@ from storage.sqlite_store import (
     get_session,
     insert_chunk,
     insert_item,
+    is_cancellation_requested,
     keyword_search,
     list_sessions,
     record_conversation_turn,
     replace_chunks,
+    request_ingestion_cancellation,
     reset_all,
     start_ingestion_run,
     update_ingestion_run_current_item,
@@ -321,8 +323,38 @@ class TestUpdateIngestionRunCurrentItem:
         )
 
 
+class TestIngestionCancellation:
+    def test_not_requested_by_default(self, conn):
+        run_id = start_ingestion_run(conn)
+
+        assert is_cancellation_requested(conn, run_id) is False
+
+    def test_request_sets_the_flag(self, conn):
+        run_id = start_ingestion_run(conn)
+
+        request_ingestion_cancellation(conn, run_id)
+
+        assert is_cancellation_requested(conn, run_id) is True
+        assert get_last_ingestion_run(conn).cancel_requested is True
+
+    def test_an_unknown_run_id_reports_not_requested(self, conn):
+        assert is_cancellation_requested(conn, "no-such-run") is False
+
+    def test_does_not_affect_status_or_progress(self, conn):
+        run_id = start_ingestion_run(conn)
+        update_ingestion_run_progress(conn, run_id, 5)
+
+        request_ingestion_cancellation(conn, run_id)
+
+        run = get_last_ingestion_run(conn)
+        assert run.status == "running"
+        assert run.items_processed == 5
+
+
 class TestIngestionRunsSchemaMigration:
-    def test_adds_current_item_to_a_pre_existing_table(self, tmp_path):
+    def test_adds_current_item_and_cancel_requested_to_a_pre_existing_table(
+        self, tmp_path
+    ):
         import sqlite3
 
         db_path = tmp_path / "pre_existing.db"
@@ -347,6 +379,8 @@ class TestIngestionRunsSchemaMigration:
         assert run.id == "r1"
         assert run.items_processed == 3
         assert run.current_item is None
+        assert run.cancel_requested is False
+        assert is_cancellation_requested(migrated, "r1") is False
         migrated.close()
 
 

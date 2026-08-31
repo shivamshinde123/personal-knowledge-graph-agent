@@ -613,17 +613,34 @@ test doubles/temp resources instead.
    `tests/test_scheduler/test_daily_batch.py`'s integration tests pin
    `_EXTRACTORS` to `local_file` only via an autouse fixture, so a new
    entry here never makes those tests real-network-dependent — see
-   DECISIONS.md, 2026-08-24). Before `extract()` runs, `current_item` is
-   announced (`update_ingestion_run_current_item(run_id, "Extracting
+   DECISIONS.md, 2026-08-24).
+
+   **Branch point**: `is_cancellation_requested(conn, run_id)` is checked
+   before each source runs — if a Stop request landed since the last
+   source finished, the loop breaks here with `cancelled = True` (see
+   DECISIONS.md, 2026-08-31). This is the only cancellation check
+   `gmail`/`calendar`/`browser_history` ever get, since they don't call
+   `on_progress` (issue #68).
+
+   Before `extract()` runs, `current_item` is announced
+   (`update_ingestion_run_current_item(run_id, "Extracting
    {source_name}…")`) — the only feedback available during this phase,
-   which can run for many minutes with nothing yet countable — see
-   DECISIONS.md, 2026-08-31.
-   a. `extract(since)` → list of `ExtractedItem`. An `ExtractorError` here
-      is caught, logged, and recorded in `errors`; the loop moves on to the
-      next source
+   which can run for many minutes with nothing yet countable.
+   a. `extract(since, on_progress)` → list of `ExtractedItem`. `on_progress`
+      is a closure that writes a live `"{source_name}: {label}
+      ({current}/{total})"` (or `"({current} scanned)"` when `total` is
+      `None`) via `update_ingestion_run_current_item()`, then returns
+      `not is_cancellation_requested(conn, run_id)`. Only `github.py`
+      (per repo), `local_files.py` (per matching file), and `notion.py`
+      (per root page) actually call it — see DECISIONS.md, 2026-08-31.
+      An `ExtractorError` here is caught, logged, and recorded in
+      `errors`; the loop moves on to the next source
 
       **Branch point**: an extractor failure doesn't stop the batch — the
-      remaining sources still run.
+      remaining sources still run. A `False` return from `on_progress`
+      stops *that extractor's own loop* early (its items already gathered
+      are kept) and is re-checked via `is_cancellation_requested()`
+      immediately after `extract()` returns, setting `cancelled = True`.
    b. Surviving `apply_noise_filter()` items are collected for the *whole
       source* and passed to `generate_metadata()` **once**, not per item —
       this is what actually uses `config.yaml`'s
@@ -646,8 +663,11 @@ test doubles/temp resources instead.
 
       **Branch point**: a single item's processing failure is caught,
       logged, and recorded in `errors`; the rest of that source's items
-      still get processed.
-3. After every source is processed, before relationship detection: for
+      still get processed. If `cancelled` is set once this source's items
+      are done, the outer source loop breaks — items from later sources
+      are never reached, but everything processed so far is kept.
+3. After every source is processed (or the loop broke early on
+   cancellation), before relationship detection: for
    every item that was an *update* (not a new insert), calls
    `storage/neo4j_store.py::delete_relationships_for_item()` — clears its
    existing edges (node kept) so relationship detection starts clean
@@ -659,15 +679,16 @@ test doubles/temp resources instead.
    `pipeline/relationships.py::detect_relationships()` runs (its own
    internal per-candidate resilience is backed by a top-level catch here
    too, recorded in `errors` on failure)
-5. `status` is computed from `errors`/`items_processed`
-   (`"success"`/`"partial_failure"`/`"failed"` — see DECISIONS.md,
-   2026-08-24) and written via `complete_ingestion_run()`
+5. `status` is computed from `cancelled`/`errors`/`items_processed`
+   (`"cancelled"` takes priority over the rest, else
+   `"success"`/`"partial_failure"`/`"failed"` — see DECISIONS.md,
+   2026-08-24 and 2026-08-31) and written via `complete_ingestion_run()`
 
    **Branch point**: only `status = "success"` advances the watermark
    (`storage/sqlite_store.py::get_last_run_timestamp()`'s own behavior).
-   `"partial_failure"` and `"failed"` both leave it unchanged, so every
-   source is retried on the next run — `"partial_failure"` just means some
-   items got through this time too.
+   `"partial_failure"`, `"failed"`, and `"cancelled"` all leave it
+   unchanged, so every source is retried on the next run — `"cancelled"`
+   and `"partial_failure"` just mean some items got through this time too.
 
 ---
 
@@ -1131,6 +1152,30 @@ development/testing, outside the daily schedule.
 
 ---
 
+## Entry point: `POST /api/ingest/cancel` (`api/routes/ingest.py`)
+
+Extension beyond `docs/API_Specification.docx` — see DECISIONS.md,
+2026-08-31 (issues #72, #73).
+
+1. Request body `{"run_id": <ingestion_runs.id>}` — the real UUID from
+   `GET /api/sources/status`'s `last_run.run_id`, **not**
+   `POST /api/ingest/trigger`'s display-label return value; the two are
+   different strings for the same run
+2. `agent/ingest_trigger.py::cancel_ingestion(request.app.state.conn,
+   run_id)` — a thin wrapper around
+   `storage/sqlite_store.py::request_ingestion_cancellation()`, which sets
+   `ingestion_runs.cancel_requested = 1` on that row. An unknown `run_id`
+   updates zero rows and does not raise — the endpoint still acknowledges
+   normally
+3. Returns `200 {"status": "cancel_requested"}` immediately — this only
+   flips the flag; the spawned `scheduler.daily_batch` subprocess (a
+   separate OS process, sharing only the SQLite file) picks it up at its
+   next check point (see the `scheduler/daily_batch.py` entry point above)
+   and actually stops, landing the run on `status: "cancelled"`, observed
+   afterward via `GET /api/sources/status`, same as any other outcome
+
+---
+
 ## Entry point: `frontend/` (`npm run dev`, or `index.html` in production)
 
 A Vite + React app — see `frontend/README.md` for setup/dev commands.
@@ -1150,13 +1195,21 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    completion; clear/refresh chat session state, in the reset case) even
    if the user has since navigated away from Settings — see DECISIONS.md,
    2026-08-30. Also holds `ingestionStatus`
-   (`{startedAt, runId, itemsProcessed, status}` — `null` before anything's
-   been triggered this session), set on trigger and updated on every poll
-   inside `pollIngestionCompletion()`, then passed down to
+   (`{startedAt, runId, dbRunId, itemsProcessed, status}` — `null` before
+   anything's been triggered this session), set on trigger and updated on
+   every poll inside `pollIngestionCompletion()`, then passed down to
    `SettingsPanel.jsx` for a persistent "started at HH:MM:SS" + live
    progress display that survives both the toast's 7s auto-dismiss and
    navigating away from Settings and back — see DECISIONS.md, 2026-08-30
-   (the live-progress entry)
+   (the live-progress entry). `dbRunId` (the real `ingestion_runs.id`, as
+   opposed to `runId`'s human-readable display label) is only known once
+   the first poll's `getSourcesStatus()` result finds the matching row —
+   `null` until then — and is what `handleCancelIngestion(dbRunId)` (also
+   owned here, alongside `handleTriggerIngestion()`, same reasoning) passes
+   to `postIngestCancel()`. A `status === "cancelled"` result inside
+   `pollIngestionCompletion()` toasts a neutral (not error-styled)
+   "Ingestion stopped — N item(s) processed" message. See DECISIONS.md,
+   2026-08-31.
 2. `Sidebar.jsx` — "New chat" and clicking a real session both bump
    `App.jsx`'s `chatKey`, forcing `ChatWindow` to remount (see DECISIONS.md,
    2026-08-25, for why a remount rather than watching `sessionId` for
@@ -1238,8 +1291,20 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    sliding-segment animation while `status === "running"` (no known total
    item count to compute a real percentage from — extraction discovers
    items as it streams through each source), filled solid green/red once
-   the run finishes; the live `items_processed` count is shown as text
-   alongside it. See DECISIONS.md, 2026-08-30 (the live-progress entry).
+   the run finishes (solid blue for `"cancelled"` — neutral, not styled as
+   an error); the live `items_processed` count is shown as text alongside
+   it, and while `status === "running"`, `currentItem` renders below as a
+   monospace line (e.g. `"github: owner/repo (12/65)"`, from the
+   `on_progress` callback wired through `scheduler/daily_batch.py` — see
+   DECISIONS.md, 2026-08-31). See DECISIONS.md, 2026-08-30 (the
+   live-progress entry). A "Stop" button (`settings-ghost-button-danger`)
+   renders next to "Run ingestion now" only while `status === "running"`
+   and `dbRunId` is known; clicking it awaits the same `useConfirm()`
+   dialog used elsewhere in this component, then calls
+   `onCancelIngestion(dbRunId)` (`App.jsx`'s `handleCancelIngestion`) —
+   the already-active poll loop picks up the resulting `"cancelled"`
+   status on its own, no separate re-fetch needed. See DECISIONS.md,
+   2026-08-31.
    Per the Figma redesign (see DECISIONS.md, 2026-08-30, "screen 2 of
    3"), the sections render inside two explicit `.settings-column`
    containers in a real CSS Grid (`.settings-columns`), not an

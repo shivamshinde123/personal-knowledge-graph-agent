@@ -44,7 +44,7 @@ from googleapiclient.discovery import build
 from pypdf import PdfReader
 
 from config.settings import PROJECT_ROOT, get_settings
-from extractors.base import ExtractedItem, ExtractorError
+from extractors.base import ExtractedItem, ExtractorError, OnProgress
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +88,9 @@ def _effective_window(
     return since, until
 
 
-def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
+def extract_new_items(
+    since: datetime | None = None, on_progress: OnProgress | None = None
+) -> list[ExtractedItem]:
     """Extract Gmail threads with activity after ``since``.
 
     Args:
@@ -99,6 +101,10 @@ def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
             conversation is never embedded with earlier context missing.
             Combined with ``config/.env``'s ``GMAIL_DATE_RANGE_START``/
             ``GMAIL_DATE_RANGE_END``, if set — see :func:`_effective_window`.
+        on_progress: Accepted for a uniform call shape with the other
+            extractors in ``scheduler/daily_batch.py``'s ``_EXTRACTORS``
+            list, but unused here — see ``extractors/base.py``. Tracked
+            separately in issue #68.
 
     Returns:
         One item per thread with at least one message surviving label

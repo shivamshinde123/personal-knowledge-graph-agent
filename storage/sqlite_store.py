@@ -30,7 +30,9 @@ from config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
-IngestionStatus = Literal["running", "success", "partial_failure", "failed"]
+IngestionStatus = Literal[
+    "running", "success", "partial_failure", "failed", "cancelled"
+]
 MessageRole = Literal["user", "agent"]
 
 # Conversation-memory tables (sessions/messages) aren't in
@@ -92,6 +94,7 @@ class IngestionRun:
     items_processed: int = 0
     error_log: str | None = None
     current_item: str | None = None
+    cancel_requested: bool = False
 
 
 @dataclass(slots=True)
@@ -173,7 +176,8 @@ CREATE TABLE IF NOT EXISTS ingestion_runs (
   status             TEXT NOT NULL,
   items_processed    INTEGER DEFAULT 0,
   error_log          TEXT,
-  current_item       TEXT
+  current_item       TEXT,
+  cancel_requested   INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -257,6 +261,7 @@ def _ingestion_run_from_row(row: sqlite3.Row) -> IngestionRun:
         items_processed=row["items_processed"],
         error_log=row["error_log"],
         current_item=row["current_item"],
+        cancel_requested=bool(row["cancel_requested"]),
     )
 
 
@@ -307,15 +312,20 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     ``executescript(_SCHEMA)`` only creates tables that don't exist yet — it
     never alters an existing one, so a new column added to ``_SCHEMA`` after
     a real database already has that table (as opposed to a fresh one, e.g.
-    in tests) would silently never show up. This is the project's first
-    such case (``ingestion_runs.current_item``); called once per
-    :func:`connect`, and cheap/idempotent via ``PRAGMA table_info`` so it's
-    safe to run on every startup rather than needing a version-tracking
-    migration system. See ``DECISIONS.md``.
+    in tests) would silently never show up. First needed for
+    ``ingestion_runs.current_item``, reused here for ``cancel_requested``;
+    called once per :func:`connect`, and cheap/idempotent via
+    ``PRAGMA table_info`` so it's safe to run on every startup rather than
+    needing a version-tracking migration system. See ``DECISIONS.md``.
     """
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(ingestion_runs)")}
     if "current_item" not in columns:
         conn.execute("ALTER TABLE ingestion_runs ADD COLUMN current_item TEXT")
+        conn.commit()
+    if "cancel_requested" not in columns:
+        conn.execute(
+            "ALTER TABLE ingestion_runs ADD COLUMN cancel_requested INTEGER DEFAULT 0"
+        )
         conn.commit()
 
 
@@ -657,6 +667,54 @@ def update_ingestion_run_current_item(
         raise StorageError(
             f"Could not update current item for ingestion run {run_id!r}: {exc}"
         ) from exc
+
+
+def request_ingestion_cancellation(conn: sqlite3.Connection, run_id: str) -> None:
+    """Ask a running batch to stop at its next check point.
+
+    Sets ``ingestion_runs.cancel_requested`` — the cross-process signal
+    for cancellation, since the API process (where the "Stop" button's
+    request lands) and the spawned ``scheduler.daily_batch`` subprocess
+    only share the SQLite file, not memory. Cooperative, not immediate:
+    the subprocess only notices on its next check, between sources or via
+    an extractor's ``on_progress`` callback — see
+    ``scheduler/daily_batch.py``, ``DECISIONS.md``.
+
+    Args:
+        conn: An open connection from :func:`connect`.
+        run_id: The run's id, from :func:`start_ingestion_run`.
+
+    Raises:
+        StorageError: If the update fails.
+    """
+    try:
+        conn.execute(
+            "UPDATE ingestion_runs SET cancel_requested = 1 WHERE id = ?",
+            (run_id,),
+        )
+        conn.commit()
+    except sqlite3.Error as exc:
+        conn.rollback()
+        raise StorageError(
+            f"Could not request cancellation for ingestion run {run_id!r}: {exc}"
+        ) from exc
+
+
+def is_cancellation_requested(conn: sqlite3.Connection, run_id: str) -> bool:
+    """Check whether :func:`request_ingestion_cancellation` was called for this run.
+
+    Args:
+        conn: An open connection from :func:`connect`.
+        run_id: The run's id, from :func:`start_ingestion_run`.
+
+    Returns:
+        ``True`` if cancellation was requested, ``False`` otherwise
+        (including if the run id doesn't exist — nothing to cancel).
+    """
+    row = conn.execute(
+        "SELECT cancel_requested FROM ingestion_runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    return bool(row["cancel_requested"]) if row is not None else False
 
 
 def complete_ingestion_run(
