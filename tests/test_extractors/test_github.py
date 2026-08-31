@@ -452,6 +452,50 @@ class TestScopedToConfiguredRepos:
         assert any(i.source_ref_id.startswith("scoped/repo:") for i in items)
 
 
+class TestOnProgress:
+    def test_called_once_per_repo_with_total_and_label(self, monkeypatch):
+        calls = []
+        handler = make_handler()
+        install_fake_client(
+            monkeypatch, handler, github_repos_list=["a/one", "b/two", "c/three"]
+        )
+
+        extract_new_items(
+            on_progress=lambda current, total, label: (
+                calls.append((current, total, label)) or True
+            )
+        )
+
+        assert calls == [
+            (1, 3, "a/one"),
+            (2, 3, "b/two"),
+            (3, 3, "c/three"),
+        ]
+
+    def test_returning_false_stops_after_the_current_repo(self, monkeypatch):
+        handler = make_handler()
+        install_fake_client(
+            monkeypatch, handler, github_repos_list=["a/one", "b/two", "c/three"]
+        )
+        calls = []
+
+        def on_progress(current, total, label):
+            calls.append(label)
+            return current < 2
+
+        extract_new_items(on_progress=on_progress)
+
+        assert calls == ["a/one", "b/two"]
+
+    def test_no_callback_is_the_default(self, monkeypatch):
+        handler = make_handler()
+        install_fake_client(monkeypatch, handler, github_repos_list=["a/one"])
+
+        items = extract_new_items()  # must not raise
+
+        assert isinstance(items, list)
+
+
 class TestRepoLevelFailureIsolation:
     def test_one_failing_repo_does_not_abort_the_whole_run(self, monkeypatch):
         def handler(request):

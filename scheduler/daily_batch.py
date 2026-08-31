@@ -32,7 +32,7 @@ from chromadb.api.models.Collection import Collection
 
 from config.settings import get_settings
 from extractors import browser_history, calendar, github, gmail, local_files, notion
-from extractors.base import ExtractedItem, ExtractorError
+from extractors.base import ExtractedItem, ExtractorError, OnProgress
 from pipeline.chunking import chunk_text
 from pipeline.embeddings import embed_chunks
 from pipeline.filters import apply_noise_filter
@@ -48,6 +48,7 @@ from storage.sqlite_store import (
     delete_item,
     get_last_run_timestamp,
     insert_item,
+    is_cancellation_requested,
     replace_chunks,
     start_ingestion_run,
     update_ingestion_run_current_item,
@@ -56,7 +57,9 @@ from storage.sqlite_store import (
 
 logger = logging.getLogger(__name__)
 
-_EXTRACTORS: list[tuple[str, Callable[[datetime | None], list[ExtractedItem]]]] = [
+_ExtractFn = Callable[[datetime | None, OnProgress | None], list[ExtractedItem]]
+
+_EXTRACTORS: list[tuple[str, _ExtractFn]] = [
     ("local_file", local_files.extract_new_items),
     ("notion", notion.extract_new_items),
     ("gmail", gmail.extract_new_items),
@@ -100,8 +103,18 @@ def _run(
     items_processed = 0
     processed_item_ids: list[str] = []
     updated_item_ids: list[str] = []
+    cancelled = False
 
     for source_name, extract in _EXTRACTORS:
+        # Checked between sources as a coarse cancellation point — the only
+        # one gmail/calendar/browser_history get, since they don't call
+        # on_progress. github/local_files/notion get a much finer-grained
+        # check inside on_progress() below, since a single one of their
+        # extract() calls can run for many minutes on its own.
+        if is_cancellation_requested(conn, run_id):
+            cancelled = True
+            break
+
         # Announced before extract() runs, not just once processing starts —
         # a single source's extraction can run for many minutes (e.g.
         # scanning dozens of GitHub repos) with no other progress signal
@@ -114,15 +127,33 @@ def _run(
             )
         except Exception as exc:
             logger.warning("Could not announce current source for %r: %s", run_id, exc)
+
+        def on_progress(
+            current: int, total: int | None, label: str, source_name: str = source_name
+        ) -> bool:
+            detail = f"{current}/{total}" if total is not None else f"{current} scanned"
+            try:
+                update_ingestion_run_current_item(
+                    conn, run_id, f"{source_name}: {label} ({detail})"
+                )
+            except Exception as exc:
+                logger.warning("Could not update live progress for %r: %s", run_id, exc)
+            return not is_cancellation_requested(conn, run_id)
+
         try:
-            raw_items = extract(since)
+            raw_items = extract(since, on_progress)
         except ExtractorError as exc:
             logger.error("%s extraction failed: %s", source_name, exc)
             errors.append(f"{source_name}: {exc}")
             continue
 
+        if is_cancellation_requested(conn, run_id):
+            cancelled = True
+
         filtered_items = [item for item in raw_items if apply_noise_filter(item)]
         if not filtered_items:
+            if cancelled:
+                break
             continue
         metadata_list = generate_metadata(filtered_items)
 
@@ -157,6 +188,9 @@ def _run(
             except Exception as exc:
                 logger.warning("Could not update live progress for %r: %s", run_id, exc)
 
+        if cancelled:
+            break
+
     for item_id in updated_item_ids:
         try:
             # Content changed — existing relationships were judged against
@@ -175,7 +209,10 @@ def _run(
             logger.error("Relationship detection failed for %r: %s", item_id, exc)
             errors.append(f"relationships/{item_id}: {exc}")
 
-    if not errors:
+    if cancelled:
+        status = "cancelled"
+        errors.append("Cancelled by user")
+    elif not errors:
         status = "success"
     elif items_processed > 0:
         status = "partial_failure"

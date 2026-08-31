@@ -21,7 +21,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from config.settings import BrowserHistoryFilters, get_settings
-from extractors.base import ExtractedItem, ExtractorError
+from extractors.base import ExtractedItem, ExtractorError, OnProgress
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +31,19 @@ SOURCE_TYPE = "browser_history"
 _WEBKIT_EPOCH = datetime(1601, 1, 1, tzinfo=UTC)
 
 
-def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
+def extract_new_items(
+    since: datetime | None = None, on_progress: OnProgress | None = None
+) -> list[ExtractedItem]:
     """Extract browser history entries last visited after ``since``.
 
     Args:
         since: Only include entries last visited after this time. ``None``
             (the first-ever run) includes every entry surviving the noise
             filters below.
+        on_progress: Accepted for a uniform call shape with the other
+            extractors in ``scheduler/daily_batch.py``'s ``_EXTRACTORS``
+            list, but unused here — see ``extractors/base.py``. Tracked
+            separately in issue #68.
 
     Returns:
         One item per URL surviving the domain blocklist and minimum

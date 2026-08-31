@@ -1047,6 +1047,21 @@ a {
   cursor: default;
 }
 
+.settings-ghost-button-group {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.settings-ghost-button-danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.settings-ghost-button-danger:hover:not(:disabled) {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
 .settings-text-button {
   display: inline-flex;
   align-items: center;
@@ -1571,6 +1586,13 @@ a {
   width: 100%;
   height: 100%;
   background: var(--danger);
+}
+
+/* Neutral, not an error — the user asked for this, it isn't a failure. */
+.ingestion-progress-bar.cancelled .ingestion-progress-bar-fill {
+  width: 100%;
+  height: 100%;
+  background: var(--info-blue);
 }
 
 .ingestion-current-item {

@@ -486,3 +486,71 @@ class TestScopedToConfiguredPages:
         items = extract_new_items()
 
         assert [item.source_ref_id for item in items] == ["page-1"]
+
+
+class TestOnProgress:
+    def test_scoped_mode_reports_a_real_total(self, monkeypatch):
+        page_a = make_page("page-a", "Alpha")
+        page_b = make_page("page-b", "Beta")
+        blocks_by_parent = {
+            "page-a": [block("paragraph", "a")],
+            "page-b": [block("paragraph", "b")],
+        }
+        install_fake_client(
+            monkeypatch,
+            [page_a, page_b],
+            blocks_by_parent,
+            notion_page_ids=["page-a", "page-b"],
+        )
+        calls = []
+
+        extract_new_items(
+            on_progress=lambda current, total, label: (
+                calls.append((current, total, label)) or True
+            )
+        )
+
+        assert calls == [(1, 2, "Alpha"), (2, 2, "Beta")]
+
+    def test_unscoped_mode_reports_no_total(self, monkeypatch):
+        page = make_page("page-1", "Any")
+        install_fake_client(
+            monkeypatch, [page], {"page-1": [block("paragraph", "text")]}
+        )
+        calls = []
+
+        extract_new_items(
+            on_progress=lambda current, total, label: (
+                calls.append((current, total, label)) or True
+            )
+        )
+
+        assert calls == [(1, None, "Any")]
+
+    def test_returning_false_stops_after_the_current_root_page(self, monkeypatch):
+        page_a = make_page("page-a", "Alpha")
+        page_b = make_page("page-b", "Beta")
+        blocks_by_parent = {
+            "page-a": [block("paragraph", "a")],
+            "page-b": [block("paragraph", "b")],
+        }
+        install_fake_client(
+            monkeypatch,
+            [page_a, page_b],
+            blocks_by_parent,
+            notion_page_ids=["page-a", "page-b"],
+        )
+
+        items = extract_new_items(on_progress=lambda current, total, label: False)
+
+        assert [item.source_ref_id for item in items] == ["page-a"]
+
+    def test_no_callback_is_the_default(self, monkeypatch):
+        page = make_page("page-1", "Any")
+        install_fake_client(
+            monkeypatch, [page], {"page-1": [block("paragraph", "text")]}
+        )
+
+        items = extract_new_items()  # must not raise
+
+        assert len(items) == 1

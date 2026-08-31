@@ -3,6 +3,7 @@ import {
   getSessions,
   getSourcesStatus,
   postAdminReset,
+  postIngestCancel,
   postIngestTrigger,
 } from "./api/client.js";
 import ChatWindow from "./components/ChatWindow.jsx";
@@ -46,11 +47,15 @@ function App() {
   // load prior history — see ChatWindow's own docstring.
   const [chatKey, setChatKey] = useState(0);
   const [toasts, setToasts] = useState([]);
-  // { startedAt: Date, runId: string, itemsProcessed: number, status:
-  // "running" | "success" | "partial_failure" | "failed" } | null — shown
-  // persistently in Settings (not just the transient toast), so "when did
-  // this start" and "how far along is it" survive longer than the 7s a
-  // toast stays up. See DECISIONS.md.
+  // { startedAt: Date, runId: string, dbRunId: string | null,
+  // itemsProcessed: number, status: "running" | "success" |
+  // "partial_failure" | "failed" | "cancelled" } | null — shown persistently
+  // in Settings (not just the transient toast), so "when did this start" and
+  // "how far along is it" survive longer than the 7s a toast stays up.
+  // `runId` is the display label postIngestTrigger() returns; `dbRunId` is
+  // the real ingestion_runs.id (only known once the first poll finds the
+  // matching row) — needed for postIngestCancel(), which looks a run up by
+  // its actual id, not the display label. See DECISIONS.md.
   const [ingestionStatus, setIngestionStatus] = useState(null);
   const ingestPollTimeout = useRef(null);
 
@@ -106,6 +111,7 @@ function App() {
           setIngestionStatus({
             startedAt: new Date(triggeredAt),
             runId,
+            dbRunId: lastRun.run_id,
             itemsProcessed: lastRun.items_processed,
             status: lastRun.status,
             currentItem: lastRun.current_item,
@@ -113,6 +119,13 @@ function App() {
         }
 
         if (isThisRun && lastRun.status !== "running") {
+          if (lastRun.status === "cancelled") {
+            addToast(
+              "info",
+              `Ingestion stopped — ${lastRun.items_processed} item(s) processed.`,
+            );
+            return;
+          }
           const succeeded = lastRun.status === "success";
           addToast(
             succeeded ? "success" : "error",
@@ -152,6 +165,7 @@ function App() {
     setIngestionStatus({
       startedAt: new Date(triggeredAt),
       runId: result.run_id,
+      dbRunId: null,
       itemsProcessed: 0,
       status: "running",
       currentItem: null,
@@ -159,6 +173,11 @@ function App() {
     addToast("info", `Ingestion started (${result.run_id}).`);
     clearTimeout(ingestPollTimeout.current);
     pollIngestionCompletion(triggeredAt, result.run_id);
+  }
+
+  async function handleCancelIngestion(dbRunId) {
+    await postIngestCancel(dbRunId);
+    addToast("info", "Stopping ingestion…");
   }
 
   const handleResetAll = useCallback(async () => {
@@ -212,6 +231,7 @@ function App() {
       {view === "settings" && (
         <SettingsPanel
           onTriggerIngestion={handleTriggerIngestion}
+          onCancelIngestion={handleCancelIngestion}
           onResetAll={handleResetAll}
           onError={(text) => addToast("error", text)}
           ingestionStatus={ingestionStatus}
