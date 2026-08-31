@@ -8,6 +8,16 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-31 — Graph view: truncate long node labels, full title on hover
+
+**Context**: GitHub-sourced node titles (commit messages, PR/issue titles) run long and, rendered in full next to every node, overlap and clutter the layout with more than a handful of nodes nearby — see issue #69.
+
+**Decision**: `GraphView.jsx`'s node label is truncated to 32 characters (`MAX_LABEL_LENGTH`, ellipsis appended) via a new `truncateLabel()` helper. The full, untruncated title is still available via a native SVG `<title>` element inside each node's `<g>` — a browser-native hover tooltip, no extra state, positioning, or custom tooltip component needed. Chosen over the other options considered in the issue (zoom-based visibility, dimming by zoom level) as the simplest fix that fully solves the immediate clutter problem; those remain reasonable follow-ups if 32 characters proves too aggressive or too lenient in practice.
+
+**Affects**: `frontend/src/components/GraphView.jsx`.
+
+---
+
 ## 2026-08-31 — Ingestion progress counters (GitHub/local files/Notion) and a Stop button
 
 **Context**: The live `current_item` label (added earlier) only ever said *which source* was extracting (e.g. "Extracting github…") — during that source's single, long, blocking `extract()` call there was no sub-progress at all, so a long GitHub scan across many repos looked frozen. There was also no way to stop a run in progress short of manually killing the spawned `python -m scheduler.daily_batch` OS process and hand-patching the stuck `ingestion_runs` row — a real gap felt directly this session (see issues #72, #73). Full design in the approved plan (`cheeky-frolicking-cupcake.md`).

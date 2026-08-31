@@ -1347,7 +1347,11 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    "reheats" the layout so neighbors visibly respond; releasing clears
    `fx`/`fy` back to `null` and cools the simulation down again
    (`alphaTarget(0)`). Nodes are colored by `source_type`, edges labeled
-   with their relationship `label`. The legend lists every `source_type`
+   with their relationship `label`. A node's label text is truncated to 32
+   characters (`truncateLabel()`) — long GitHub titles otherwise overlap
+   and clutter the layout — with the full title available via a native
+   SVG `<title>` hover tooltip. See DECISIONS.md, 2026-08-31. The legend
+   lists every `source_type`
    except `browser_history` — that source is excluded from relationship
    detection entirely (`pipeline/relationships.py`, see CLAUDE.md), so a
    node for it can never exist on this graph; listing it in the legend
