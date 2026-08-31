@@ -350,7 +350,10 @@ calls `pipeline/filters.py` next.
   recursively; extracts `.txt`/`.md` directly, `.pdf` via `pypdf`, `.docx`
   via `python-docx`; filters by `st_mtime > since`. A missing watch
   directory is logged and skipped, not fatal — other configured
-  directories still get scanned.
+  directories still get scanned. `watch_dirs` itself falls back to
+  `config/settings.py::DEFAULT_WATCH_DIR` (created on demand) when
+  `LOCAL_FILES_WATCH_DIRS` is unset, rather than an empty list — see
+  DECISIONS.md, 2026-08-31.
 - `extractors/notion.py` — lists every page the integration (`NOTION_API_KEY`)
   can see via `Client.search()` (paginated), unless `NOTION_PAGE_IDS` is
   configured, in which case only those pages are fetched directly by id

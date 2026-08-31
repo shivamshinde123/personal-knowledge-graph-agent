@@ -8,6 +8,20 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-31 — Default local watch folder when none is configured
+
+**Context**: `EnvSettings.watch_dirs` returned an empty list when `LOCAL_FILES_WATCH_DIRS` was unset — a fresh install (or a user who never touches Settings) silently ingests zero local files with no indication anything is missing. See issue #55 (originally scoped as a full first-run onboarding wizard; trimmed down to just this piece, with the wizard itself moved to #52 since its real value only shows up once there's an actual stranger-facing Docker install — see that issue's discussion).
+
+**Decision**: added `config/settings.py::DEFAULT_WATCH_DIR` (`~/Documents/PersonalKnowledgeGraphAgent/watched`), and `EnvSettings.watch_dirs` now falls back to `[DEFAULT_WATCH_DIR]` (created on demand via `mkdir(parents=True, exist_ok=True)`) instead of `[]` when unset. This is a fallback for *reading*, not a persisted setting — nothing writes it to `.env` on its own. `GET /api/settings/sources` already returns `env.watch_dirs` as-is, so the Settings screen's watch-folder textarea now shows the default pre-filled instead of empty, for free; it only becomes an explicit, permanent choice once the user actually clicks Save.
+
+**Side effect worth noting**: `agent/connection_check.py::_check_local_files()`'s `if not watch_dirs: return not_configured` branch is now effectively unreachable through the real `EnvSettings.watch_dirs` property (it always returns at least the default) — left in place as a defensive check on the function's own contract (still exercised directly by its unit tests via a faked `env`), not dead code to delete, since the function doesn't know or care how its `watch_dirs` argument was produced.
+
+**Verified**: `uv run pytest` — new tests for the fallback value and the on-demand folder creation (using a monkeypatched `DEFAULT_WATCH_DIR` pointed at `tmp_path`, not the real home directory); full suite passes except the two pre-existing, unrelated `provider_mode` failures.
+
+**Affects**: `config/settings.py`, `tests/test_config/test_settings.py`.
+
+---
+
 ## 2026-08-30 — Google Calendar extractor: server-side recurrence collapsing, a configurable noise rule, and dropped low-signal fields
 
 **Context**: Building the Google Calendar extractor (`docs/Data_Extraction_Specification.docx` section 7 and `docs/Technical_Design_Document.docx` section 3.4) — the last of the three previously-unbuilt sources. Auth follows the exact same one-time-OAuth-then-cached-token pattern as `extractors/gmail.py` (a personal calendar has no service-account option either) — see that module's DECISIONS.md entry for the full reasoning; not repeated here. Separate credentials/token files from Gmail (`GOOGLE_CALENDAR_CREDENTIALS_PATH` / `data/calendar_token.json`), matching their already-separate `.env` variables — no assumption that one Google Cloud OAuth app necessarily covers both scopes.

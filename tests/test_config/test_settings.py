@@ -101,8 +101,25 @@ class TestEnvSettings:
             Path("C:/code"),
         ]
 
-    def test_watch_dirs_is_empty_when_unset(self):
-        assert EnvSettings(local_files_watch_dirs="").watch_dirs == []
+    def test_watch_dirs_falls_back_to_the_default_folder_when_unset(
+        self, monkeypatch, tmp_path
+    ):
+        import config.settings as settings_module
+
+        fake_default = tmp_path / "watched"
+        monkeypatch.setattr(settings_module, "DEFAULT_WATCH_DIR", fake_default)
+
+        assert EnvSettings(local_files_watch_dirs="").watch_dirs == [fake_default]
+
+    def test_the_default_watch_folder_is_created_on_demand(self, monkeypatch, tmp_path):
+        import config.settings as settings_module
+
+        fake_default = tmp_path / "watched"
+        monkeypatch.setattr(settings_module, "DEFAULT_WATCH_DIR", fake_default)
+
+        _ = EnvSettings(local_files_watch_dirs="").watch_dirs
+
+        assert fake_default.is_dir()
 
     def test_watch_dirs_ignores_empty_segments(self):
         env = EnvSettings(local_files_watch_dirs="C:/notes,,  ,")
