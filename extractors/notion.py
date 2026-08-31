@@ -13,6 +13,13 @@ to just those pages (fetched directly by id) instead of every page the
 integration can see — an extension beyond the original spec, configurable
 via ``PUT /api/settings/sources``. An empty/unset list keeps the original,
 unscoped "whole workspace" behavior. See ``DECISIONS.md``.
+
+A subpage nested under a scoped page is its own ``ExtractedItem`` (own id,
+title, ``last_edited_time``, url) — extracted recursively regardless of
+whether the *parent* page itself changed, since a subpage's own edits
+don't bump its parent's timestamp in Notion, and a subpage otherwise has
+no other way to be discovered when ingestion is scoped to specific page
+ids rather than the whole workspace. See ``DECISIONS.md``.
 """
 
 from __future__ import annotations
@@ -71,6 +78,12 @@ def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
     )
     items: list[ExtractedItem] = []
     scanned = 0
+    # Dedupes a page that's reachable more than one way — every page in
+    # unscoped/workspace mode is visited both directly (via search()) and
+    # again as a subpage discovered while walking another page's blocks;
+    # a page could also be listed directly in a scoped NOTION_PAGE_IDS
+    # *and* be a subpage of another configured page.
+    seen_page_ids: set[str] = set()
     for page in pages_iter:
         scanned += 1
         if scanned % _PROGRESS_LOG_INTERVAL == 0:
@@ -79,9 +92,7 @@ def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
                 scanned,
                 len(items),
             )
-        item = _extract_item(client, page, since)
-        if item is not None:
-            items.append(item)
+        items.extend(_extract_page_and_subpages(client, page, since, seen_page_ids))
     logger.info(
         "Notion extraction finished: scanned %d page(s), extracted %d item(s)",
         scanned,
@@ -96,10 +107,10 @@ def _iter_specific_pages(client: Client, page_ids: list[str]):
     A page fetched via ``client.pages.retrieve()`` is the same shape
     (``id``, ``properties``, ``url``, ``last_edited_time``,
     ``created_time``) as one returned by ``client.search()`` in
-    :func:`_iter_pages`, so :func:`_extract_item` works identically either
-    way. A page id that's been deleted, or that the integration no longer
-    has access to, is logged and skipped rather than aborting the rest of
-    the configured scope.
+    :func:`_iter_pages`, so :func:`_extract_page_and_subpages` works
+    identically either way. A page id that's been deleted, or that the
+    integration no longer has access to, is logged and skipped rather
+    than aborting the rest of the configured scope.
     """
     for page_id in page_ids:
         try:
@@ -133,33 +144,63 @@ def _iter_pages(client: Client):
         raise ExtractorError(f"Could not list Notion pages: {exc}") from exc
 
 
-def _extract_item(
-    client: Client, page: dict, since: datetime | None
-) -> ExtractedItem | None:
+def _extract_page_and_subpages(
+    client: Client,
+    page: dict,
+    since: datetime | None,
+    seen_page_ids: set[str],
+) -> list[ExtractedItem]:
+    """Extract ``page`` (if it qualifies) plus every subpage nested in it.
+
+    Blocks are always walked, even when ``page`` itself doesn't pass the
+    ``since`` filter — otherwise a subpage nested under an unchanged parent
+    could never be discovered at all when ingestion is scoped to specific
+    page ids (a subpage isn't independently listed anywhere; the only way
+    to find it is by walking its parent's blocks). Each subpage found gets
+    its own independent ``since`` check and recursion into its own
+    subpages, exactly as if it had been configured directly. See
+    ``DECISIONS.md``.
+    """
     page_id = page["id"]
+    if page_id in seen_page_ids:
+        return []
+    seen_page_ids.add(page_id)
+
     last_edited_at = _parse_timestamp(page.get("last_edited_time"))
     if last_edited_at is None:
         logger.warning("Notion page %s has no last_edited_time, skipping", page_id)
-        return None
-    if since is not None and last_edited_at <= since:
-        return None
+        return []
+
     try:
-        text = _page_text(client, page_id)
+        text, subpage_blocks = _page_text_and_subpages(client, page_id)
     except Exception as exc:
         logger.warning("Could not extract text for Notion page %s: %s", page_id, exc)
-        return None
-    if not text.strip():
-        return None
-    return ExtractedItem(
-        source_type=SOURCE_TYPE,
-        source_ref_id=page_id,
-        title=_extract_title(page),
-        url_or_path=page.get("url", ""),
-        raw_text=text,
-        author_or_sender=None,
-        created_at=_parse_timestamp(page.get("created_time")),
-        last_edited_at=last_edited_at,
-    )
+        return []
+
+    items: list[ExtractedItem] = []
+    qualifies = since is None or last_edited_at > since
+    if qualifies and text.strip():
+        items.append(
+            ExtractedItem(
+                source_type=SOURCE_TYPE,
+                source_ref_id=page_id,
+                title=_extract_title(page),
+                url_or_path=page.get("url", ""),
+                raw_text=text,
+                author_or_sender=None,
+                created_at=_parse_timestamp(page.get("created_time")),
+                last_edited_at=last_edited_at,
+            )
+        )
+
+    for block in subpage_blocks:
+        try:
+            subpage = client.pages.retrieve(page_id=block["id"])
+        except Exception as exc:
+            logger.warning("Could not fetch Notion subpage %s: %s", block["id"], exc)
+            continue
+        items.extend(_extract_page_and_subpages(client, subpage, since, seen_page_ids))
+    return items
 
 
 def _parse_timestamp(value: str | None) -> datetime | None:
@@ -179,20 +220,29 @@ def _rich_text_to_plain(rich_text: list[dict]) -> str:
     return "".join(segment.get("plain_text", "") for segment in rich_text)
 
 
-def _page_text(client: Client, block_id: str) -> str:
+def _page_text_and_subpages(client: Client, block_id: str) -> tuple[str, list[dict]]:
     parts: list[str] = []
-    _collect_block_text(client, block_id, parts)
-    return "\n\n".join(part for part in parts if part)
+    subpages: list[dict] = []
+    _collect_block_text(client, block_id, parts, subpages)
+    return "\n\n".join(part for part in parts if part), subpages
 
 
-def _collect_block_text(client: Client, block_id: str, parts: list[str]) -> None:
+def _collect_block_text(
+    client: Client, block_id: str, parts: list[str], subpages: list[dict]
+) -> None:
     cursor = None
     while True:
         response = client.blocks.children.list(block_id=block_id, start_cursor=cursor)
         for block in response["results"]:
+            if block.get("type") == "child_page":
+                # A nested Notion page — extracted separately as its own
+                # item (own since-filtering, own title/url), never folded
+                # into this page's text. See DECISIONS.md.
+                subpages.append(block)
+                continue
             parts.append(_block_to_text(block))
             if block.get("has_children"):
-                _collect_block_text(client, block["id"], parts)
+                _collect_block_text(client, block["id"], parts, subpages)
         if not response.get("has_more"):
             return
         cursor = response["next_cursor"]

@@ -8,6 +8,20 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-31 — Notion subpages extracted as their own items, not merged into the parent
+
+**Context**: Asked directly whether the Notion extractor pulls in content from subpages nested under a configured page. It did, but only by accident and only partially: `_collect_block_text()` recursed into any block with `has_children`, including `child_page` blocks — folding a subpage's body text into the *parent's* single item. Two real bugs fell out of that: (1) a subpage's own title was silently dropped, since `child_page` blocks store their title under a `child_page.title` key, not the `rich_text` key every other block type uses (`_block_to_text()` only ever read `rich_text`); (2) incremental re-ingestion could miss a subpage edit entirely — `since` filtering only checked the *parent* page's own `last_edited_time`, and editing a subpage's content doesn't bump its parent's timestamp in Notion.
+
+**Decision**: `_collect_block_text()` now intercepts `child_page` blocks instead of recursing into them for text — each becomes its own `ExtractedItem`, extracted by `_extract_page_and_subpages()` recursing via `client.pages.retrieve()` (own id, title, url, `last_edited_time`, `created_time`, own `since` check, own further-nested subpages). Critically, a page's blocks are walked to discover subpages *even when the page itself fails its own `since` check* — otherwise a subpage nested under an unchanged parent could never be discovered at all once ingestion is scoped to specific page ids (`NOTION_PAGE_IDS`), since a subpage isn't independently listed anywhere else. A `seen_page_ids` set dedupes a page reachable more than one way (in unscoped/workspace mode, every page is visited both directly via `search()` *and* again as a subpage discovered while walking another page's blocks).
+
+**Trade-off accepted**: this makes every incremental run walk every configured (or workspace) page's block tree regardless of whether that page itself changed, since subpage discovery has no cheaper path — previously an unchanged page's `since` check short-circuited before any block-fetching API call at all. Acceptable for a single-user workspace of the scale this project targets; revisit if it becomes a real cost at much larger scope.
+
+**Verified**: `uv run pytest tests/test_extractors/test_notion.py` — 5 new tests (subpage becomes its own item with correct title/url, arbitrarily deep nesting, a subpage surfaces even when its unchanged parent is correctly excluded, an unfetchable subpage is skipped not raised, a page reachable as both a root and a subpage isn't duplicated) plus all 15 pre-existing tests pass unchanged.
+
+**Affects**: `extractors/notion.py`, `tests/test_extractors/test_notion.py`.
+
+---
+
 ## 2026-08-31 — Graph zoom/pan/filter/highlight
 
 **Context**: The relationship graph had no way to filter by source, zoom, or focus on one node's neighborhood, making it hard to use with more than a handful of nodes.

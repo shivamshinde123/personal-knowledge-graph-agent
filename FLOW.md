@@ -359,18 +359,28 @@ calls `pipeline/filters.py` next.
 - `extractors/notion.py` — lists every page the integration (`NOTION_API_KEY`)
   can see via `Client.search()` (paginated), unless `NOTION_PAGE_IDS` is
   configured, in which case only those pages are fetched directly by id
-  (`Client.pages.retrieve()`) instead — see DECISIONS.md, 2026-08-30.
-  Filters by `last_edited_time > since`, then recursively walks each
-  page's blocks via
-  `Client.blocks.children.list()` (`_collect_block_text()`), converting each
-  block's `rich_text` to plain text and joining blocks with blank lines so
-  headings/paragraphs stay natural chunk boundaries. Title comes from the
-  page's `title`-type property. Missing `NOTION_API_KEY`, or a failed
-  `search()` call, raises `ExtractorError` (source-level); a single page's
-  block-fetch failing is logged and skipped, not fatal — see DECISIONS.md,
-  2026-08-24. Logs an INFO progress line every 25 pages scanned (a full
-  scan visits every visible page and can take a long time on a large
-  workspace — see DECISIONS.md, 2026-08-24).
+  (`Client.pages.retrieve()`) instead — see DECISIONS.md, 2026-08-30. Each
+  root page goes through `_extract_page_and_subpages()`, which recursively
+  walks its blocks via `Client.blocks.children.list()`
+  (`_collect_block_text()`), converting each block's `rich_text` to plain
+  text and joining blocks with blank lines so headings/paragraphs stay
+  natural chunk boundaries. Title comes from the page's `title`-type
+  property. A `child_page` block found while walking is *not* folded into
+  the parent's text — it's fetched via `Client.pages.retrieve()` and
+  recursed into as its own independent extraction (own `since` check, own
+  item, own further subpages), since a subpage's edits don't bump its
+  parent's `last_edited_time` in Notion — a page's blocks are walked to
+  discover subpages even when the page itself fails its own `since` check,
+  otherwise a subpage nested under an unchanged parent could never be
+  found at all once scoped to specific page ids. A `seen_page_ids` set
+  dedupes a page reachable both directly (`search()`, unscoped mode) and
+  as a subpage of another page — see DECISIONS.md, 2026-08-31. Missing
+  `NOTION_API_KEY`, or a failed `search()` call, raises `ExtractorError`
+  (source-level); a single page's block-fetch or subpage-fetch failing is
+  logged and skipped, not fatal — see DECISIONS.md, 2026-08-24. Logs an
+  INFO progress line every 25 *root* pages scanned (a full scan visits
+  every visible page and can take a long time on a large workspace — see
+  DECISIONS.md, 2026-08-24).
 - `extractors/gmail.py` — one item per **thread**, not per message
   (`docs/Data_Extraction_Specification.docx` section 5 lists thread ID as
   metadata, but `ExtractedItem` has no generic metadata field to hang it
