@@ -11,7 +11,9 @@ const SOURCE_TYPE_COLORS = {
   local_file: "#6b4fd6",
   notion: "#c0392b",
   gmail: "#1f9d55",
-  github: "#16151a",
+  // Was "#16151a", an almost-black GitHub-brand color, barely visible
+  // against this dark theme's background — see DECISIONS.md.
+  github: "#3b82f6",
   // Matches extractors/calendar.py's SOURCE_TYPE = "calendar" — was
   // "google_calendar" here, which never matched any real node's
   // source_type, so calendar nodes silently fell back to the generic
