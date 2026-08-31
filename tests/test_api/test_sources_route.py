@@ -70,6 +70,18 @@ class TestGetSourcesStatus:
         assert body["last_run"]["status"] == "running"
         assert body["last_run"]["items_processed"] == 7
 
+    def test_last_run_current_item_reflects_live_progress(self, conn, client):
+        run_id = start_ingestion_run(conn)
+        update_ingestion_run_progress(
+            conn, run_id, 7, current_item="github: my-repo: fix the bug"
+        )
+
+        response = client.get("/api/sources/status")
+
+        assert response.json()["last_run"]["current_item"] == (
+            "github: my-repo: fix the bug"
+        )
+
     def test_total_items_reflects_items_from_before_the_latest_run(self, conn, client):
         insert_item(
             conn,

@@ -34,6 +34,7 @@ def get_sources_status_route(request: Request) -> SourcesStatusResponse:
             completed_at=result.last_run.run_completed_at,
             status=result.last_run.status,
             items_processed=result.last_run.items_processed,
+            current_item=result.last_run.current_item,
         )
         if result.last_run is not None
         else None

@@ -157,15 +157,20 @@ replace-not-append for chunks) matters to anything that calls it.
    this is the keyword half of hybrid search that `agent/search_nodes.py`
    calls
 4. Daily batch bookkeeping: `start_ingestion_run()` →
-   (`update_ingestion_run_progress(run_id, items_processed)`, called once
-   per item as `_run()` processes each one — not just at the very end, so
-   `items_processed` updates live while `status` is still `"running"`,
-   for a real live-progress readout rather than a start/stop signal — see
-   DECISIONS.md, 2026-08-30) → `complete_ingestion_run(status=...)` →
-   `get_last_run_timestamp()` reads the watermark for the next run's
-   `since=`; `get_last_ingestion_run()` returns the most recent run
-   regardless of status (for display, e.g. `agent/sources_status.py` —
-   see DECISIONS.md, 2026-08-25)
+   (`update_ingestion_run_progress(run_id, items_processed,
+   current_item=...)`, called once per item as `_run()` processes each
+   one — not just at the very end, so `items_processed` updates live
+   while `status` is still `"running"`, for a real live-progress readout
+   rather than a start/stop signal — see DECISIONS.md, 2026-08-30;
+   `current_item` names what was just processed, and
+   `update_ingestion_run_current_item(run_id, ...)` separately announces
+   which source is currently being *extracted*, before any of its items
+   are countable — see DECISIONS.md, 2026-08-31) →
+   `complete_ingestion_run(status=...)` → `get_last_run_timestamp()`
+   reads the watermark for the next run's `since=`;
+   `get_last_ingestion_run()` returns the most recent run regardless of
+   status (for display, e.g. `agent/sources_status.py` — see
+   DECISIONS.md, 2026-08-25)
 5. Conversation memory (tables not in `docs/Database_Schema.docx` — see
    DECISIONS.md, 2026-08-25): `record_conversation_turn(conn, session_id,
    question, answer, sources)` is the one write path — upserts the session
@@ -595,7 +600,11 @@ test doubles/temp resources instead.
    `tests/test_scheduler/test_daily_batch.py`'s integration tests pin
    `_EXTRACTORS` to `local_file` only via an autouse fixture, so a new
    entry here never makes those tests real-network-dependent — see
-   DECISIONS.md, 2026-08-24):
+   DECISIONS.md, 2026-08-24). Before `extract()` runs, `current_item` is
+   announced (`update_ingestion_run_current_item(run_id, "Extracting
+   {source_name}…")`) — the only feedback available during this phase,
+   which can run for many minutes with nothing yet countable — see
+   DECISIONS.md, 2026-08-31.
    a. `extract(since)` → list of `ExtractedItem`. An `ExtractorError` here
       is caught, logged, and recorded in `errors`; the loop moves on to the
       next source
@@ -1265,7 +1274,24 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    detection entirely (`pipeline/relationships.py`, see CLAUDE.md), so a
    node for it can never exist on this graph; listing it in the legend
    would promise something that can never appear. See DECISIONS.md,
-   2026-08-30.
+   2026-08-30. Legend entries also double as filter toggles
+   (`visibleSourceTypes`, a `Set`) — filtering hides (not dims) non-
+   matching nodes/edges at render time only, never touching the running
+   simulation. Pan/zoom is a hand-rolled `{x, y, k}` transform applied via
+   a wrapping `<g transform="translate(x,y) scale(k)">` (wheel to zoom
+   anchored at the cursor, toolbar `+`/`−` buttons, dragging the
+   background to pan) — `toSimulationPoint()` now inverts both the SVG's
+   own `viewBox` scaling *and* this transform, in that order, so node
+   dragging still lands in the same raw simulation space regardless of
+   zoom level. Clicking a node (vs. dragging it — distinguished by
+   screen-pixel movement between pointerdown/pointerup, threshold 4px)
+   sets `selectedNodeId`; the selected node, its one-hop neighbors, and
+   the edges between them render at full opacity, everything else dimmed.
+   `fitToView()` computes the bounding box of the currently-visible node
+   positions and sets the transform to center/contain it — run once
+   automatically when the simulation's `"end"` event fires (layout
+   settled), again whenever the filter set changes, and on demand via a
+   "Fit view" button. See DECISIONS.md, 2026-08-31.
 7. `api/client.js` is the only module making network calls (per
    `docs/Coding_Conventions.docx` section 3) — every function maps
    directly to one `docs/API_Specification.docx` endpoint, talking to

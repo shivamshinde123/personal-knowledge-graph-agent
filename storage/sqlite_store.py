@@ -91,6 +91,7 @@ class IngestionRun:
     run_completed_at: datetime | None = None
     items_processed: int = 0
     error_log: str | None = None
+    current_item: str | None = None
 
 
 @dataclass(slots=True)
@@ -171,7 +172,8 @@ CREATE TABLE IF NOT EXISTS ingestion_runs (
   run_completed_at   TIMESTAMP,
   status             TEXT NOT NULL,
   items_processed    INTEGER DEFAULT 0,
-  error_log          TEXT
+  error_log          TEXT,
+  current_item       TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -254,6 +256,7 @@ def _ingestion_run_from_row(row: sqlite3.Row) -> IngestionRun:
         run_completed_at=_from_iso(row["run_completed_at"]),
         items_processed=row["items_processed"],
         error_log=row["error_log"],
+        current_item=row["current_item"],
     )
 
 
@@ -289,12 +292,31 @@ def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.executescript(_SCHEMA)
         conn.commit()
+        _migrate_schema(conn)
     except sqlite3.Error as exc:
         raise StorageError(
             f"Could not open SQLite database at {target!r}: {exc}"
         ) from exc
     logger.info("Opened SQLite connection at %s", target)
     return conn
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Apply schema changes ``CREATE TABLE IF NOT EXISTS`` alone can't make.
+
+    ``executescript(_SCHEMA)`` only creates tables that don't exist yet — it
+    never alters an existing one, so a new column added to ``_SCHEMA`` after
+    a real database already has that table (as opposed to a fresh one, e.g.
+    in tests) would silently never show up. This is the project's first
+    such case (``ingestion_runs.current_item``); called once per
+    :func:`connect`, and cheap/idempotent via ``PRAGMA table_info`` so it's
+    safe to run on every startup rather than needing a version-tracking
+    migration system. See ``DECISIONS.md``.
+    """
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(ingestion_runs)")}
+    if "current_item" not in columns:
+        conn.execute("ALTER TABLE ingestion_runs ADD COLUMN current_item TEXT")
+        conn.commit()
 
 
 def insert_item(conn: sqlite3.Connection, item: Item) -> str:
@@ -561,7 +583,10 @@ def start_ingestion_run(conn: sqlite3.Connection) -> str:
 
 
 def update_ingestion_run_progress(
-    conn: sqlite3.Connection, run_id: str, items_processed: int
+    conn: sqlite3.Connection,
+    run_id: str,
+    items_processed: int,
+    current_item: str | None = None,
 ) -> None:
     """Update a running batch's live item count, without completing it.
 
@@ -575,20 +600,62 @@ def update_ingestion_run_progress(
         conn: An open connection from :func:`connect`.
         run_id: The run's id, from :func:`start_ingestion_run`.
         items_processed: The running total processed so far.
+        current_item: A short label for the item just processed (e.g.
+            ``"github: my-repo: fix the bug"``), or ``None`` to leave
+            ``current_item`` unchanged. See ``DECISIONS.md``.
+
+    Raises:
+        StorageError: If the update fails.
+    """
+    try:
+        if current_item is None:
+            conn.execute(
+                "UPDATE ingestion_runs SET items_processed = ? WHERE id = ?",
+                (items_processed, run_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE ingestion_runs SET items_processed = ?, current_item = ? "
+                "WHERE id = ?",
+                (items_processed, current_item, run_id),
+            )
+        conn.commit()
+    except sqlite3.Error as exc:
+        conn.rollback()
+        raise StorageError(
+            f"Could not update progress for ingestion run {run_id!r}: {exc}"
+        ) from exc
+
+
+def update_ingestion_run_current_item(
+    conn: sqlite3.Connection, run_id: str, current_item: str
+) -> None:
+    """Announce what a running batch is doing, before any item is countable.
+
+    Used for the extraction-starting announcement (e.g. ``"Extracting
+    github…"``) — a single source's ``extract()`` call can run for many
+    minutes discovering items before any of them are countable via
+    :func:`update_ingestion_run_progress`, which otherwise leaves that
+    whole phase with no live feedback at all. See ``DECISIONS.md``.
+
+    Args:
+        conn: An open connection from :func:`connect`.
+        run_id: The run's id, from :func:`start_ingestion_run`.
+        current_item: A short label describing what's happening now.
 
     Raises:
         StorageError: If the update fails.
     """
     try:
         conn.execute(
-            "UPDATE ingestion_runs SET items_processed = ? WHERE id = ?",
-            (items_processed, run_id),
+            "UPDATE ingestion_runs SET current_item = ? WHERE id = ?",
+            (current_item, run_id),
         )
         conn.commit()
     except sqlite3.Error as exc:
         conn.rollback()
         raise StorageError(
-            f"Could not update progress for ingestion run {run_id!r}: {exc}"
+            f"Could not update current item for ingestion run {run_id!r}: {exc}"
         ) from exc
 
 
