@@ -129,6 +129,39 @@ class TestSinceFiltering:
         assert [i.title for i in items] == ["new.txt"]
 
 
+class TestOnProgress:
+    def test_called_once_per_matching_file_with_total_and_label(self, watch_dir):
+        write_txt(watch_dir, "a.txt", "a")
+        write_txt(watch_dir, "b.txt", "b")
+        write_txt(watch_dir, "image.png", "not a match")  # excluded from total
+
+        calls = []
+
+        extract_new_items(
+            on_progress=lambda current, total, label: (
+                calls.append((current, total, label)) or True
+            )
+        )
+
+        assert calls == [(1, 2, "a.txt"), (2, 2, "b.txt")]
+
+    def test_returning_false_stops_after_the_current_file(self, watch_dir):
+        write_txt(watch_dir, "a.txt", "a")
+        write_txt(watch_dir, "b.txt", "b")
+        write_txt(watch_dir, "c.txt", "c")
+
+        items = extract_new_items(on_progress=lambda current, total, label: current < 2)
+
+        assert [i.title for i in items] == ["a.txt", "b.txt"]
+
+    def test_no_callback_is_the_default(self, watch_dir):
+        write_txt(watch_dir, "a.txt", "a")
+
+        items = extract_new_items()  # must not raise
+
+        assert len(items) == 1
+
+
 class TestMissingOrUnreadableInputs:
     def test_missing_watch_directory_is_skipped_not_raised(self, tmp_path, monkeypatch):
         monkeypatch.setattr(

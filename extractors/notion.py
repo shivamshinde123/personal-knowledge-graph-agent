@@ -30,7 +30,7 @@ from datetime import datetime
 from notion_client import Client
 
 from config.settings import get_settings
-from extractors.base import ExtractedItem, ExtractorError
+from extractors.base import ExtractedItem, ExtractorError, OnProgress
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +42,23 @@ SOURCE_TYPE = "notion"
 _PROGRESS_LOG_INTERVAL = 25
 
 
-def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
+def extract_new_items(
+    since: datetime | None = None, on_progress: OnProgress | None = None
+) -> list[ExtractedItem]:
     """Extract Notion pages edited after ``since``.
 
     Args:
         since: Only include pages last edited after this time. ``None``
             (the first-ever run) includes every page the integration can
             see.
+        on_progress: Called once per *root* page scanned (not per
+            subpage) — ``current``, ``total``, ``label=page title``.
+            ``total`` is the configured page count when scoped to
+            ``NOTION_PAGE_IDS``, else ``None`` (unscoped/workspace mode
+            has no cheap upfront total). Returning ``False`` stops after
+            the root page just reported — subpages already discovered
+            from earlier root pages are still fully processed first. See
+            ``extractors/base.py``, ``DECISIONS.md``.
 
     Returns:
         One item per successfully read page. A page whose content can't be
@@ -70,6 +80,7 @@ def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
     pages_iter = (
         _iter_specific_pages(client, page_ids) if page_ids else _iter_pages(client)
     )
+    total = len(page_ids) if page_ids else None
 
     logger.info(
         "Notion extraction starting (since=%s, scope=%s)",
@@ -93,6 +104,11 @@ def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
                 len(items),
             )
         items.extend(_extract_page_and_subpages(client, page, since, seen_page_ids))
+        if on_progress is not None and not on_progress(
+            scanned, total, _extract_title(page)
+        ):
+            logger.info("Notion extraction stopped early (cancelled)")
+            break
     logger.info(
         "Notion extraction finished: scanned %d page(s), extracted %d item(s)",
         scanned,

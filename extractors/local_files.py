@@ -16,7 +16,7 @@ import docx
 from pypdf import PdfReader
 
 from config.settings import get_settings
-from extractors.base import ExtractedItem
+from extractors.base import ExtractedItem, OnProgress
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +32,20 @@ _EXTRACTORS = {
 }
 
 
-def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
+def extract_new_items(
+    since: datetime | None = None, on_progress: OnProgress | None = None
+) -> list[ExtractedItem]:
     """Extract text from files modified after ``since`` in the watched folders.
 
     Args:
         since: Only include files modified after this time. ``None`` (the
             first-ever run) includes every matching file.
+        on_progress: Called once per candidate file (``current``,
+            ``total``, ``label=path.name``) — the matching-suffix file
+            count across every watch dir is a cheap local filesystem walk,
+            done upfront so ``total`` is always known. Returning ``False``
+            stops after the file just reported. See
+            ``extractors/base.py``, ``DECISIONS.md``.
 
     Returns:
         One item per successfully read file. A file that can't be read (a
@@ -45,15 +53,27 @@ def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
         and skipped rather than aborting the rest of the scan.
     """
     watch_dirs = get_settings().env.watch_dirs
-    items: list[ExtractedItem] = []
+    candidates: list[Path] = []
     for directory in watch_dirs:
         if not directory.is_dir():
             logger.warning("Watch directory does not exist, skipping: %s", directory)
             continue
-        for path in sorted(directory.rglob("*")):
-            item = _extract_item(path, since)
-            if item is not None:
-                items.append(item)
+        candidates.extend(
+            path
+            for path in sorted(directory.rglob("*"))
+            if path.suffix.lower() in _EXTRACTORS and path.is_file()
+        )
+
+    items: list[ExtractedItem] = []
+    for index, path in enumerate(candidates, start=1):
+        item = _extract_item(path, since)
+        if item is not None:
+            items.append(item)
+        if on_progress is not None and not on_progress(
+            index, len(candidates), path.name
+        ):
+            logger.info("Local files extraction stopped early (cancelled)")
+            break
     return items
 
 
