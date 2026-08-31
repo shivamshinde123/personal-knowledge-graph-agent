@@ -840,10 +840,22 @@ directly (see `tests/test_agent/test_graph.py`).
 
 ## Entry point: `api/main.py` startup (`create_app()`)
 
-Run via `uv run uvicorn api.main:app`. `create_app(*, lifespan_fn=lifespan)`
-builds the FastAPI app and registers every route module from
-`api/routes/`; the module-level `app = create_app()` is what `uvicorn`
-actually serves.
+Run via `uv run python -m api.main` (module invocation — picks a stable
+port with fallback, see below; `uv run uvicorn api.main:app --port ...`
+still works but always binds to exactly the port you pass it, no
+fallback). `create_app(*, lifespan_fn=lifespan)` builds the FastAPI app
+and registers every route module from `api/routes/`; the module-level
+`app = create_app()` is what `uvicorn` actually serves either way.
+
+0. The `if __name__ == "__main__":` block (module-invocation path only):
+   `_select_port()` tries `settings.env.fastapi_port` then
+   `_PORT_FALLBACKS = (8080, 8090, 8091)` in order, binding the first free
+   one (`_is_port_free()`, a plain `socket` bind-and-release check), and
+   writes it to `data/backend_port.txt` — `frontend/vite.config.js` reads
+   that file at config-load time and injects it as
+   `import.meta.env.VITE_API_BASE_URL`, which `client.js`'s `API_BASE_URL`
+   reads, so the two processes can never drift out of sync on which port
+   the backend actually ended up on. See DECISIONS.md, 2026-08-31.
 
 1. On startup, the `lifespan` context manager first calls
    `agent/tracing.py::enable_tracing()` (a no-op if no `LANGSMITH_API_KEY`

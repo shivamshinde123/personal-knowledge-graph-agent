@@ -8,6 +8,20 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-31 — Stable dev ports with fallbacks, backend and frontend kept in sync
+
+**Context**: The backend had no reliable default port — `settings.env.fastapi_port` (8080) was documented but nothing actually read it; `uvicorn` was always started manually with an explicit `--port`. A real conflict was hit this session: an unrelated Airflow container occupying 8080 on every interface, forcing a hardcoded `// TEMP` override of `frontend/src/api/client.js`'s `API_BASE_URL` to a different port, which then had to be remembered and kept in sync by hand. See issue #71.
+
+**Decision**: `api/main.py` gains a real entrypoint (`if __name__ == "__main__":`, run via `uv run python -m api.main` — module invocation, matching `scheduler/daily_batch.py`'s existing convention). `_select_port()` tries `settings.env.fastapi_port` first, then `_PORT_FALLBACKS = (8080, 8090, 8091)` in order (a plain TCP bind-and-release check via `socket`, no new dependency), and writes whichever port it actually bound to into `data/backend_port.txt` (gitignored, ephemeral — `data/` already is). `frontend/vite.config.js` reads that same file synchronously at config-load time and injects it as `import.meta.env.VITE_API_BASE_URL` via Vite's `define`, falling back to `8080` if the file doesn't exist yet (backend not started, or started the old way). `client.js`'s `API_BASE_URL` now reads that env var instead of a hardcoded literal — the two processes can never drift out of sync, since the frontend always discovers whatever port the backend actually chose rather than guessing.
+
+The frontend's own serving port (5173) keeps Vite's existing built-in "try the next port if taken" behavior (`strictPort` stays at its `false` default) — explicit `server.port: 5173` just documents the intent rather than reinventing what Vite already does correctly.
+
+**Verified**: `_select_port()`/`_is_port_free()` directly, live — correctly detected the real running backend's port (8081, taken) and fell back to 8080 (free) in a real test. Full suite (542 tests) passes.
+
+**Affects**: `api/main.py`, `frontend/vite.config.js`, `frontend/src/api/client.js`.
+
+---
+
 ## 2026-08-31 — Graph view: GitHub node color changed from near-black to blue
 
 **Context**: `SOURCE_TYPE_COLORS.github` was `#16151a` — an almost-black color, presumably chosen to evoke GitHub's own octocat-black branding, but barely distinguishable from the dark theme's background for both node circles and the legend swatch. See issue #70.

@@ -1,11 +1,17 @@
 """FastAPI app entrypoint: exposes the LangGraph agent over HTTP.
 
-Run via ``uv run uvicorn api.main:app``, bound to ``settings.env.fastapi_port``
-(``localhost`` only — see ``docs/System_Architecture_Document.docx`` section
-6.2). Holds the long-lived SQLite connection, Chroma collection, and Neo4j
-driver for the process's lifetime, opened once at startup and closed on
-shutdown via FastAPI's lifespan context manager, and read by route handlers
-from ``request.app.state`` — see ``DECISIONS.md``.
+Run via ``uv run python -m api.main`` (module invocation, not
+``uv run uvicorn api.main:app`` directly — the latter always binds to
+whatever ``--port`` you pass it, with no fallback if that port is taken;
+module invocation instead tries ``settings.env.fastapi_port`` first, then
+``_PORT_FALLBACKS`` in order, binding the first free one and writing it to
+``data/backend_port.txt`` for the frontend dev server to discover — see
+``_select_port()``, ``DECISIONS.md``). ``localhost`` only — see
+``docs/System_Architecture_Document.docx`` section 6.2. Holds the
+long-lived SQLite connection, Chroma collection, and Neo4j driver for the
+process's lifetime, opened once at startup and closed on shutdown via
+FastAPI's lifespan context manager, and read by route handlers from
+``request.app.state`` — see ``DECISIONS.md``.
 
 Per ``docs/File_Folder_Structure.docx`` section 4: a new API endpoint adds
 a route module under ``api/routes/`` and registers it here.
@@ -13,6 +19,8 @@ a route module under ``api/routes/`` and registers it here.
 
 from __future__ import annotations
 
+import logging
+import socket
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -23,11 +31,21 @@ from fastapi.responses import JSONResponse
 
 from agent.tracing import enable_tracing
 from api.routes import admin, graph, health, ingest, query, sessions, settings, sources
-from config.settings import ConfigError, get_settings
+from config.settings import PROJECT_ROOT, ConfigError, get_settings
 from providers.base import ProviderError
 from storage.chroma_store import VectorStoreError, get_collection
 from storage.neo4j_store import GraphStoreError, get_driver
 from storage.sqlite_store import StorageError, connect
+
+logger = logging.getLogger(__name__)
+
+# Tried, in order, after settings.env.fastapi_port itself, if that port is
+# already taken by something else — see _select_port(). A real conflict
+# was hit this session: an unrelated Airflow container occupying 8080 on
+# every interface. Written wherever the chosen port ends up, for the
+# frontend dev server to discover — see frontend/vite.config.js.
+_PORT_FALLBACKS = (8080, 8090, 8091)
+_PORT_FILE = PROJECT_ROOT / "data" / "backend_port.txt"
 
 
 @asynccontextmanager
@@ -145,3 +163,54 @@ def _register_exception_handlers(app: FastAPI) -> None:
 
 
 app = create_app()
+
+
+def _is_port_free(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+        return True
+
+
+def _select_port() -> int:
+    """Pick the first free port.
+
+    Tries ``settings.env.fastapi_port`` and ``_PORT_FALLBACKS``, in that
+    order.
+
+    Returns:
+        The chosen port.
+
+    Raises:
+        RuntimeError: If every candidate is taken.
+    """
+    primary = get_settings().env.fastapi_port
+    candidates = [primary, *[p for p in _PORT_FALLBACKS if p != primary]]
+    for port in candidates:
+        if _is_port_free(port):
+            return port
+    raise RuntimeError(
+        f"Every candidate port is already in use: {candidates}. "
+        "Free one of them, or add another to api/main.py's _PORT_FALLBACKS."
+    )
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    # Matches scheduler/daily_batch.py's own __main__ block — this module
+    # has no logging configured otherwise (route handlers run under
+    # uvicorn's own process, which never imports this file as __main__).
+    logging.basicConfig(level=get_settings().env.log_level)
+    chosen_port = _select_port()
+    _PORT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _PORT_FILE.write_text(str(chosen_port), encoding="utf-8")
+    logger.info(
+        "Starting on http://127.0.0.1:%d (wrote %s for the frontend dev server)",
+        chosen_port,
+        _PORT_FILE,
+    )
+    uvicorn.run(app, host="127.0.0.1", port=chosen_port)
