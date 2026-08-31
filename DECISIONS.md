@@ -8,6 +8,16 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-31 — Graph view: GitHub node color changed from near-black to blue
+
+**Context**: `SOURCE_TYPE_COLORS.github` was `#16151a` — an almost-black color, presumably chosen to evoke GitHub's own octocat-black branding, but barely distinguishable from the dark theme's background for both node circles and the legend swatch. See issue #70.
+
+**Decision**: changed to `#3b82f6` — reusing the app's existing `--info-blue` CSS token (`frontend/src/index.css`) rather than inventing a new one, for consistency with the rest of the palette. Distinct from the other five source colors already in use (`local_file` purple, `notion` red, `gmail` green, `calendar` amber, `browser_history` gray).
+
+**Affects**: `frontend/src/components/GraphView.jsx`.
+
+---
+
 ## 2026-08-31 — Graph view: truncate long node labels, full title on hover
 
 **Context**: GitHub-sourced node titles (commit messages, PR/issue titles) run long and, rendered in full next to every node, overlap and clutter the layout with more than a handful of nodes nearby — see issue #69.
