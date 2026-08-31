@@ -64,6 +64,12 @@ class LastRunResponse(BaseModel):
     ``"running"`` — ``scheduler/daily_batch.py`` persists it after every
     item, not just once at completion — so polling this gives a real,
     live progress count, not just a start/stop signal. See DECISIONS.md.
+
+    ``current_item`` is similarly live: set to a short label (e.g.
+    ``"Extracting github…"`` while a source's extraction is in flight, then
+    ``"github: my-repo: fix the bug"`` once per-item processing starts) —
+    a completed run leaves it at whatever it last was, which the frontend
+    only displays while ``status == "running"``.
     """
 
     run_id: str
@@ -71,6 +77,7 @@ class LastRunResponse(BaseModel):
     completed_at: datetime | None
     status: str
     items_processed: int
+    current_item: str | None = None
 
 
 class SourceStatusResponse(BaseModel):

@@ -8,6 +8,48 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-08-31 — Notion subpages extracted as their own items, not merged into the parent
+
+**Context**: Asked directly whether the Notion extractor pulls in content from subpages nested under a configured page. It did, but only by accident and only partially: `_collect_block_text()` recursed into any block with `has_children`, including `child_page` blocks — folding a subpage's body text into the *parent's* single item. Two real bugs fell out of that: (1) a subpage's own title was silently dropped, since `child_page` blocks store their title under a `child_page.title` key, not the `rich_text` key every other block type uses (`_block_to_text()` only ever read `rich_text`); (2) incremental re-ingestion could miss a subpage edit entirely — `since` filtering only checked the *parent* page's own `last_edited_time`, and editing a subpage's content doesn't bump its parent's timestamp in Notion.
+
+**Decision**: `_collect_block_text()` now intercepts `child_page` blocks instead of recursing into them for text — each becomes its own `ExtractedItem`, extracted by `_extract_page_and_subpages()` recursing via `client.pages.retrieve()` (own id, title, url, `last_edited_time`, `created_time`, own `since` check, own further-nested subpages). Critically, a page's blocks are walked to discover subpages *even when the page itself fails its own `since` check* — otherwise a subpage nested under an unchanged parent could never be discovered at all once ingestion is scoped to specific page ids (`NOTION_PAGE_IDS`), since a subpage isn't independently listed anywhere else. A `seen_page_ids` set dedupes a page reachable more than one way (in unscoped/workspace mode, every page is visited both directly via `search()` *and* again as a subpage discovered while walking another page's blocks).
+
+**Trade-off accepted**: this makes every incremental run walk every configured (or workspace) page's block tree regardless of whether that page itself changed, since subpage discovery has no cheaper path — previously an unchanged page's `since` check short-circuited before any block-fetching API call at all. Acceptable for a single-user workspace of the scale this project targets; revisit if it becomes a real cost at much larger scope.
+
+**Verified**: `uv run pytest tests/test_extractors/test_notion.py` — 5 new tests (subpage becomes its own item with correct title/url, arbitrarily deep nesting, a subpage surfaces even when its unchanged parent is correctly excluded, an unfetchable subpage is skipped not raised, a page reachable as both a root and a subpage isn't duplicated) plus all 15 pre-existing tests pass unchanged.
+
+**Affects**: `extractors/notion.py`, `tests/test_extractors/test_notion.py`.
+
+---
+
+## 2026-08-31 — Graph zoom/pan/filter/highlight
+
+**Context**: The relationship graph had no way to filter by source, zoom, or focus on one node's neighborhood, making it hard to use with more than a handful of nodes.
+
+**Decision — graph pan/zoom**: Hand-rolled (`{x, y, k}` transform state on a wrapping `<g>`, wheel handler + toolbar buttons + background-drag panning), not `d3-zoom`/`d3-selection` — the existing node-dragging code already hand-rolls pointer-event math (`toSimulationPoint()`) rather than using `d3-drag`, so this follows the same style rather than mixing two different interaction paradigms and adding a dependency pair.
+
+**Decision — click-to-highlight**: A node click (not drag — distinguished via screen-pixel movement between pointerdown/pointerup, threshold 4px) sets `selectedNodeId`; the selected node, its one-hop neighbors, and the connecting edges render at full opacity, everything else dimmed to `0.15`. Clicking empty space or the same node again clears the selection.
+
+**Decision — per-source filtering**: The existing legend doubles as the filter control (clicking a swatch toggles that source type) rather than a separate toolbar, since it already lists every real source type in one place. Filtering hides (not dims) non-matching nodes/edges, and is render-only — the underlying simulation never restarts or drops nodes, so toggling a filter back on doesn't reflow the layout or lose position continuity.
+
+**A real pre-existing bug fixed along the way**: `SOURCE_TYPE_COLORS` used the key `"google_calendar"`, but every extractor's actual `SOURCE_TYPE` constant (and therefore every real node's `source_type`) is `"calendar"` (see `extractors/calendar.py`). Calendar nodes were silently falling back to the generic gray color, and the legend entry never matched anything. Found while wiring up per-source filtering, which depends on this key actually matching a real value — fixed to `"calendar"`.
+
+**Decision — auto-fit**: `fitToView()` computes the bounding box of the currently-*visible* (post-filter) node positions and sets the transform to center and fully contain it, clamped to the same zoom range as manual zoom. Triggered automatically once per graph load (via `forceSimulation`'s `"end"` event, guarded by a ref so it never fires twice for the same load) and again whenever the filter set changes (the visible bbox changed), plus a manual "Fit view" button for the user to re-trigger any time.
+
+**Affects**: `frontend/src/components/GraphView.jsx`, `frontend/src/index.css`.
+
+---
+
+## 2026-08-31 — Live "what's being ingested" label
+
+**Context**: Watching a real ingestion run showed a gap: `items_processed` already updated live (2026-08-30 entry, below), but during a single source's *extraction* phase — GitHub's took ~20 minutes across 65 repos — there was no feedback at all, since extraction runs to completion before any item is countable.
+
+**Decision**: `ingestion_runs` gets a new nullable `current_item TEXT` column. Since `storage/sqlite_store.py::connect()` only ever runs `CREATE TABLE IF NOT EXISTS` — never migrates an existing table — and the real, live `data/pkg_agent.db` already has this table with real rows, added a small `_migrate_schema()` step (`PRAGMA table_info`, `ALTER TABLE ... ADD COLUMN` if missing) run once per `connect()`. This is the project's first case of altering an already-populated table; noted here as the pattern to follow if another such column is ever needed, rather than building a versioned migration system for a single-user local app. `scheduler/daily_batch.py::_run()` sets it twice: once per source, right before `extract()` runs (`"Extracting {source_name}…"` — the previously-invisible phase), and once per item alongside the existing `update_ingestion_run_progress()` call (`"{source_name}: {item.title}"`). Both are best-effort (logged, never abort the run), same resilience pattern as the existing progress-update call. `LastRunResponse`/`GET /api/sources/status` exposes it; the frontend's existing 4s poll loop (`App.jsx::pollIngestionCompletion()`) already carries it for free — `SettingsPanel.jsx` renders it as a line under the progress bar, only while a run is `"running"`.
+
+**Affects**: `storage/sqlite_store.py`, `scheduler/daily_batch.py`, `api/schemas.py`, `api/routes/sources.py`, `frontend/src/App.jsx`, `frontend/src/components/SettingsPanel.jsx`, `frontend/src/index.css`, `tests/test_storage/test_sqlite_store.py`, `tests/test_scheduler/test_daily_batch.py`, `tests/test_api/test_sources_route.py`.
+
+---
+
 ## 2026-08-30 — Google Calendar extractor: server-side recurrence collapsing, a configurable noise rule, and dropped low-signal fields
 
 **Context**: Building the Google Calendar extractor (`docs/Data_Extraction_Specification.docx` section 7 and `docs/Technical_Design_Document.docx` section 3.4) — the last of the three previously-unbuilt sources. Auth follows the exact same one-time-OAuth-then-cached-token pattern as `extractors/gmail.py` (a personal calendar has no service-account option either) — see that module's DECISIONS.md entry for the full reasoning; not repeated here. Separate credentials/token files from Gmail (`GOOGLE_CALENDAR_CREDENTIALS_PATH` / `data/calendar_token.json`), matching their already-separate `.env` variables — no assumption that one Google Cloud OAuth app necessarily covers both scopes.

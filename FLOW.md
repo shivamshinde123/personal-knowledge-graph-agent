@@ -157,15 +157,20 @@ replace-not-append for chunks) matters to anything that calls it.
    this is the keyword half of hybrid search that `agent/search_nodes.py`
    calls
 4. Daily batch bookkeeping: `start_ingestion_run()` →
-   (`update_ingestion_run_progress(run_id, items_processed)`, called once
-   per item as `_run()` processes each one — not just at the very end, so
-   `items_processed` updates live while `status` is still `"running"`,
-   for a real live-progress readout rather than a start/stop signal — see
-   DECISIONS.md, 2026-08-30) → `complete_ingestion_run(status=...)` →
-   `get_last_run_timestamp()` reads the watermark for the next run's
-   `since=`; `get_last_ingestion_run()` returns the most recent run
-   regardless of status (for display, e.g. `agent/sources_status.py` —
-   see DECISIONS.md, 2026-08-25)
+   (`update_ingestion_run_progress(run_id, items_processed,
+   current_item=...)`, called once per item as `_run()` processes each
+   one — not just at the very end, so `items_processed` updates live
+   while `status` is still `"running"`, for a real live-progress readout
+   rather than a start/stop signal — see DECISIONS.md, 2026-08-30;
+   `current_item` names what was just processed, and
+   `update_ingestion_run_current_item(run_id, ...)` separately announces
+   which source is currently being *extracted*, before any of its items
+   are countable — see DECISIONS.md, 2026-08-31) →
+   `complete_ingestion_run(status=...)` → `get_last_run_timestamp()`
+   reads the watermark for the next run's `since=`;
+   `get_last_ingestion_run()` returns the most recent run regardless of
+   status (for display, e.g. `agent/sources_status.py` — see
+   DECISIONS.md, 2026-08-25)
 5. Conversation memory (tables not in `docs/Database_Schema.docx` — see
    DECISIONS.md, 2026-08-25): `record_conversation_turn(conn, session_id,
    question, answer, sources)` is the one write path — upserts the session
@@ -354,18 +359,28 @@ calls `pipeline/filters.py` next.
 - `extractors/notion.py` — lists every page the integration (`NOTION_API_KEY`)
   can see via `Client.search()` (paginated), unless `NOTION_PAGE_IDS` is
   configured, in which case only those pages are fetched directly by id
-  (`Client.pages.retrieve()`) instead — see DECISIONS.md, 2026-08-30.
-  Filters by `last_edited_time > since`, then recursively walks each
-  page's blocks via
-  `Client.blocks.children.list()` (`_collect_block_text()`), converting each
-  block's `rich_text` to plain text and joining blocks with blank lines so
-  headings/paragraphs stay natural chunk boundaries. Title comes from the
-  page's `title`-type property. Missing `NOTION_API_KEY`, or a failed
-  `search()` call, raises `ExtractorError` (source-level); a single page's
-  block-fetch failing is logged and skipped, not fatal — see DECISIONS.md,
-  2026-08-24. Logs an INFO progress line every 25 pages scanned (a full
-  scan visits every visible page and can take a long time on a large
-  workspace — see DECISIONS.md, 2026-08-24).
+  (`Client.pages.retrieve()`) instead — see DECISIONS.md, 2026-08-30. Each
+  root page goes through `_extract_page_and_subpages()`, which recursively
+  walks its blocks via `Client.blocks.children.list()`
+  (`_collect_block_text()`), converting each block's `rich_text` to plain
+  text and joining blocks with blank lines so headings/paragraphs stay
+  natural chunk boundaries. Title comes from the page's `title`-type
+  property. A `child_page` block found while walking is *not* folded into
+  the parent's text — it's fetched via `Client.pages.retrieve()` and
+  recursed into as its own independent extraction (own `since` check, own
+  item, own further subpages), since a subpage's edits don't bump its
+  parent's `last_edited_time` in Notion — a page's blocks are walked to
+  discover subpages even when the page itself fails its own `since` check,
+  otherwise a subpage nested under an unchanged parent could never be
+  found at all once scoped to specific page ids. A `seen_page_ids` set
+  dedupes a page reachable both directly (`search()`, unscoped mode) and
+  as a subpage of another page — see DECISIONS.md, 2026-08-31. Missing
+  `NOTION_API_KEY`, or a failed `search()` call, raises `ExtractorError`
+  (source-level); a single page's block-fetch or subpage-fetch failing is
+  logged and skipped, not fatal — see DECISIONS.md, 2026-08-24. Logs an
+  INFO progress line every 25 *root* pages scanned (a full scan visits
+  every visible page and can take a long time on a large workspace — see
+  DECISIONS.md, 2026-08-24).
 - `extractors/gmail.py` — one item per **thread**, not per message
   (`docs/Data_Extraction_Specification.docx` section 5 lists thread ID as
   metadata, but `ExtractedItem` has no generic metadata field to hang it
@@ -595,7 +610,11 @@ test doubles/temp resources instead.
    `tests/test_scheduler/test_daily_batch.py`'s integration tests pin
    `_EXTRACTORS` to `local_file` only via an autouse fixture, so a new
    entry here never makes those tests real-network-dependent — see
-   DECISIONS.md, 2026-08-24):
+   DECISIONS.md, 2026-08-24). Before `extract()` runs, `current_item` is
+   announced (`update_ingestion_run_current_item(run_id, "Extracting
+   {source_name}…")`) — the only feedback available during this phase,
+   which can run for many minutes with nothing yet countable — see
+   DECISIONS.md, 2026-08-31.
    a. `extract(since)` → list of `ExtractedItem`. An `ExtractorError` here
       is caught, logged, and recorded in `errors`; the loop moves on to the
       next source
@@ -1265,7 +1284,24 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    detection entirely (`pipeline/relationships.py`, see CLAUDE.md), so a
    node for it can never exist on this graph; listing it in the legend
    would promise something that can never appear. See DECISIONS.md,
-   2026-08-30.
+   2026-08-30. Legend entries also double as filter toggles
+   (`visibleSourceTypes`, a `Set`) — filtering hides (not dims) non-
+   matching nodes/edges at render time only, never touching the running
+   simulation. Pan/zoom is a hand-rolled `{x, y, k}` transform applied via
+   a wrapping `<g transform="translate(x,y) scale(k)">` (wheel to zoom
+   anchored at the cursor, toolbar `+`/`−` buttons, dragging the
+   background to pan) — `toSimulationPoint()` now inverts both the SVG's
+   own `viewBox` scaling *and* this transform, in that order, so node
+   dragging still lands in the same raw simulation space regardless of
+   zoom level. Clicking a node (vs. dragging it — distinguished by
+   screen-pixel movement between pointerdown/pointerup, threshold 4px)
+   sets `selectedNodeId`; the selected node, its one-hop neighbors, and
+   the edges between them render at full opacity, everything else dimmed.
+   `fitToView()` computes the bounding box of the currently-visible node
+   positions and sets the transform to center/contain it — run once
+   automatically when the simulation's `"end"` event fires (layout
+   settled), again whenever the filter set changes, and on demand via a
+   "Fit view" button. See DECISIONS.md, 2026-08-31.
 7. `api/client.js` is the only module making network calls (per
    `docs/Coding_Conventions.docx` section 3) — every function maps
    directly to one `docs/API_Specification.docx` endpoint, talking to
