@@ -56,17 +56,21 @@ const PROVIDER_MODES = [
  * @param {() => Promise<void>} props.onTriggerIngestion - starts a batch
  *   run and polls for completion; owned by App.jsx so the "done" toast
  *   still shows up if the user has navigated away from Settings by then.
+ * @param {(dbRunId: string) => Promise<void>} props.onCancelIngestion - asks
+ *   a running batch to stop; owned by App.jsx alongside onTriggerIngestion
+ *   so the same poll loop picks up the "cancelled" outcome.
  * @param {() => Promise<void>} props.onResetAll - wipes all data; owned by
  *   App.jsx since it also clears the active chat session.
  * @param {(text: string) => void} props.onError - surfaces a failure from
  *   either action as a toast.
- * @param {{startedAt: Date, runId: string, itemsProcessed: number, status: string} | null} props.ingestionStatus -
+ * @param {{startedAt: Date, runId: string, dbRunId: string | null, itemsProcessed: number, status: string} | null} props.ingestionStatus -
  *   the most recently triggered run's live progress, owned by App.jsx so
  *   it survives navigating away and back; null before anything's been
  *   triggered this session.
  */
 function SettingsPanel({
   onTriggerIngestion,
+  onCancelIngestion,
   onResetAll,
   onError,
   ingestionStatus,
@@ -86,6 +90,7 @@ function SettingsPanel({
   const [saveStatus, setSaveStatus] = useState(null);
   const [isVerifying, setIsVerifying] = useState(false);
   const [isTriggeringIngest, setIsTriggeringIngest] = useState(false);
+  const [isCancellingIngest, setIsCancellingIngest] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [isBrowsing, setIsBrowsing] = useState(false);
   // The last-saved snapshot of every editable field, for diffing at save
@@ -171,6 +176,24 @@ function SettingsPanel({
       onError(`Could not start ingestion: ${error.message}`);
     } finally {
       setIsTriggeringIngest(false);
+    }
+  }
+
+  async function handleCancelIngestion(dbRunId) {
+    const confirmed = await confirm({
+      title: "Stop ingestion?",
+      body: "Items already processed will be kept — nothing is rolled back, but anything not yet reached this run will need a later run to pick up.",
+      confirmLabel: "Stop ingestion",
+    });
+    if (!confirmed) return;
+
+    setIsCancellingIngest(true);
+    try {
+      await onCancelIngestion(dbRunId);
+    } catch (error) {
+      onError(`Could not stop ingestion: ${error.message}`);
+    } finally {
+      setIsCancellingIngest(false);
     }
   }
 
@@ -362,6 +385,7 @@ function SettingsPanel({
     ingestionStatus ??
     (sources.last_run && {
       startedAt: new Date(sources.last_run.started_at),
+      dbRunId: sources.last_run.run_id,
       itemsProcessed: sources.last_run.items_processed,
       status: sources.last_run.status,
       currentItem: sources.last_run.current_item,
@@ -655,15 +679,30 @@ function SettingsPanel({
                   Normally runs once a day on a schedule.
                 </p>
               </div>
-              <button
-                type="button"
-                className="settings-ghost-button"
-                onClick={handleTriggerIngestion}
-                disabled={isTriggeringIngest}
-              >
-                <img src={ingestIcon} alt="" aria-hidden="true" />
-                {isTriggeringIngest ? "Starting…" : "Run ingestion now"}
-              </button>
+              <div className="settings-ghost-button-group">
+                <button
+                  type="button"
+                  className="settings-ghost-button"
+                  onClick={handleTriggerIngestion}
+                  disabled={isTriggeringIngest}
+                >
+                  <img src={ingestIcon} alt="" aria-hidden="true" />
+                  {isTriggeringIngest ? "Starting…" : "Run ingestion now"}
+                </button>
+                {displayedIngestion?.status === "running" &&
+                  displayedIngestion.dbRunId && (
+                    <button
+                      type="button"
+                      className="settings-ghost-button settings-ghost-button-danger"
+                      onClick={() =>
+                        handleCancelIngestion(displayedIngestion.dbRunId)
+                      }
+                      disabled={isCancellingIngest}
+                    >
+                      {isCancellingIngest ? "Stopping…" : "Stop"}
+                    </button>
+                  )}
+              </div>
             </div>
             {displayedIngestion && (
               <div className="ingestion-progress">

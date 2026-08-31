@@ -28,11 +28,13 @@ current working directory instead) does not. See ``DECISIONS.md``.
 
 from __future__ import annotations
 
+import sqlite3
 import subprocess
 import sys
 from datetime import UTC, datetime
 
 from config.settings import PROJECT_ROOT
+from storage.sqlite_store import request_ingestion_cancellation
 
 
 def trigger_ingestion() -> str:
@@ -61,3 +63,25 @@ def trigger_ingestion() -> str:
     # docstring.
     subprocess.Popen([sys.executable, "-m", "scheduler.daily_batch"], cwd=PROJECT_ROOT)
     return run_id
+
+
+def cancel_ingestion(conn: sqlite3.Connection, run_id: str) -> None:
+    """Ask a running batch to stop at its next check point.
+
+    Thin wrapper around ``storage/sqlite_store.py::request_ingestion_cancellation()``
+    — the API layer never reaches into ``storage`` directly (see module
+    docstring). The spawned ``scheduler.daily_batch`` subprocess and the API
+    process only share the SQLite file, not memory, so this cross-process
+    signal (a flag on the run's own row) is the only way to reach it — same
+    reasoning as why live progress already round-trips through the DB rather
+    than an in-process variable. See ``DECISIONS.md``.
+
+    Args:
+        conn: An open SQLite connection.
+        run_id: The ``ingestion_runs.id`` to cancel — from
+            ``GET /api/sources/status``'s ``last_run.run_id``.
+
+    Raises:
+        StorageError: If the flag could not be written.
+    """
+    request_ingestion_cancellation(conn, run_id)

@@ -26,7 +26,7 @@ from datetime import UTC, datetime, time, timedelta
 import httpx
 
 from config.settings import get_settings
-from extractors.base import ExtractedItem, ExtractorError
+from extractors.base import ExtractedItem, ExtractorError, OnProgress
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,9 @@ def _effective_window(
     return since, until
 
 
-def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
+def extract_new_items(
+    since: datetime | None = None, on_progress: OnProgress | None = None
+) -> list[ExtractedItem]:
     """Extract GitHub activity — commits, PRs, issues, READMEs, stars.
 
     Args:
@@ -71,6 +73,11 @@ def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
             extractors. Combined with ``config/.env``'s
             ``GITHUB_DATE_RANGE_START``/``GITHUB_DATE_RANGE_END``, if set —
             see :func:`_effective_window`.
+        on_progress: Called once per repo (``current``, ``total=len(repos)``,
+            ``label=full_name``) — repo count is known upfront regardless
+            of scope, unlike the items within each repo. Returning
+            ``False`` stops after the repo just reported, before starting
+            the next one. See ``extractors/base.py``, ``DECISIONS.md``.
 
     Returns:
         One item per commit/PR/issue/README/starred-repo surviving
@@ -121,11 +128,16 @@ def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
         except Exception as exc:
             logger.warning("Could not extract starred repos: %s", exc)
 
-        for full_name in repos:
+        for index, full_name in enumerate(repos, start=1):
             try:
                 items.extend(_extract_repo_items(client, full_name, since, until))
             except Exception as exc:
                 logger.warning("Could not process GitHub repo %s: %s", full_name, exc)
+            if on_progress is not None and not on_progress(
+                index, len(repos), full_name
+            ):
+                logger.info("GitHub extraction stopped early (cancelled)")
+                break
 
         logger.info(
             "GitHub extraction finished: %d repo(s) scanned, %d item(s) extracted",
