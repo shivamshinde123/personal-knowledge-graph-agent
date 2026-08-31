@@ -43,7 +43,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 from config.settings import PROJECT_ROOT, get_settings
-from extractors.base import ExtractedItem, ExtractorError
+from extractors.base import ExtractedItem, ExtractorError, OnProgress
 
 logger = logging.getLogger(__name__)
 
@@ -58,13 +58,19 @@ def _token_path():
     return PROJECT_ROOT / "data" / "calendar_token.json"
 
 
-def extract_new_items(since: datetime | None = None) -> list[ExtractedItem]:
+def extract_new_items(
+    since: datetime | None = None, on_progress: OnProgress | None = None
+) -> list[ExtractedItem]:
     """Extract primary-calendar events updated after ``since``.
 
     Args:
         since: Only include events created/updated after this time.
             ``None`` (the first-ever run) includes every event on the
             calendar surviving noise filtering.
+        on_progress: Accepted for a uniform call shape with the other
+            extractors in ``scheduler/daily_batch.py``'s ``_EXTRACTORS``
+            list, but unused here — see ``extractors/base.py``. Tracked
+            separately in issue #68.
 
     Returns:
         One item per non-cancelled event surviving
