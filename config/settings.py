@@ -32,6 +32,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = PROJECT_ROOT / "config"
 DEFAULT_CONFIG_PATH = CONFIG_DIR / "config.yaml"
 DEFAULT_ENV_PATH = CONFIG_DIR / ".env"
+# Used when LOCAL_FILES_WATCH_DIRS is unset, so a fresh install still
+# ingests something from day one instead of silently watching zero
+# folders — see EnvSettings.watch_dirs, DECISIONS.md.
+DEFAULT_WATCH_DIR = (
+    Path.home() / "Documents" / "PersonalKnowledgeGraphAgent" / "watched"
+)
 
 ProviderMode = Literal["fully_local", "fully_cloud"]
 
@@ -291,14 +297,29 @@ class EnvSettings(BaseSettings):
     def watch_dirs(self) -> list[Path]:
         """Parse ``LOCAL_FILES_WATCH_DIRS`` into a list of absolute paths.
 
+        Falls back to :data:`DEFAULT_WATCH_DIR` (created on demand if it
+        doesn't exist yet) when the variable is unset, rather than an empty
+        list — a fresh install otherwise silently ingests zero local files
+        with no indication anything is missing. This is a fallback for
+        *reading*, not a persisted setting: nothing writes it back to
+        ``.env`` on its own, so the Settings screen's watch-folder field
+        shows it pre-filled (via ``GET /api/settings/sources``) but it only
+        becomes an explicit, permanent choice once the user actually saves.
+        See ``DECISIONS.md``.
+
         Returns:
-            The configured watch directories, empty if the variable is unset.
+            The configured watch directories, or ``[DEFAULT_WATCH_DIR]`` if
+            the variable is unset.
         """
-        return [
+        configured = [
             anchor_path(Path(part.strip()))
             for part in self.local_files_watch_dirs.split(",")
             if part.strip()
         ]
+        if configured:
+            return configured
+        DEFAULT_WATCH_DIR.mkdir(parents=True, exist_ok=True)
+        return [DEFAULT_WATCH_DIR]
 
     @property
     def notion_page_ids_list(self) -> list[str]:
