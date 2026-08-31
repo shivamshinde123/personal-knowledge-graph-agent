@@ -11,7 +11,13 @@
 // port-forward) is already listening on ::1:8080 — silently talking to the
 // wrong service instead of this API. 127.0.0.1 is unambiguous. See
 // DECISIONS.md.
-const API_BASE_URL = "http://127.0.0.1:8080/api";
+//
+// VITE_API_BASE_URL is injected by vite.config.js from
+// data/backend_port.txt, whatever port api/main.py actually bound to
+// (its own fastapi_port setting, or a documented fallback if that one was
+// taken) — never hardcode a port here directly, it can drift out of sync
+// with the real running backend. See DECISIONS.md.
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
 class ApiError extends Error {
   constructor(status, body) {
