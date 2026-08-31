@@ -364,6 +364,7 @@ function SettingsPanel({
       startedAt: new Date(sources.last_run.started_at),
       itemsProcessed: sources.last_run.items_processed,
       status: sources.last_run.status,
+      currentItem: sources.last_run.current_item,
     });
 
   return (
@@ -688,6 +689,12 @@ function SettingsPanel({
                 >
                   <div className="ingestion-progress-bar-fill" />
                 </div>
+                {displayedIngestion.status === "running" &&
+                  displayedIngestion.currentItem && (
+                    <p className="ingestion-current-item">
+                      {displayedIngestion.currentItem}
+                    </p>
+                  )}
               </div>
             )}
 

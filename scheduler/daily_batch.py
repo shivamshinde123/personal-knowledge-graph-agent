@@ -50,6 +50,7 @@ from storage.sqlite_store import (
     insert_item,
     replace_chunks,
     start_ingestion_run,
+    update_ingestion_run_current_item,
     update_ingestion_run_progress,
 )
 
@@ -101,6 +102,18 @@ def _run(
     updated_item_ids: list[str] = []
 
     for source_name, extract in _EXTRACTORS:
+        # Announced before extract() runs, not just once processing starts —
+        # a single source's extraction can run for many minutes (e.g.
+        # scanning dozens of GitHub repos) with no other progress signal
+        # available until it returns. A failure here is logged but never
+        # aborts the run — see the identical reasoning below for
+        # update_ingestion_run_progress().
+        try:
+            update_ingestion_run_current_item(
+                conn, run_id, f"Extracting {source_name}…"
+            )
+        except Exception as exc:
+            logger.warning("Could not announce current source for %r: %s", run_id, exc)
         try:
             raw_items = extract(since)
         except ExtractorError as exc:
@@ -135,7 +148,12 @@ def _run(
             # never aborts the run — a stale progress count is a display
             # quirk, not a reason to lose real ingestion work.
             try:
-                update_ingestion_run_progress(conn, run_id, items_processed)
+                update_ingestion_run_progress(
+                    conn,
+                    run_id,
+                    items_processed,
+                    current_item=f"{source_name}: {item.title or item.source_ref_id}",
+                )
             except Exception as exc:
                 logger.warning("Could not update live progress for %r: %s", run_id, exc)
 

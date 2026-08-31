@@ -245,6 +245,21 @@ class TestFullRun:
         assert run["status"] == "success"
         assert run["items_processed"] == 0
 
+    def test_current_item_names_the_last_item_processed(
+        self, conn, driver, collection, watch_dir
+    ):
+        (watch_dir / "a.txt").write_text(
+            "Some content here that is long enough", encoding="utf-8"
+        )
+
+        daily_batch._run(conn, collection, driver)
+
+        run = conn.execute(
+            "SELECT * FROM ingestion_runs ORDER BY run_started_at DESC LIMIT 1"
+        ).fetchone()
+        assert run["current_item"] is not None
+        assert run["current_item"].startswith("local_file: ")
+
 
 class TestRelationshipStalenessOnEdit:
     """An edited, re-ingested item gets its relationships re-judged.

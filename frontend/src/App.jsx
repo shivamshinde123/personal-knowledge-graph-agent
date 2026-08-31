@@ -108,6 +108,7 @@ function App() {
             runId,
             itemsProcessed: lastRun.items_processed,
             status: lastRun.status,
+            currentItem: lastRun.current_item,
           });
         }
 
@@ -153,6 +154,7 @@ function App() {
       runId: result.run_id,
       itemsProcessed: 0,
       status: "running",
+      currentItem: null,
     });
     addToast("info", `Ingestion started (${result.run_id}).`);
     clearTimeout(ingestPollTimeout.current);

@@ -25,6 +25,7 @@ from storage.sqlite_store import (
     replace_chunks,
     reset_all,
     start_ingestion_run,
+    update_ingestion_run_current_item,
     update_ingestion_run_progress,
 )
 
@@ -276,6 +277,77 @@ class TestUpdateIngestionRunProgress:
         assert run.status == "success"
         assert run.items_processed == 10
         assert run.run_completed_at is not None
+
+    def test_sets_current_item_when_given(self, conn):
+        run_id = start_ingestion_run(conn)
+
+        update_ingestion_run_progress(
+            conn, run_id, 1, current_item="github: my-repo: fix the bug"
+        )
+
+        assert get_last_ingestion_run(conn).current_item == (
+            "github: my-repo: fix the bug"
+        )
+
+    def test_omitting_current_item_leaves_it_unchanged(self, conn):
+        run_id = start_ingestion_run(conn)
+        update_ingestion_run_progress(conn, run_id, 1, current_item="notion: a page")
+
+        update_ingestion_run_progress(conn, run_id, 2)
+
+        assert get_last_ingestion_run(conn).current_item == "notion: a page"
+
+
+class TestUpdateIngestionRunCurrentItem:
+    def test_sets_current_item_before_any_progress(self, conn):
+        run_id = start_ingestion_run(conn)
+
+        update_ingestion_run_current_item(conn, run_id, "Extracting github…")
+
+        run = get_last_ingestion_run(conn)
+        assert run.current_item == "Extracting github…"
+        assert run.items_processed == 0
+
+    def test_a_later_progress_update_can_overwrite_it(self, conn):
+        run_id = start_ingestion_run(conn)
+        update_ingestion_run_current_item(conn, run_id, "Extracting github…")
+
+        update_ingestion_run_progress(
+            conn, run_id, 1, current_item="github: my-repo: fix the bug"
+        )
+
+        assert get_last_ingestion_run(conn).current_item == (
+            "github: my-repo: fix the bug"
+        )
+
+
+class TestIngestionRunsSchemaMigration:
+    def test_adds_current_item_to_a_pre_existing_table(self, tmp_path):
+        import sqlite3
+
+        db_path = tmp_path / "pre_existing.db"
+        raw = sqlite3.connect(db_path)
+        raw.execute(
+            "CREATE TABLE ingestion_runs (id TEXT PRIMARY KEY, "
+            "run_started_at TIMESTAMP NOT NULL, run_completed_at TIMESTAMP, "
+            "status TEXT NOT NULL, items_processed INTEGER DEFAULT 0, "
+            "error_log TEXT)"
+        )
+        raw.execute(
+            "INSERT INTO ingestion_runs VALUES "
+            "('r1', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', "
+            "'success', 3, NULL)"
+        )
+        raw.commit()
+        raw.close()
+
+        migrated = connect(db_path)
+
+        run = get_last_ingestion_run(migrated)
+        assert run.id == "r1"
+        assert run.items_processed == 3
+        assert run.current_item is None
+        migrated.close()
 
 
 class TestGetLastIngestionRun:

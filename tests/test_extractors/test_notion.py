@@ -28,6 +28,16 @@ def block(block_type, text=None, id_="block-1", has_children=False):
     return entry
 
 
+def child_page_block(page_id, title):
+    """A nested-subpage block — no ``rich_text``, unlike other block types."""
+    return {
+        "type": "child_page",
+        "id": page_id,
+        "has_children": True,
+        "child_page": {"title": title},
+    }
+
+
 def make_page(
     page_id,
     title,
@@ -177,6 +187,122 @@ class TestExtraction:
         items = extract_new_items()
 
         assert items[0].title == "Untitled"
+
+
+class TestSubpages:
+    """A Notion subpage nested under a scoped/root page — see DECISIONS.md."""
+
+    def test_a_subpage_becomes_its_own_item_not_merged_into_the_parent(
+        self, monkeypatch
+    ):
+        parent = make_page("parent", "Parent")
+        subpage = make_page("sub-1", "Subpage")
+        blocks_by_parent = {
+            "parent": [
+                block("paragraph", "Parent text"),
+                child_page_block("sub-1", "Subpage"),
+            ],
+            "sub-1": [block("paragraph", "Subpage text")],
+        }
+        # Scoped mode (matching real usage — a workspace-search result
+        # already includes subpages as their own root pages, but scoped
+        # ingestion only ever calls pages.retrieve(), so `subpage` must be
+        # registered there without also being an independent root — see
+        # TestSubpages.test_a_page_reachable_as_both_a_root_and_a_subpage_
+        # is_not_duplicated for the unscoped/workspace-mode case).
+        install_fake_client(
+            monkeypatch,
+            [parent, subpage],
+            blocks_by_parent,
+            notion_page_ids=["parent"],
+        )
+
+        items = extract_new_items()
+
+        by_id = {item.source_ref_id: item for item in items}
+        assert by_id["parent"].raw_text == "Parent text"
+        assert by_id["sub-1"].raw_text == "Subpage text"
+        assert by_id["sub-1"].title == "Subpage"
+        assert by_id["sub-1"].url_or_path == "https://notion.so/sub-1"
+
+    def test_subpages_nest_arbitrarily_deep(self, monkeypatch):
+        parent = make_page("parent", "Parent")
+        sub_1 = make_page("sub-1", "Sub 1")
+        sub_2 = make_page("sub-2", "Sub 2")
+        blocks_by_parent = {
+            "parent": [child_page_block("sub-1", "Sub 1")],
+            "sub-1": [
+                block("paragraph", "Sub 1 text"),
+                child_page_block("sub-2", "Sub 2"),
+            ],
+            "sub-2": [block("paragraph", "Sub 2 text")],
+        }
+        install_fake_client(
+            monkeypatch,
+            [parent, sub_1, sub_2],
+            blocks_by_parent,
+            notion_page_ids=["parent"],
+        )
+
+        items = extract_new_items()
+
+        assert {item.source_ref_id for item in items} == {"sub-1", "sub-2"}
+
+    def test_a_subpage_is_discovered_even_when_the_parent_is_unchanged(
+        self, monkeypatch
+    ):
+        parent = make_page(
+            "parent", "Parent", last_edited_time="2026-08-01T00:00:00.000Z"
+        )
+        subpage = make_page(
+            "sub-1", "Subpage", last_edited_time="2026-08-10T00:00:00.000Z"
+        )
+        blocks_by_parent = {
+            "parent": [child_page_block("sub-1", "Subpage")],
+            "sub-1": [block("paragraph", "Subpage text")],
+        }
+        install_fake_client(
+            monkeypatch,
+            [parent, subpage],
+            blocks_by_parent,
+            notion_page_ids=["parent"],
+        )
+
+        items = extract_new_items(since=datetime(2026, 8, 5, tzinfo=UTC))
+
+        # The parent is unchanged since `since` and is correctly excluded,
+        # but its subpage — independently newer — must still surface.
+        assert [item.source_ref_id for item in items] == ["sub-1"]
+
+    def test_an_unfetchable_subpage_is_skipped_not_raised(self, monkeypatch):
+        parent = make_page("parent", "Parent")
+        blocks_by_parent = {
+            "parent": [
+                block("paragraph", "Parent text"),
+                child_page_block("does-not-exist", "Ghost"),
+            ]
+        }
+        install_fake_client(monkeypatch, [parent], blocks_by_parent)
+
+        items = extract_new_items()
+
+        assert [item.source_ref_id for item in items] == ["parent"]
+
+    def test_a_page_reachable_as_both_a_root_and_a_subpage_is_not_duplicated(
+        self, monkeypatch
+    ):
+        parent = make_page("parent", "Parent")
+        subpage = make_page("sub-1", "Also root")
+        blocks_by_parent = {
+            "parent": [child_page_block("sub-1", "Also root")],
+            "sub-1": [block("paragraph", "text")],
+        }
+        install_fake_client(monkeypatch, [parent, subpage], blocks_by_parent)
+
+        items = extract_new_items()
+
+        ids = [item.source_ref_id for item in items]
+        assert ids.count("sub-1") == 1
 
 
 class TestIncrementalFiltering:
