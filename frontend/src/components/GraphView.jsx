@@ -41,9 +41,21 @@ const DIMMED_OPACITY = 0.15;
 // a node, counts as a click (toggle selection) rather than a completed
 // drag — distinguishing the two on the same pointer sequence.
 const CLICK_DRAG_THRESHOLD_PX = 4;
+// GitHub item titles in particular (commit messages, PR/issue titles) run
+// long and, rendered in full next to every node, overlap and clutter the
+// layout — see DECISIONS.md. Truncated in the label; the full title is
+// still available via the node's native <title> tooltip on hover.
+const MAX_LABEL_LENGTH = 32;
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function truncateLabel(title) {
+  const text = title || "Untitled";
+  return text.length > MAX_LABEL_LENGTH
+    ? `${text.slice(0, MAX_LABEL_LENGTH - 1)}…`
+    : text;
 }
 
 // Fallback size before the container has been measured (first paint) —
@@ -554,6 +566,9 @@ function GraphView() {
                     onPointerUp={handleNodePointerUp}
                     onPointerCancel={handleNodePointerUp}
                   >
+                    {/* Full, untruncated title on hover — a native SVG
+                        <title> needs no extra state/positioning logic. */}
+                    <title>{node.title || "Untitled"}</title>
                     <circle
                       cx={node.x}
                       cy={node.y}
@@ -565,7 +580,7 @@ function GraphView() {
                       x={node.x + 14}
                       y={node.y + 4}
                     >
-                      {node.title || "Untitled"}
+                      {truncateLabel(node.title)}
                     </text>
                   </g>
                 );
