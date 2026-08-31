@@ -229,6 +229,24 @@ class IngestTriggerResponse(BaseModel):
     run_id: str
 
 
+class IngestCancelRequest(BaseModel):
+    """``POST /api/ingest/cancel`` request body."""
+
+    run_id: str
+
+
+class IngestCancelResponse(BaseModel):
+    """``POST /api/ingest/cancel`` response body.
+
+    Acknowledges the request only — the run stops at its next check point,
+    not immediately, so the actual outcome (``status: "cancelled"`` on the
+    run) is observed afterward via ``GET /api/sources/status``, same as
+    every other ingestion outcome.
+    """
+
+    status: Literal["cancel_requested"]
+
+
 class AdminResetRequest(BaseModel):
     """``POST /api/admin/reset`` request body.
 

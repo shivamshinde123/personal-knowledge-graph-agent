@@ -1,4 +1,6 @@
-"""Tests for POST /api/ingest/trigger."""
+"""Tests for POST /api/ingest/trigger and POST /api/ingest/cancel."""
+
+from storage.sqlite_store import is_cancellation_requested, start_ingestion_run
 
 
 class TestTriggerIngestion:
@@ -27,3 +29,20 @@ class TestTriggerIngestion:
         client.post("/api/ingest/trigger")
 
         assert len(calls) == 1
+
+
+class TestCancelIngestion:
+    def test_sets_the_cancellation_flag_on_the_given_run(self, client, conn):
+        run_id = start_ingestion_run(conn)
+
+        response = client.post("/api/ingest/cancel", json={"run_id": run_id})
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "cancel_requested"}
+        assert is_cancellation_requested(conn, run_id) is True
+
+    def test_an_unknown_run_id_still_acknowledges(self, client):
+        response = client.post("/api/ingest/cancel", json={"run_id": "no-such-run"})
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "cancel_requested"}

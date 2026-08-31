@@ -6,10 +6,10 @@ outside the daily schedule, primarily for development and testing.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Request, status
 
-from agent.ingest_trigger import trigger_ingestion
-from api.schemas import IngestTriggerResponse
+from agent.ingest_trigger import cancel_ingestion, trigger_ingestion
+from api.schemas import IngestCancelRequest, IngestCancelResponse, IngestTriggerResponse
 
 router = APIRouter()
 
@@ -27,3 +27,20 @@ def trigger_ingestion_route() -> IngestTriggerResponse:
     """
     run_id = trigger_ingestion()
     return IngestTriggerResponse(status="started", run_id=run_id)
+
+
+@router.post("/ingest/cancel", response_model=IngestCancelResponse)
+def cancel_ingestion_route(
+    payload: IngestCancelRequest, request: Request
+) -> IngestCancelResponse:
+    """Ask a running batch to stop at its next check point.
+
+    ``run_id`` is the ``ingestion_runs.id`` from
+    ``GET /api/sources/status``'s ``last_run.run_id`` — not the display
+    label ``POST /api/ingest/trigger`` returns (see ``agent/ingest_trigger.py``).
+    Acknowledges the request only; the run may take a moment to actually
+    stop, and stops with whatever it had already processed kept, not rolled
+    back.
+    """
+    cancel_ingestion(request.app.state.conn, payload.run_id)
+    return IngestCancelResponse(status="cancel_requested")

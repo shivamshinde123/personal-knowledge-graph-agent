@@ -7,8 +7,11 @@ unit test and exactly what the other test suites already cover directly.
 
 import sys
 
-from agent.ingest_trigger import trigger_ingestion
+import pytest
+
+from agent.ingest_trigger import cancel_ingestion, trigger_ingestion
 from config.settings import PROJECT_ROOT
+from storage.sqlite_store import connect, is_cancellation_requested, start_ingestion_run
 
 
 class FakePopen:
@@ -44,3 +47,19 @@ class TestTriggerIngestion:
         run_id = trigger_ingestion()
 
         assert run_id.startswith("run_manual_")
+
+
+@pytest.fixture
+def conn():
+    connection = connect(":memory:")
+    yield connection
+    connection.close()
+
+
+class TestCancelIngestion:
+    def test_requests_cancellation_for_the_given_run(self, conn):
+        run_id = start_ingestion_run(conn)
+
+        cancel_ingestion(conn, run_id)
+
+        assert is_cancellation_requested(conn, run_id) is True
