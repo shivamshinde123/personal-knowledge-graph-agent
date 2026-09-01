@@ -173,6 +173,13 @@ class SourceConfigResponse(BaseModel):
     ``github_date_range_start``/``_end`` are the one pair that can
     genuinely be ``None`` — GitHub's own range was never asked to default.
     See ``DECISIONS.md``.
+
+    ``running_in_docker`` mirrors ``EnvSettings.running_in_docker`` — when
+    true, ``local_files_watch_dirs`` is a fixed, Docker-volume-backed path
+    the frontend must render read-only (no "Browse…" button, no editable
+    textarea): the running app cannot mount a new host folder into itself,
+    only ``docker-compose.yml`` can, at container-start. See
+    ``DECISIONS.md``.
     """
 
     local_files_watch_dirs: list[str]
@@ -184,6 +191,7 @@ class SourceConfigResponse(BaseModel):
     github_date_range_end: str | None
     calendar_date_range_start: str | None
     calendar_date_range_end: str | None
+    running_in_docker: bool
 
 
 class SourceConfigUpdateRequest(BaseModel):

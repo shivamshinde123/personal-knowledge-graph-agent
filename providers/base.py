@@ -514,11 +514,11 @@ class LangChainProvider(ProviderInterface):
             embed_fn: Embeds a batch of texts, backing
                 :meth:`generate_embeddings`. Not a LangChain ``Embeddings``
                 object directly — ``create_local_provider()`` wraps
-                ``sentence-transformers``, ``create_openrouter_provider()``
-                wraps a LangChain ``OpenAIEmbeddings`` — so this stays a
-                plain callable rather than committing to one shape.
-                ``None`` for a provider that never embeds (e.g. tests
-                exercising only the chat-model methods).
+                ``OllamaEmbeddings``, ``create_openrouter_provider()``
+                wraps ``OpenAIEmbeddings`` — so this stays a plain
+                callable rather than committing to one shape. ``None`` for
+                a provider that never embeds (e.g. tests exercising only
+                the chat-model methods).
         """
         self._chat_model = chat_model
         self._provider_name = provider_name

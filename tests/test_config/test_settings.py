@@ -123,6 +123,14 @@ class TestEnvSettings:
 
         EnvSettings()  # must not raise
 
+    def test_running_in_docker_defaults_to_false(self):
+        assert EnvSettings().running_in_docker is False
+
+    def test_running_in_docker_reads_from_the_environment(self, monkeypatch):
+        monkeypatch.setenv("RUNNING_IN_DOCKER", "true")
+
+        assert EnvSettings().running_in_docker is True
+
 
 class TestEffectiveDateRanges:
     """Gmail/Calendar default to a rolling window when unset.

@@ -704,6 +704,45 @@ test doubles/temp resources instead.
 
 ---
 
+## Entry point: `scheduler/loop.py` (`run_forever()`)
+
+Run via `uv run python -m scheduler.loop` — the Docker-only counterpart to
+`scheduler/daily_batch.py` above. `docker-compose.yml` runs this as its own
+long-lived `scheduler` service, replacing "register a cron/Task Scheduler
+entry by hand" entirely for a containerized deployment, since there's no
+host-level cron/Task Scheduler inside a container to register with instead.
+A manual (non-Docker) developer setup still uses real cron/Task Scheduler
+against `scheduler/daily_batch.py` directly, as documented in the README —
+this loop doesn't replace that path. See DECISIONS.md (issue #52).
+
+1. `run_forever()` reads `now_fn()` once at startup as `last_check`, then
+   loops forever: `sleep(poll_interval_seconds)` (default 30s), reads
+   `now_fn()` again, and calls `config.settings.reload_settings()` fresh
+   on every iteration — not just once at startup — so editing
+   `config.yaml`'s `ingestion.schedule` from Settings takes effect within
+   one poll interval, without restarting this container
+2. `_should_run(schedule, last_check, now)` — `croniter(schedule,
+   last_check).get_next(datetime) <= now`. Searching strictly after
+   `last_check` (not `now`) means the same fire time is never matched
+   twice across consecutive polls
+3. **Branch point**: if due, calls `scheduler.daily_batch.main()` (the
+   exact same entrypoint a manual cron/Task Scheduler registration would
+   call) — a raised exception here is logged (`logger.exception()`) and
+   swallowed, never ending the loop, the same "one bad run doesn't end the
+   schedule" reasoning `daily_batch.py`'s own per-source/per-item error
+   handling already has
+4. `last_check` is updated to `now` regardless of whether a run happened,
+   so the next iteration's search window starts from here
+
+`sleep`, `now_fn`, and `run_batch` are all injectable keyword arguments,
+defaulting to the real `time.sleep`/wall clock/`daily_batch.main` — tests
+substitute a `sleep` that raises after a fixed number of calls (the only
+way to terminate an intentionally infinite loop deterministically) and a
+`now_fn` that advances a fake clock per call, since real elapsed time
+between two calls to a mocked `sleep` is otherwise near zero.
+
+---
+
 ## Shared: query router (`agent/router.py`)
 
 Not an entry point itself — will be called by `agent/graph.py::run()` once
@@ -868,6 +907,13 @@ and registers every route module from `api/routes/`; the module-level
    `import.meta.env.VITE_API_BASE_URL`, which `client.js`'s `API_BASE_URL`
    reads, so the two processes can never drift out of sync on which port
    the backend actually ended up on. See DECISIONS.md, 2026-08-31.
+   `_select_bind_host()` picks the interface `uvicorn.run()` binds:
+   `"127.0.0.1"` on bare metal (this backend's normal "local-only,
+   single-user" posture), or `"0.0.0.0"` when `settings.env.running_in_docker`
+   is set — `127.0.0.1` inside a container is invisible to Docker's own
+   port-forwarding, which connects to the container's *external* interface,
+   not its loopback; verified directly against a real running stack (see
+   DECISIONS.md, 2026-09-02, issue #52)
 
 1. On startup, the `lifespan` context manager first calls
    `agent/tracing.py::enable_tracing()` (a no-op if no `LANGSMITH_API_KEY`
@@ -906,6 +952,48 @@ DECISIONS.md, 2026-08-25.
 `127.0.0.1` origin on any port — needed for `frontend/`'s Vite dev server
 (a different port/origin) to call this API at all. See DECISIONS.md,
 2026-08-25.
+
+---
+
+## Entry point: `docker compose up -d --build` (issue #52)
+
+Not a code entry point itself — a deployment topology wrapping the real
+entry points above/below it. See DECISIONS.md, 2026-09-02.
+
+1. `neo4j` starts first; `backend`/`scheduler` both `depends_on:
+   condition: service_healthy` on it, so neither starts until Neo4j's own
+   healthcheck (`wget` against its HTTP port) passes
+2. `backend` and `scheduler` are the **same built image**
+   (`docker/backend.Dockerfile`) with different `command`s —
+   `python -m api.main` vs. `python -m scheduler.loop` — sharing one
+   `app_data` named volume (`/app/data`, holding both the SQLite db and
+   Chroma's persist dir) so either process's writes are visible to the
+   other, the same "share the filesystem" relationship a manual dev
+   setup's foreground backend process and spawned `daily_batch`
+   subprocess already have
+3. Both mount the real `config/.env` read-only via `env_file:` unchanged —
+   every credential works exactly as it does outside Docker — while a
+   compose-level `environment:` block overrides only
+   `SQLITE_DB_PATH`/`CHROMA_PERSIST_DIR`/`NEO4J_URI`/`OLLAMA_HOST`/
+   `LOCAL_FILES_WATCH_DIRS`/`RUNNING_IN_DOCKER`, since those must point
+   in-container/in-network rather than at the host; real env vars set
+   this way win over the mounted file's own values
+4. `ollama` only starts when the `local-llm` Compose profile is active
+   (`--profile local-llm`, or `COMPOSE_PROFILES=local-llm` in the
+   root-level `.env`) — irrelevant, and skipped, under
+   `provider_mode: fully_cloud`
+5. `frontend` (`docker/frontend.Dockerfile`, multi-stage: `npm run build`
+   → served by bare `nginx`) is built with `VITE_API_BASE_URL` baked in
+   at image-build time from `HOST_BACKEND_PORT` — the *published* host
+   port, since the browser making requests runs on the host, not inside
+   the Docker network (see `frontend/vite.config.js`'s own comment,
+   `api/main.py`'s `_select_bind_host()` above)
+6. Two separate `.env` files are in play, deliberately: the root-level one
+   (`.env.docker.example` → `.env`) is read only by `docker compose`
+   itself to fill in `${VARS}` in `docker-compose.yml` (`NEO4J_PASSWORD`,
+   `HOST_WATCH_DIR`, `HOST_DATA_DIR`, published ports); `config/.env` is
+   the application's own configuration, identical in shape to a manual
+   dev setup's
 
 ---
 
@@ -1036,10 +1124,15 @@ See DECISIONS.md, 2026-08-29.
 Extension beyond `docs/API_Specification.docx` — see `agent/browse.py`,
 DECISIONS.md, 2026-08-30.
 
-1. `agent/browse.py::browse_folder()` — shells out to a PowerShell
-   `System.Windows.Forms.FolderBrowserDialog` script, blocking until the
-   dialog is closed
-2. Returns `{"path": <string> | null}` — `null` if the user cancelled
+1. **Branch point**: if `settings.env.running_in_docker` is set, returns a
+   `422 {"error": "not_available_in_docker", ...}` directly, without
+   attempting the dialog at all — neither a GUI nor PowerShell itself
+   exists inside a Linux container (see DECISIONS.md, 2026-09-02, "Local
+   files watch dirs become a fixed, read-only Docker volume mount")
+2. Otherwise: `agent/browse.py::browse_folder()` — shells out to a
+   PowerShell `System.Windows.Forms.FolderBrowserDialog` script, blocking
+   until the dialog is closed
+3. Returns `{"path": <string> | null}` — `null` if the user cancelled
    rather than picking a folder
 
 ---
@@ -1059,8 +1152,16 @@ provider config. See DECISIONS.md, 2026-08-30.
    defaulted when unset (see DECISIONS.md, 2026-09-01) — while GitHub's
    own date range is read raw (`github_date_range_start`/`_end`, still
    `None`-able)
-2. `PUT /settings/sources` → `config/settings.py::update_source_config()`
-   — writes `LOCAL_FILES_WATCH_DIRS`/`NOTION_PAGE_IDS`/
+2. `PUT /settings/sources` — **branch point**: if the payload includes
+   `local_files_watch_dirs` (non-`None`) while
+   `settings.env.running_in_docker` is set, returns `422
+   {"error": "not_available_in_docker", ...}` immediately, without calling
+   `update_source_config()` at all — that field is a fixed,
+   volume-mount-backed container path in Docker, not something the running
+   app can change on its own (see DECISIONS.md, 2026-09-02). Every other
+   field in the same payload is unaffected by this check. Otherwise:
+   `config/settings.py::update_source_config()` — writes
+   `LOCAL_FILES_WATCH_DIRS`/`NOTION_PAGE_IDS`/
    `CALENDAR_DATE_RANGE_START`/`_END`/etc. to `config/.env` via
    `python-dotenv`'s `set_key()` (rewrites just those lines in place,
    leaving every other line/comment untouched), only the given fields (a
@@ -1068,7 +1169,10 @@ provider config. See DECISIONS.md, 2026-08-30.
    shared handler
 3. Both return `{"local_files_watch_dirs": [...], "notion_page_ids": [...],
    "github_repos": [...], "gmail_date_range_start"/"_end",
-   "github_date_range_start"/"_end", "calendar_date_range_start"/"_end"}`
+   "github_date_range_start"/"_end", "calendar_date_range_start"/"_end",
+   "running_in_docker": bool}` — the last field tells the frontend which
+   Local Files UI to render (editable + Browse vs. read-only list, see
+   `SettingsPanel.jsx` below)
 4. `extractors/notion.py::extract_new_items()` reads
    `notion_page_ids_list` on its next run: non-empty means fetch exactly
    those pages by id (`client.pages.retrieve()`) instead of the
@@ -1362,7 +1466,13 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    with manually pasted paths rather than replacing them, then calls
    `saveScopeTextarea()` explicitly — a path picked this way never fires
    the textarea's own `onBlur`, since the user never focused it — see
-   DECISIONS.md, 2026-08-30 and 2026-09-01. The "Data Ingestion" section also renders the
+   DECISIONS.md, 2026-08-30 and 2026-09-01. **Branch point**: when
+   `sources.running_in_docker` is true (see `GET /api/settings/sources`
+   above), "Local folders to watch" renders read-only instead — a plain
+   list built from the same `watchDirsText` state, no "Browse…" button, no
+   editable textarea, with a hint pointing at `HOST_WATCH_DIR` + restarting
+   the stack as the way to actually change it (see DECISIONS.md,
+   2026-09-02). The "Data Ingestion" section also renders the
    `ingestionStatus` prop (from `App.jsx`, see above), when non-null, as a
    "Started at HH:MM:SS" line plus a progress bar — an indeterminate
    sliding-segment animation while `status === "running"` (no known total

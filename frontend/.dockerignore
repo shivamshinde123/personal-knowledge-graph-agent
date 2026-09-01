@@ -1,0 +1,15 @@
+# docker/frontend.Dockerfile's build context is this directory (`frontend/`),
+# not the repo root -- the root .dockerignore does not apply here at all,
+# Docker resolves ignore rules relative to each build's own context.
+# Verified directly: without this file, the frontend image's build context
+# included the local node_modules/ and dist/, ballooning context transfer
+# to ~430MB and 200+ seconds for no reason -- both get rebuilt fresh
+# inside the image regardless. See DECISIONS.md (issue #52).
+
+node_modules/
+dist/
+build/
+npm-debug.log*
+.vscode/
+.idea/
+.DS_Store

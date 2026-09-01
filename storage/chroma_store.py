@@ -123,10 +123,12 @@ def _to_search_result(
 def get_collection(persist_dir: Path | str | None = None) -> Collection:
     """Open the single embedded Chroma collection, creating it if needed.
 
-    Configures cosine similarity, matching the sentence-transformers
-    embeddings ``pipeline/embeddings.py`` will write here. No embedding
-    function is attached: every write in this module supplies its own
-    precomputed vector, so Chroma is never asked to embed anything itself.
+    Configures cosine similarity, matching the normalized embeddings
+    (Ollama or OpenAI-compatible, depending on ``provider_mode`` — see
+    ``providers/``) ``pipeline/embeddings.py`` will write here. No
+    embedding function is attached: every write in this module supplies
+    its own precomputed vector, so Chroma is never asked to embed anything
+    itself.
 
     Args:
         persist_dir: Directory Chroma persists to. Defaults to

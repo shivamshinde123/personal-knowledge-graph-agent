@@ -11,10 +11,12 @@ no hosted database, and no authentication — by design. It's built primarily as
 a portfolio project demonstrating applied depth in LangChain, LangGraph, and
 LangSmith, and secondarily as a genuinely useful personal tool.
 
-> **Docker packaging for easy install/distribution is planned as the last
-> step**, once the current feature set is fully tested end-to-end — see
-> [Roadmap](#roadmap). Until then, running this means a manual developer
-> setup (below).
+> **Docker Compose packaging is available** — see [Docker](#docker) below
+> for the fastest path to a running stack. A guided first-run setup wizard
+> (so connecting sources needs no manual `.env` editing at all) is still
+> planned — see [Roadmap](#roadmap); until then, Docker still requires
+> filling in `config/.env` by hand once, the same as the manual developer
+> setup below.
 
 <p align="center">
   <img src="docs/screenshots/chat.png" width="100%" alt="Chat screen" />
@@ -206,6 +208,7 @@ blocks the app or takes it down if something goes wrong.
 | Graph store | Neo4j Community Edition (local) |
 | LLM/embeddings | Ollama (local) or OpenRouter (cloud) |
 | Package management | [uv](https://docs.astral.sh/uv/) (Python), npm (frontend) |
+| Packaging/deployment | Docker Compose |
 
 Full rationale for each choice is in `docs/Tech_Stack.docx`.
 
@@ -219,12 +222,69 @@ providers/     LLM provider abstraction (local vs. cloud)
 agent/         LangGraph node wiring — router, search, synthesizer
 api/           FastAPI app and routes
 frontend/      React app — chat, graph, and settings screens
-scheduler/     the daily ingestion batch entrypoint
+scheduler/     the daily ingestion batch entrypoint, plus the Docker scheduler sidecar
 eval/          LangSmith evaluation runner and test questions
 config/        typed settings, config.yaml, .env.example
+docker/        Dockerfiles for the backend/scheduler and frontend images
 tests/         mirrors the source tree
 docs/          the original design document set — see the note below
 ```
+
+## Docker
+
+The fastest way to get the whole stack running persistently — backend,
+frontend, Neo4j, and (optionally) Ollama, plus a scheduler sidecar that
+replaces registering your own cron/Task Scheduler entry — without installing
+uv, Node.js, Neo4j, or Ollama on your machine at all.
+
+**Prerequisites**: [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+(or Docker Engine + Compose on Linux).
+
+```bash
+cp .env.docker.example .env       # at the repo root -- fills in docker-compose.yml's own variables
+cp config/.env.example config/.env   # the app's own config -- fill in the credentials you need
+# edit both .env files: at minimum, .env needs NEO4J_PASSWORD
+
+docker compose up -d --build
+```
+
+- Frontend: `http://localhost:3000` (or `HOST_FRONTEND_PORT` if you changed it)
+- Backend API: `http://localhost:8080/api` (or `HOST_BACKEND_PORT`)
+- Add `--profile local-llm` to the `up` command (or set `COMPOSE_PROFILES=local-llm`
+  in `.env`) to also start an Ollama container, if `config/.env`'s
+  `provider_mode` is `fully_local`.
+
+**A few things work differently under Docker than a manual setup**, all
+called out directly in Settings when they apply:
+
+- **Local folders to watch** is fixed, not editable from Settings — set
+  `HOST_WATCH_DIR` in `.env` (the repo-root one) to the host folder you want
+  ingested, then `docker compose up -d` again to apply a change. There's no
+  "Browse…" button, since there's no GUI inside a container to open a native
+  dialog from.
+- **Gmail/Calendar OAuth and browser history** still need the same manual
+  one-time setup a developer install does (see `docs/Environment_Config_Reference.docx`)
+  — a guided setup wizard that removes this is planned (see
+  [Roadmap](#roadmap)) but not built yet. Point `config/.env`'s
+  `GMAIL_CREDENTIALS_PATH`/`GOOGLE_CALENDAR_CREDENTIALS_PATH`/
+  `BROWSER_HISTORY_PATH` at a file under `/host-data/...` once you've set
+  `HOST_DATA_DIR` in `.env` and copied the file there — `config/.env` itself
+  is mounted into the containers unchanged, so every other credential
+  (Notion, GitHub, OpenRouter) just works the same way it does in a manual
+  setup.
+
+**Persistence**: every container restarts automatically
+(`restart: unless-stopped`) after a crash or a host reboot, as long as
+Docker itself is set to start on login — a one-time Docker Desktop setting,
+not something `docker-compose.yml` controls. SQLite, Chroma, and Neo4j's
+data all live in named Docker volumes, so `docker compose down` (without
+`-v`) keeps everything across a full stack restart; add `-v` only when you
+actually want a clean slate.
+
+**Useful commands**: `docker compose logs -f backend` (or `scheduler`/
+`frontend`/`neo4j`) to tail one service's logs; `docker compose down` to
+stop everything without deleting data; `docker compose up -d --build` again
+after pulling code changes.
 
 ## Setup (developer / manual)
 
@@ -276,11 +336,11 @@ changes — read those first, and treat `docs/` as historical context.
 
 ## Roadmap
 
-- **Docker packaging** ([issue #52](https://github.com/shivamshinde123/personal-knowledge-graph-agent/issues/52)), planned last: a Compose stack bundling the backend, Neo4j, and the frontend, with scheduled ingestion and a first-run setup flow — the "download and run it" milestone.
+- **Guided first-run setup wizard** ([issue #92](https://github.com/shivamshinde123/personal-knowledge-graph-agent/issues/92)): removes the last manual step in [Docker](#docker) setup — connecting each source (API keys, Gmail/Calendar OAuth, folders/pages/repos to ingest, provider mode) through an in-app wizard instead of hand-editing `config/.env`.
 - End-to-end testing of the Gmail and Calendar extractors against real data ([issue #68](https://github.com/shivamshinde123/personal-knowledge-graph-agent/issues/68)).
 
 ## Status
 
 Core system built and working end-to-end — all six extractors, the agent, the
 API, and the full frontend are implemented and under active, real-data
-testing. Not yet packaged for distribution.
+testing. Docker Compose packaging ([issue #52](https://github.com/shivamshinde123/personal-knowledge-graph-agent/issues/52)) is done — see [Docker](#docker) — with a guided first-run setup wizard as the one remaining piece before this is a true "download and run it" install.

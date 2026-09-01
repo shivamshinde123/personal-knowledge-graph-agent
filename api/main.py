@@ -198,6 +198,28 @@ def _select_port() -> int:
     )
 
 
+def _select_bind_host() -> str:
+    """Pick which interface to bind: loopback on bare metal, all on Docker.
+
+    Loopback-only on a bare-metal dev machine (per
+    ``docs/System_Architecture_Document.docx`` section 6.2's "local-only,
+    single-user" posture) — but inside a Docker container, ``127.0.0.1``
+    is the container's *own* loopback, invisible to Docker's port
+    publishing (``-p 8080:8080`` connects to the container's external
+    interface, not its loopback). Verified directly: the backend was
+    fully healthy in its own logs but unreachable from the host until
+    this was made to bind ``0.0.0.0`` there — the container's network
+    namespace is already the isolation boundary at that point, so this
+    doesn't reopen the "don't expose to the LAN" concern the loopback
+    bind exists for on bare metal. See DECISIONS.md (issue #52).
+
+    Returns:
+        ``"0.0.0.0"`` when ``settings.env.running_in_docker`` is set,
+        otherwise ``"127.0.0.1"``.
+    """
+    return "0.0.0.0" if get_settings().env.running_in_docker else "127.0.0.1"
+
+
 if __name__ == "__main__":
     import uvicorn
 
@@ -208,9 +230,11 @@ if __name__ == "__main__":
     chosen_port = _select_port()
     _PORT_FILE.parent.mkdir(parents=True, exist_ok=True)
     _PORT_FILE.write_text(str(chosen_port), encoding="utf-8")
+    bind_host = _select_bind_host()
     logger.info(
-        "Starting on http://127.0.0.1:%d (wrote %s for the frontend dev server)",
+        "Starting on http://%s:%d (wrote %s for the frontend dev server)",
+        bind_host,
         chosen_port,
         _PORT_FILE,
     )
-    uvicorn.run(app, host="127.0.0.1", port=chosen_port)
+    uvicorn.run(app, host=bind_host, port=chosen_port)

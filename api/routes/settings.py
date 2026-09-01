@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import date
 
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 
 from agent.browse import browse_folder
 from api.schemas import (
@@ -88,23 +89,63 @@ def get_source_config_route() -> SourceConfigResponse:
         github_date_range_end=_isoformat(env.github_date_range_end),
         calendar_date_range_start=_isoformat(env.effective_calendar_date_range_start),
         calendar_date_range_end=_isoformat(env.effective_calendar_date_range_end),
+        running_in_docker=env.running_in_docker,
     )
 
 
 @router.post("/settings/browse-folder", response_model=BrowseFolderResponse)
-def browse_folder_route() -> BrowseFolderResponse:
+def browse_folder_route():
     """Open a native folder-picker dialog on the server machine.
 
     Only meaningful because this backend runs on the same local machine as
-    the user — see ``agent/browse.py``. Blocks until the dialog is closed;
-    ``path`` is ``null`` if the user cancelled rather than picking one.
+    the user, and only possible on Windows (``agent/browse.py`` shells out
+    to PowerShell) — neither holds inside a Docker container, so this
+    returns a clear ``422`` instead of attempting the dialog at all when
+    ``running_in_docker`` is set (see ``EnvSettings.running_in_docker``'s
+    docstring, ``DECISIONS.md``). Blocks until the dialog is closed
+    otherwise; ``path`` is ``null`` if the user cancelled rather than
+    picking one.
     """
+    if get_settings().env.running_in_docker:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": "not_available_in_docker",
+                "detail": (
+                    "The folder picker isn't available when running in "
+                    "Docker. Set HOST_WATCH_DIR in your docker-compose "
+                    ".env and restart the stack to change watched folders."
+                ),
+            },
+        )
     return BrowseFolderResponse(path=browse_folder())
 
 
 @router.put("/settings/sources", response_model=SourceConfigResponse)
-def put_source_config_route(payload: SourceConfigUpdateRequest) -> SourceConfigResponse:
-    """Update the source-scope configuration; a ``ConfigError`` maps to 500."""
+def put_source_config_route(payload: SourceConfigUpdateRequest):
+    """Update the source-scope configuration; a ``ConfigError`` maps to 500.
+
+    ``local_files_watch_dirs`` is rejected with a ``422`` while
+    ``running_in_docker`` is set — it's a fixed, volume-backed container
+    path in that mode, not something the running app can change on its own
+    (see ``SourceConfigResponse``'s docstring). Every other field is
+    unaffected by this check.
+    """
+    if (
+        payload.local_files_watch_dirs is not None
+        and get_settings().env.running_in_docker
+    ):
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": "not_available_in_docker",
+                "detail": (
+                    "local_files_watch_dirs can't be changed while running "
+                    "in Docker. Set HOST_WATCH_DIR in your docker-compose "
+                    ".env and restart the stack instead."
+                ),
+            },
+        )
     env = update_source_config(
         local_files_watch_dirs=payload.local_files_watch_dirs,
         notion_page_ids=payload.notion_page_ids,
@@ -126,6 +167,7 @@ def put_source_config_route(payload: SourceConfigUpdateRequest) -> SourceConfigR
         github_date_range_end=_isoformat(env.github_date_range_end),
         calendar_date_range_start=_isoformat(env.effective_calendar_date_range_start),
         calendar_date_range_end=_isoformat(env.effective_calendar_date_range_end),
+        running_in_docker=env.running_in_docker,
     )
 
 

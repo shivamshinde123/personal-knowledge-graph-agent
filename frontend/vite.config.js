@@ -23,6 +23,16 @@ function readBackendPort() {
   }
 }
 
+// A Docker build has no backend_port.txt to read at all (a fresh
+// checkout, built before either container has ever run) and, unlike a
+// dev machine, the backend's published port is a docker-compose choice
+// (HOST_BACKEND_PORT) baked in at image-build time, not discoverable at
+// runtime — so docker/frontend.Dockerfile passes VITE_API_BASE_URL as a
+// real build-time environment variable, which takes priority over the
+// port-file lookup above when set. See DECISIONS.md (issue #52).
+const apiBaseUrl =
+  process.env.VITE_API_BASE_URL || `http://127.0.0.1:${readBackendPort()}/api`;
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
@@ -33,8 +43,6 @@ export default defineConfig({
     port: 5173,
   },
   define: {
-    "import.meta.env.VITE_API_BASE_URL": JSON.stringify(
-      `http://127.0.0.1:${readBackendPort()}/api`,
-    ),
+    "import.meta.env.VITE_API_BASE_URL": JSON.stringify(apiBaseUrl),
   },
 });

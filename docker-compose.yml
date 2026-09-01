@@ -1,0 +1,124 @@
+# Docker Compose packaging for the Personal Knowledge Graph Agent --
+# issue #52. Gets the whole stack (backend, frontend, Neo4j, Ollama,
+# scheduler) running persistently with one command, replacing the manual
+# developer setup (uv sync, npm install, installing/running Neo4j and
+# Ollama by hand, registering a cron/Task Scheduler entry) for an end user.
+#
+# Setup: copy .env.docker.example to .env (this file, at the repo root --
+# distinct from config/.env, the application's own config) and fill in at
+# least NEO4J_PASSWORD, then `docker compose up -d`. See README.md's
+# Docker section for the full walkthrough.
+#
+# What this does NOT do yet: guide a first-run user through connecting
+# sources (API keys, Gmail/Calendar OAuth) -- that's issue #92, deliberately
+# scoped out of this round. Until then, config/.env still needs filling in
+# by hand the same way a manual dev setup does, then mounted in below.
+
+services:
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in .env}
+    volumes:
+      - neo4j_data:/data
+    ports:
+      - "${HOST_NEO4J_HTTP_PORT:-7474}:7474"
+      - "${HOST_NEO4J_BOLT_PORT:-7687}:7687"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # Only started when the "local-llm" profile is active
+  # (`docker compose --profile local-llm up -d`, or COMPOSE_PROFILES=local-llm
+  # in .env) -- skipped entirely under provider_mode: fully_cloud, since
+  # nothing else in the stack needs it then. See DECISIONS.md.
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "${HOST_OLLAMA_PORT:-11434}:11434"
+    restart: unless-stopped
+    profiles: ["local-llm"]
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    env_file:
+      - config/.env
+    environment:
+      # Overrides config/.env's own values for anything that must point
+      # inside this container/network rather than at the host -- real
+      # process env vars set here take priority over the mounted .env
+      # file's values (pydantic-settings' own precedence order). See
+      # DECISIONS.md.
+      RUNNING_IN_DOCKER: "true"
+      SQLITE_DB_PATH: /app/data/pkg_agent.db
+      CHROMA_PERSIST_DIR: /app/data/chroma
+      NEO4J_URI: bolt://neo4j:7687
+      OLLAMA_HOST: http://ollama:11434
+      LOCAL_FILES_WATCH_DIRS: /data/watched
+      FASTAPI_PORT: 8080
+    volumes:
+      - app_data:/app/data
+      - ${HOST_WATCH_DIR:-./docker/empty}:/data/watched:ro
+      - ${HOST_DATA_DIR:-./docker/empty}:/host-data:ro
+    ports:
+      - "${HOST_BACKEND_PORT:-8080}:8080"
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Runs the exact same image as `backend`, just a different command --
+  # see docker/backend.Dockerfile's own comment. Replaces "register a
+  # cron/Task Scheduler entry by hand" entirely (scheduler/loop.py).
+  scheduler:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    command: ["python", "-m", "scheduler.loop"]
+    env_file:
+      - config/.env
+    environment:
+      RUNNING_IN_DOCKER: "true"
+      SQLITE_DB_PATH: /app/data/pkg_agent.db
+      CHROMA_PERSIST_DIR: /app/data/chroma
+      NEO4J_URI: bolt://neo4j:7687
+      OLLAMA_HOST: http://ollama:11434
+      LOCAL_FILES_WATCH_DIRS: /data/watched
+    volumes:
+      - app_data:/app/data
+      - ${HOST_WATCH_DIR:-./docker/empty}:/data/watched:ro
+      - ${HOST_DATA_DIR:-./docker/empty}:/host-data:ro
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/frontend.Dockerfile
+      args:
+        # The *published* host port -- the browser (on the host, not the
+        # Docker network) is what calls this URL, so it must match
+        # whatever HOST_BACKEND_PORT actually publishes below.
+        VITE_API_BASE_URL: http://localhost:${HOST_BACKEND_PORT:-8080}/api
+    ports:
+      - "${HOST_FRONTEND_PORT:-3000}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  # SQLite db + Chroma persist dir, both under one volume (matches the
+  # single `data/` directory a manual dev setup already uses).
+  app_data:
+  neo4j_data:
+  ollama_data:
