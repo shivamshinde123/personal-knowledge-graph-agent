@@ -8,6 +8,23 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-09-01 — Settings auto-save, cloud generation as the default provider, no default watch folder/Notion scope
+
+**Context**: Three related requests, all in the direction of "less implicit behavior, less friction": (1) `fully_local` was the default `provider_mode`, but real usage this session showed cloud generation is both faster and noticeably more capable for metadata/relationship judging — asked to make it the default instead; (2) the Settings screen required an explicit "Save Changes" click even though every field is otherwise just a plain input — asked to remove that extra step entirely; (3) `EnvSettings.watch_dirs`' fallback to an auto-created `DEFAULT_WATCH_DIR` (added earlier for issue #55) and the specific `LOCAL_FILES_WATCH_DIRS`/`NOTION_PAGE_IDS` values already sitting in `config/.env` from earlier extractor testing were both a form of implicit default scope the user doesn't want — asked to remove it so an unconfigured install (or the real `.env` right now) genuinely watches/scopes nothing until the user explicitly sets something.
+
+**Decision**:
+1. `config/settings.py::LLMConfig.provider_mode` default changed from `"fully_local"` to `"fully_cloud"`; `config/config.yaml`'s committed value changed to match. `fully_local` remains fully supported, just no longer the default for a fresh config.
+2. `EnvSettings.watch_dirs` reverted to returning `[]` when `LOCAL_FILES_WATCH_DIRS` is unset — the `DEFAULT_WATCH_DIR` constant and its on-demand `mkdir` are removed entirely (undoing the 2026-08-31 "Default local watch folder" decision below). `agent/connection_check.py::_check_local_files()`'s `if not watch_dirs: return not_configured` branch is reachable again through the real property, as it was before that change. The real `config/.env`'s `LOCAL_FILES_WATCH_DIRS` and `NOTION_PAGE_IDS` (specific paths/page ids set during earlier extractor testing this session) were also cleared back to empty via `update_source_config()`, for the same reason — the app shouldn't keep silently pointed at test-session scope.
+3. `SettingsPanel.jsx`'s "Save Changes" button is removed. Every field now saves itself the instant it's committed: a provider-mode radio fires immediately on `onChange`; every text input, textarea, and date field fires on `onBlur`, compared against a `lastSavedRef` snapshot so an unchanged blur (click in, click away) is a no-op rather than a wasted round-trip. The one exception is the embedding-model field, which still can't be silent — changing it strands every existing embedding — so its `onBlur` still opens the existing confirm-then-reset-and-reingest flow; declining reverts the input to its last-saved value rather than leaving a stray unsaved edit with no Save button left to undo it via. The "Browse…" folder picker has no natural blur event (the picked path lands in the textarea without the user ever focusing it), so it calls the same save helper explicitly right after updating the text.
+
+**Alternatives considered**: debouncing every keystroke instead of saving on blur — rejected as needlessly chatty (a network round-trip mid-typing) for a local, single-user backend where blur-to-commit is a completely ordinary desktop-app pattern and adds no perceptible delay.
+
+**Verified**: `uv run pytest` — `tests/test_config/test_settings.py` updated for the new default (`test_parses_the_committed_config_yaml`, `TestGetSettings::test_returns_both_halves`) and the reverted `watch_dirs` behavior (`test_watch_dirs_is_empty_when_unset` replacing the old default-folder tests); full suite passes. Frontend: `npm run lint`, `npm run build` both clean; manually verified in the running app that each field type (radio, text, textarea, date) persists across a page reload without ever clicking anything resembling "Save."
+
+**Affects**: `config/settings.py`, `config/config.yaml`, `config/.env` (real values only, gitignored), `tests/test_config/test_settings.py`, `frontend/src/components/SettingsPanel.jsx`, `frontend/src/index.css`, `frontend/src/assets/icons/save-icon.svg` (removed, now unused).
+
+---
+
 ## 2026-08-31 — Stable dev ports with fallbacks, backend and frontend kept in sync
 
 **Context**: The backend had no reliable default port — `settings.env.fastapi_port` (8080) was documented but nothing actually read it; `uvicorn` was always started manually with an explicit `--port`. A real conflict was hit this session: an unrelated Airflow container occupying 8080 on every interface, forcing a hardcoded `// TEMP` override of `frontend/src/api/client.js`'s `API_BASE_URL` to a different port, which then had to be remembered and kept in sync by hand. See issue #71.

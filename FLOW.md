@@ -355,10 +355,11 @@ calls `pipeline/filters.py` next.
   recursively; extracts `.txt`/`.md` directly, `.pdf` via `pypdf`, `.docx`
   via `python-docx`; filters by `st_mtime > since`. A missing watch
   directory is logged and skipped, not fatal — other configured
-  directories still get scanned. `watch_dirs` itself falls back to
-  `config/settings.py::DEFAULT_WATCH_DIR` (created on demand) when
-  `LOCAL_FILES_WATCH_DIRS` is unset, rather than an empty list — see
-  DECISIONS.md, 2026-08-31.
+  directories still get scanned. `watch_dirs` is `[]` when
+  `LOCAL_FILES_WATCH_DIRS` is unset — watches nothing until the user
+  explicitly configures a folder; see DECISIONS.md, 2026-09-01 (this
+  reverts an earlier auto-created-default-folder behavior from
+  2026-08-31).
 - `extractors/notion.py` — lists every page the integration (`NOTION_API_KEY`)
   can see via `Client.search()` (paginated), unless `NOTION_PAGE_IDS` is
   configured, in which case only those pages are fetched directly by id
@@ -1251,27 +1252,34 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    DECISIONS.md, 2026-08-30
 4. `SettingsPanel.jsx` — on mount, calls `api/client.js::getSettings()`,
    `getSourcesStatus()`, `getSourceConnections()`, and `getSourceConfig()`
-   in parallel, snapshotting the loaded values into `originalRef` — the
-   baseline every later diff compares against. Uses `useConfirm()`
-   (`hooks/useConfirm.jsx`, rendering `ConfirmDialog.jsx` — this project's
-   own centered modal, not the native `window.confirm()`, which looked
-   nothing like the rest of the app and couldn't render a bullet list or a
-   highlighted warning — see DECISIONS.md, 2026-08-30) for both of its
-   confirmations. "Save Changes" (`handleSave()`) first diffs every
-   editable field (`provider_mode`, both generation models,
-   `cloud_embedding_model`, the two source-scope textareas) against that
-   snapshot; if nothing changed it no-ops, else it awaits one `confirm()`
-   call whose `body` is a real `<ul>` of the changed fields plus a
-   separately-styled warning paragraph when `cloud_embedding_model` is
-   among them, and aborts entirely if cancelled. Only on confirm does it
-   call `putSettings()` (now sending all three model fields, including
-   `cloud_embedding_model`) and `putSourceConfig()` together; if the
-   embedding model was part of the
-   diff, it then also calls `onResetAll()` followed by
-   `onTriggerIngestion()` (the same `App.jsx`-owned flows the Danger Zone
-   button and "Run ingestion now" button call directly elsewhere) and
-   re-fetches `getSourcesStatus()`/`getSourceConnections()` — see
-   DECISIONS.md, 2026-08-30 (the un-freeze/confirm-dialog entry). Each
+   in parallel, snapshotting the loaded values into `lastSavedRef` — the
+   baseline every later field compares its own value against before
+   deciding to save. There is no "Save Changes" step: every field saves
+   itself the moment it's committed — see DECISIONS.md, 2026-09-01. A
+   `provider_mode` radio calls `saveLlmField("provider_mode", value)`
+   directly from its own `onChange`; the two generation-model text inputs
+   and the four source-scope textareas/date fields call their respective
+   save helper (`saveLlmField()`/`saveScopeTextarea()`/`saveDateField()`)
+   from `onBlur`, each first checking `lastSavedRef.current[key] !==
+   value` so an unchanged blur (click in, click away) is a no-op. Every
+   save helper follows the same shape: `putSettings()`/`putSourceConfig()`
+   with just the one changed field (both endpoints are partial-update),
+   then syncs `lastSavedRef` from the response so it always reflects the
+   server's own truth rather than the client's assumption. The one
+   exception is `cloud_embedding_model`'s `onBlur`, which calls
+   `saveEmbeddingModel()` instead of the generic `saveLlmField()` — it
+   still can't be silent, since changing it strands every existing
+   embedding, so it opens the same `useConfirm()` (`hooks/useConfirm.jsx`,
+   rendering `ConfirmDialog.jsx` — this project's own centered modal, not
+   the native `window.confirm()`) dialog as before with a danger-styled
+   warning; declining reverts the input to `lastSavedRef.current`'s value
+   (there's no Save button left to abandon an edit via otherwise). Only on
+   confirm does it call `putSettings({cloud_embedding_model})`, then
+   `onResetAll()` followed by `onTriggerIngestion()` (the same
+   `App.jsx`-owned flows the Danger Zone button and "Run ingestion now"
+   button call directly elsewhere) and re-fetches
+   `getSourcesStatus()`/`getSourceConnections()` — see DECISIONS.md,
+   2026-08-30 (the un-freeze/confirm-dialog entry) and 2026-09-01. Each
    connected-source card shows the live connection status
    (`getSourceConnections()`'s cache-or-fresh result) rather than the
    batch-run status alone; "Reverify" calls `verifySourceConnections()`
@@ -1280,12 +1288,14 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    2026-08-30. The Danger Zone's own "Reset all data" button and "Run
    ingestion now" each still have their own direct call path (with their
    own confirm, for the reset button) into the same `onResetAll`/
-   `onTriggerIngestion` props — the Save-Changes-triggered path above is
-   an additional caller, not a replacement. "Browse…" next to the local
-   folders field calls `postBrowseFolder()`; a non-null result is
-   appended as a new line in `watchDirsText` (skipped if already present),
-   composing with manually pasted paths rather than replacing them — see
-   DECISIONS.md, 2026-08-30. The "Data Ingestion" section also renders the
+   `onTriggerIngestion` props — the embedding-model-triggered path above
+   is an additional caller, not a replacement. "Browse…" next to the local
+   folders field calls `postBrowseFolder()`; a non-null result is appended
+   as a new line in `watchDirsText` (skipped if already present), composing
+   with manually pasted paths rather than replacing them, then calls
+   `saveScopeTextarea()` explicitly — a path picked this way never fires
+   the textarea's own `onBlur`, since the user never focused it — see
+   DECISIONS.md, 2026-08-30 and 2026-09-01. The "Data Ingestion" section also renders the
    `ingestionStatus` prop (from `App.jsx`, see above), when non-null, as a
    "Started at HH:MM:SS" line plus a progress bar — an indeterminate
    sliding-segment animation while `status === "running"` (no known total
@@ -1318,11 +1328,10 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    Ingestion" and "Connected Data Sources" render as one merged card with
    an internal divider (`.settings-section-header-bordered`) rather than
    two separate cards — same two handlers/states as before, just one DOM
-   boundary instead of two. "Save Changes" sits in `.settings-header`,
-   top-right next to the page title — moved there (from the bottom of
-   the left column, itself moved from full-width below both columns) per
-   direct request; each move is placement only, `handleSave()` itself is
-   unchanged throughout
+   boundary instead of two. A transient save-status line (`.save-action`,
+   "Saving…" / "Saved." / an error) sits in `.settings-header`, top-right
+   next to the page title, in place of the "Save Changes" button removed
+   2026-09-01 — the same spot the button used to occupy.
 5. `Toasts.jsx` — a pure display component: renders whichever
    `{id, kind, text}` entries are in `App.jsx`'s `toasts` state as a
    fixed top-right stack, each auto-removed after 7 seconds
