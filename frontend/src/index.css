@@ -968,6 +968,25 @@ a {
   border-color: var(--accent);
 }
 
+/* Read-only stand-in for .source-scope-textarea when running in Docker --
+   local_files_watch_dirs is a fixed volume mount there, not an editable
+   field (see SettingsPanel.jsx, DECISIONS.md). */
+.source-scope-readonly-list {
+  margin: 0;
+  padding: 12px 17px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-h);
+  font-size: 14px;
+  font-family: var(--mono);
+  list-style: none;
+}
+
+.source-scope-readonly-list li + li {
+  margin-top: 6px;
+}
+
 .date-range-fields {
   display: flex;
   gap: 12px;

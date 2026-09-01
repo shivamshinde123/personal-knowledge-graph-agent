@@ -714,35 +714,63 @@ function SettingsPanel({
           <section className="settings-section">
             <div className="settings-section-header">
               <h2>Local folders to watch</h2>
-              <button
-                type="button"
-                className="settings-ghost-button"
-                onClick={handleBrowseFolder}
-                disabled={isBrowsing}
-              >
-                {isBrowsing ? "Browsing…" : "Browse…"}
-              </button>
+              {!sources.running_in_docker && (
+                <button
+                  type="button"
+                  className="settings-ghost-button"
+                  onClick={handleBrowseFolder}
+                  disabled={isBrowsing}
+                >
+                  {isBrowsing ? "Browsing…" : "Browse…"}
+                </button>
+              )}
             </div>
-            <p className="settings-field-hint">
-              One folder path per line — paste a path, or use "Browse…" to pick
-              one. Files added or changed in these folders are picked up on the
-              next ingestion run.
-            </p>
-            <textarea
-              className="source-scope-textarea"
-              rows={3}
-              value={watchDirsText}
-              onChange={(event) => setWatchDirsText(event.target.value)}
-              onBlur={(event) =>
-                saveScopeTextarea(
-                  "local_files_watch_dirs",
-                  "watchDirsText",
-                  setWatchDirsText,
-                  event.target.value,
-                )
-              }
-              placeholder={"C:\\Users\\you\\Documents\\Notes"}
-            />
+            {sources.running_in_docker ? (
+              <>
+                <p className="settings-field-hint">
+                  Fixed by the Docker Compose volume mount — the running app
+                  can't mount a new host folder into itself. To change this,
+                  set <code>HOST_WATCH_DIR</code> in the host's{" "}
+                  <code>.env</code> next to <code>docker-compose.yml</code>
+                  and restart the stack (<code>docker compose up -d</code>).
+                </p>
+                {watchDirsText ? (
+                  <ul className="source-scope-readonly-list">
+                    {linesToList(watchDirsText).map((dir) => (
+                      <li key={dir}>{dir}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="settings-field-hint">
+                    No folder is mounted — <code>HOST_WATCH_DIR</code> is
+                    unset.
+                  </p>
+                )}
+              </>
+            ) : (
+              <>
+                <p className="settings-field-hint">
+                  One folder path per line — paste a path, or use "Browse…"
+                  to pick one. Files added or changed in these folders are
+                  picked up on the next ingestion run.
+                </p>
+                <textarea
+                  className="source-scope-textarea"
+                  rows={3}
+                  value={watchDirsText}
+                  onChange={(event) => setWatchDirsText(event.target.value)}
+                  onBlur={(event) =>
+                    saveScopeTextarea(
+                      "local_files_watch_dirs",
+                      "watchDirsText",
+                      setWatchDirsText,
+                      event.target.value,
+                    )
+                  }
+                  placeholder={"C:\\Users\\you\\Documents\\Notes"}
+                />
+              </>
+            )}
           </section>
 
           <section className="settings-section">

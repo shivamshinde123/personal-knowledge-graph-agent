@@ -164,6 +164,7 @@ def fake_env_settings(
     github_date_range_end=None,
     calendar_date_range_start=None,
     calendar_date_range_end=None,
+    running_in_docker=False,
 ):
     return SimpleNamespace(
         env=SimpleNamespace(
@@ -180,6 +181,7 @@ def fake_env_settings(
             github_date_range_end=github_date_range_end,
             effective_calendar_date_range_start=calendar_date_range_start,
             effective_calendar_date_range_end=calendar_date_range_end,
+            running_in_docker=running_in_docker,
         )
     )
 
@@ -212,7 +214,18 @@ class TestGetSourceConfig:
             "github_date_range_end": None,
             "calendar_date_range_start": "2026-07-01",
             "calendar_date_range_end": "2026-07-31",
+            "running_in_docker": False,
         }
+
+    def test_reports_running_in_docker_when_set(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "api.routes.settings.get_settings",
+            lambda: fake_env_settings(running_in_docker=True),
+        )
+
+        response = client.get("/api/settings/sources")
+
+        assert response.json()["running_in_docker"] is True
 
 
 class TestPutSourceConfig:
@@ -261,6 +274,7 @@ class TestPutSourceConfig:
                     if calendar_date_range_end
                     else date(2026, 1, 1)
                 ),
+                running_in_docker=False,
             )
 
         monkeypatch.setattr("api.routes.settings.update_source_config", fake_update)
@@ -303,6 +317,7 @@ class TestPutSourceConfig:
                     calendar_date_range_start
                 ),
                 effective_calendar_date_range_end=date(2026, 8, 1),
+                running_in_docker=False,
             )
 
         monkeypatch.setattr("api.routes.settings.update_source_config", fake_update)
@@ -331,6 +346,61 @@ class TestPutSourceConfig:
         assert response.status_code == 500
         assert response.json()["error"] == "config_error"
 
+    def test_rejects_local_files_watch_dirs_change_when_running_in_docker(
+        self, client, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "api.routes.settings.get_settings",
+            lambda: fake_env_settings(running_in_docker=True),
+        )
+        called = False
+
+        def fail_if_called(**kwargs):
+            nonlocal called
+            called = True
+
+        monkeypatch.setattr("api.routes.settings.update_source_config", fail_if_called)
+
+        response = client.put(
+            "/api/settings/sources", json={"local_files_watch_dirs": ["/a"]}
+        )
+
+        assert response.status_code == 422
+        assert response.json()["error"] == "not_available_in_docker"
+        assert called is False  # never reached update_source_config()
+
+    def test_other_fields_still_update_when_running_in_docker(
+        self, client, monkeypatch
+    ):
+        """Only local_files_watch_dirs is Docker-locked -- every other field isn't."""
+        monkeypatch.setattr(
+            "api.routes.settings.get_settings",
+            lambda: fake_env_settings(running_in_docker=True),
+        )
+
+        def fake_update(*, notion_page_ids=None, **_kwargs):
+            return SimpleNamespace(
+                watch_dirs=[],
+                notion_page_ids_list=notion_page_ids or [],
+                github_repos_list=[],
+                effective_gmail_date_range_start=date(2026, 1, 1),
+                effective_gmail_date_range_end=date(2026, 1, 1),
+                github_date_range_start=None,
+                github_date_range_end=None,
+                effective_calendar_date_range_start=date(2026, 1, 1),
+                effective_calendar_date_range_end=date(2026, 1, 1),
+                running_in_docker=True,
+            )
+
+        monkeypatch.setattr("api.routes.settings.update_source_config", fake_update)
+
+        response = client.put(
+            "/api/settings/sources", json={"notion_page_ids": ["page-1"]}
+        )
+
+        assert response.status_code == 200
+        assert response.json()["notion_page_ids"] == ["page-1"]
+
 
 class TestBrowseFolder:
     def test_returns_the_selected_path(self, client, monkeypatch):
@@ -343,6 +413,25 @@ class TestBrowseFolder:
 
         assert response.status_code == 200
         assert response.json() == {"path": "C:\\Users\\you\\Documents\\Notes"}
+
+    def test_returns_422_when_running_in_docker(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "api.routes.settings.get_settings",
+            lambda: fake_env_settings(running_in_docker=True),
+        )
+        called = False
+
+        def fail_if_called():
+            nonlocal called
+            called = True
+
+        monkeypatch.setattr("api.routes.settings.browse_folder", fail_if_called)
+
+        response = client.post("/api/settings/browse-folder")
+
+        assert response.status_code == 422
+        assert response.json()["error"] == "not_available_in_docker"
+        assert called is False  # never attempted the native dialog
 
     def test_returns_null_path_when_the_dialog_is_cancelled(self, client, monkeypatch):
         monkeypatch.setattr("api.routes.settings.browse_folder", lambda: None)

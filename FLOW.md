@@ -1036,10 +1036,15 @@ See DECISIONS.md, 2026-08-29.
 Extension beyond `docs/API_Specification.docx` — see `agent/browse.py`,
 DECISIONS.md, 2026-08-30.
 
-1. `agent/browse.py::browse_folder()` — shells out to a PowerShell
-   `System.Windows.Forms.FolderBrowserDialog` script, blocking until the
-   dialog is closed
-2. Returns `{"path": <string> | null}` — `null` if the user cancelled
+1. **Branch point**: if `settings.env.running_in_docker` is set, returns a
+   `422 {"error": "not_available_in_docker", ...}` directly, without
+   attempting the dialog at all — neither a GUI nor PowerShell itself
+   exists inside a Linux container (see DECISIONS.md, 2026-09-02, "Local
+   files watch dirs become a fixed, read-only Docker volume mount")
+2. Otherwise: `agent/browse.py::browse_folder()` — shells out to a
+   PowerShell `System.Windows.Forms.FolderBrowserDialog` script, blocking
+   until the dialog is closed
+3. Returns `{"path": <string> | null}` — `null` if the user cancelled
    rather than picking a folder
 
 ---
@@ -1059,8 +1064,16 @@ provider config. See DECISIONS.md, 2026-08-30.
    defaulted when unset (see DECISIONS.md, 2026-09-01) — while GitHub's
    own date range is read raw (`github_date_range_start`/`_end`, still
    `None`-able)
-2. `PUT /settings/sources` → `config/settings.py::update_source_config()`
-   — writes `LOCAL_FILES_WATCH_DIRS`/`NOTION_PAGE_IDS`/
+2. `PUT /settings/sources` — **branch point**: if the payload includes
+   `local_files_watch_dirs` (non-`None`) while
+   `settings.env.running_in_docker` is set, returns `422
+   {"error": "not_available_in_docker", ...}` immediately, without calling
+   `update_source_config()` at all — that field is a fixed,
+   volume-mount-backed container path in Docker, not something the running
+   app can change on its own (see DECISIONS.md, 2026-09-02). Every other
+   field in the same payload is unaffected by this check. Otherwise:
+   `config/settings.py::update_source_config()` — writes
+   `LOCAL_FILES_WATCH_DIRS`/`NOTION_PAGE_IDS`/
    `CALENDAR_DATE_RANGE_START`/`_END`/etc. to `config/.env` via
    `python-dotenv`'s `set_key()` (rewrites just those lines in place,
    leaving every other line/comment untouched), only the given fields (a
@@ -1068,7 +1081,10 @@ provider config. See DECISIONS.md, 2026-08-30.
    shared handler
 3. Both return `{"local_files_watch_dirs": [...], "notion_page_ids": [...],
    "github_repos": [...], "gmail_date_range_start"/"_end",
-   "github_date_range_start"/"_end", "calendar_date_range_start"/"_end"}`
+   "github_date_range_start"/"_end", "calendar_date_range_start"/"_end",
+   "running_in_docker": bool}` — the last field tells the frontend which
+   Local Files UI to render (editable + Browse vs. read-only list, see
+   `SettingsPanel.jsx` below)
 4. `extractors/notion.py::extract_new_items()` reads
    `notion_page_ids_list` on its next run: non-empty means fetch exactly
    those pages by id (`client.pages.retrieve()`) instead of the
@@ -1362,7 +1378,13 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    with manually pasted paths rather than replacing them, then calls
    `saveScopeTextarea()` explicitly — a path picked this way never fires
    the textarea's own `onBlur`, since the user never focused it — see
-   DECISIONS.md, 2026-08-30 and 2026-09-01. The "Data Ingestion" section also renders the
+   DECISIONS.md, 2026-08-30 and 2026-09-01. **Branch point**: when
+   `sources.running_in_docker` is true (see `GET /api/settings/sources`
+   above), "Local folders to watch" renders read-only instead — a plain
+   list built from the same `watchDirsText` state, no "Browse…" button, no
+   editable textarea, with a hint pointing at `HOST_WATCH_DIR` + restarting
+   the stack as the way to actually change it (see DECISIONS.md,
+   2026-09-02). The "Data Ingestion" section also renders the
    `ingestionStatus` prop (from `App.jsx`, see above), when non-null, as a
    "Started at HH:MM:SS" line plus a progress bar — an indeterminate
    sliding-segment animation while `status === "running"` (no known total

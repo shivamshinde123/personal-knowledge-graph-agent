@@ -265,6 +265,16 @@ class EnvSettings(BaseSettings):
     fastapi_port: int = 8080
     langsmith_api_key: str | None = None
     langsmith_project: str = "personal-knowledge-graph-agent"
+    # Set to true only by docker-compose.yml's environment block — never by
+    # a developer's own config/.env. Signals that LOCAL_FILES_WATCH_DIRS is
+    # a fixed container path backed by a Docker volume mount decided at
+    # `docker compose up` time (see docker-compose.yml's HOST_WATCH_DIR),
+    # not something the running app can change on its own — so the
+    # Settings screen must show it read-only instead of editable, and the
+    # native folder-picker dialog (agent/browse.py, Windows-only via
+    # PowerShell, unavailable inside a Linux container regardless) must
+    # not even attempt to run. See DECISIONS.md.
+    running_in_docker: bool = False
 
     @model_validator(mode="before")
     @classmethod
