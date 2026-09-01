@@ -8,6 +8,16 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-09-01 — Restored an always-visible color-key legend on the graph
+
+**Context**: When the per-source filter moved from a passive bottom legend into a toolbar "Filter" button/panel (see the toolbar-panel entry below), the color key went with it — the panel only renders while open, so there was no longer any way to see what a node's color meant without opening Filter first. Flagged directly after using the real app.
+
+**Decision**: added back a small, always-visible, non-interactive legend (`graph-view-legend`, bottom-left of the canvas) — one entry per filterable source type, its swatch and label, independent of the interactive Filter panel. An entry dims (doesn't disappear) when that source is currently hidden by the filter, so the legend stays a consistent reference regardless of filter state. This is deliberately separate from the filter panel, not a merge of the two — the panel is the control (checkboxes, All/None), this is just the reference.
+
+**Affects**: `frontend/src/components/GraphView.jsx`, `frontend/src/index.css`.
+
+---
+
 ## 2026-09-01 — cancel_ingestion() no longer finalizes "cancelled" on an unconfirmed kill
 
 **Context**: GitHub Copilot's review of this PR flagged a real gap in the force-kill cancel logic added the same day: `cancel_ingestion()` only guarded the *kill attempt* on `run.pid is not None`, but unconditionally finalized the row to `status="cancelled"` afterward regardless of whether the kill actually happened. Two real cases fell through: a run with no recorded `pid` (e.g. a legacy row from before that column existed) skipped the kill entirely but still got marked cancelled, and an `OSError` other than `ProcessLookupError` (e.g. a permissions failure) left the process possibly still running while the DB claimed otherwise. Either way, the batch process could still be alive and writing to storage while `ingestion_runs` said the run was over — a real state mismatch that could let a second run start concurrently with the "cancelled" one.
