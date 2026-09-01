@@ -1,6 +1,6 @@
 """Tests for the configuration loader."""
 
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -25,7 +25,7 @@ class TestLoadConfig:
     def test_parses_the_committed_config_yaml(self):
         config = load_config()
 
-        assert config.llm.provider_mode == "fully_local"
+        assert config.llm.provider_mode == "fully_cloud"
         assert config.chunking.target_chunk_size_tokens == 400
         assert config.chunking.chunk_overlap_tokens == 40
         assert config.retrieval.top_k_vector == 8
@@ -101,25 +101,8 @@ class TestEnvSettings:
             Path("C:/code"),
         ]
 
-    def test_watch_dirs_falls_back_to_the_default_folder_when_unset(
-        self, monkeypatch, tmp_path
-    ):
-        import config.settings as settings_module
-
-        fake_default = tmp_path / "watched"
-        monkeypatch.setattr(settings_module, "DEFAULT_WATCH_DIR", fake_default)
-
-        assert EnvSettings(local_files_watch_dirs="").watch_dirs == [fake_default]
-
-    def test_the_default_watch_folder_is_created_on_demand(self, monkeypatch, tmp_path):
-        import config.settings as settings_module
-
-        fake_default = tmp_path / "watched"
-        monkeypatch.setattr(settings_module, "DEFAULT_WATCH_DIR", fake_default)
-
-        _ = EnvSettings(local_files_watch_dirs="").watch_dirs
-
-        assert fake_default.is_dir()
+    def test_watch_dirs_is_empty_when_unset(self):
+        assert EnvSettings(local_files_watch_dirs="").watch_dirs == []
 
     def test_watch_dirs_ignores_empty_segments(self):
         env = EnvSettings(local_files_watch_dirs="C:/notes,,  ,")
@@ -144,6 +127,57 @@ class TestEnvSettings:
         monkeypatch.setenv("SOMETHING_UNRELATED", "value")
 
         EnvSettings()  # must not raise
+
+
+class TestEffectiveDateRanges:
+    """Gmail/Calendar default to a rolling window when unset.
+
+    Unlike watch_dirs/notion_page_ids_list/github_repos_list, "unset" here
+    never means "unbounded." GitHub's own date range keeps the old
+    unset-means-unbounded behavior; only Gmail and Calendar were asked to
+    default. See DECISIONS.md.
+    """
+
+    def test_gmail_defaults_to_the_last_15_days_when_unset(self):
+        env = EnvSettings()
+
+        assert env.effective_gmail_date_range_start == date.today() - timedelta(days=15)
+        assert env.effective_gmail_date_range_end == date.today()
+
+    def test_gmail_uses_the_configured_range_when_set(self):
+        env = EnvSettings(
+            gmail_date_range_start="2026-01-01", gmail_date_range_end="2026-01-31"
+        )
+
+        assert env.effective_gmail_date_range_start == date(2026, 1, 1)
+        assert env.effective_gmail_date_range_end == date(2026, 1, 31)
+
+    def test_calendar_defaults_to_today_through_30_days_out_when_unset(self):
+        env = EnvSettings()
+
+        assert env.effective_calendar_date_range_start == date.today()
+        assert env.effective_calendar_date_range_end == date.today() + timedelta(
+            days=30
+        )
+
+    def test_calendar_uses_the_configured_range_when_set(self):
+        env = EnvSettings(
+            calendar_date_range_start="2026-03-01",
+            calendar_date_range_end="2026-03-15",
+        )
+
+        assert env.effective_calendar_date_range_start == date(2026, 3, 1)
+        assert env.effective_calendar_date_range_end == date(2026, 3, 15)
+
+    def test_github_still_has_no_default_when_unset(self):
+        """Confirm this change is scoped to Gmail/Calendar only.
+
+        GitHub's own date range was never asked to default.
+        """
+        env = EnvSettings()
+
+        assert env.github_date_range_start is None
+        assert env.github_date_range_end is None
 
 
 class TestBlankValuesAreTreatedAsUnset:
@@ -442,6 +476,8 @@ class TestUpdateSourceConfig:
             gmail_date_range_end="2026-06-30",
             github_date_range_start="2025-01-01",
             github_date_range_end="2025-12-31",
+            calendar_date_range_start="2026-03-01",
+            calendar_date_range_end="2026-03-31",
             path=env_path,
         )
 
@@ -449,6 +485,8 @@ class TestUpdateSourceConfig:
         assert result.gmail_date_range_end == date(2026, 6, 30)
         assert result.github_date_range_start == date(2025, 1, 1)
         assert result.github_date_range_end == date(2025, 12, 31)
+        assert result.calendar_date_range_start == date(2026, 3, 1)
+        assert result.calendar_date_range_end == date(2026, 3, 31)
 
     def test_an_empty_string_clears_a_date_range_field(self, tmp_path):
         env_path = tmp_path / ".env"
@@ -591,7 +629,7 @@ class TestGetSettings:
     def test_returns_both_halves(self):
         settings = get_settings()
 
-        assert settings.config.llm.provider_mode == "fully_local"
+        assert settings.config.llm.provider_mode == "fully_cloud"
         assert settings.env.fastapi_port > 0
 
     def test_result_is_cached(self):

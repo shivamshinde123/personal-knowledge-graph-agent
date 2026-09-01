@@ -129,16 +129,24 @@ def fake_env_settings(
     gmail_date_range_end=None,
     github_date_range_start=None,
     github_date_range_end=None,
+    calendar_date_range_start=None,
+    calendar_date_range_end=None,
 ):
     return SimpleNamespace(
         env=SimpleNamespace(
             watch_dirs=list(watch_dirs),
             notion_page_ids_list=list(notion_page_ids),
             github_repos_list=list(github_repos),
-            gmail_date_range_start=gmail_date_range_start,
-            gmail_date_range_end=gmail_date_range_end,
+            # Named for what the route actually reads — see
+            # api/routes/settings.py, DECISIONS.md: Gmail/Calendar always
+            # carry an *effective* (defaulted-if-unset) value, unlike
+            # GitHub's own date range.
+            effective_gmail_date_range_start=gmail_date_range_start,
+            effective_gmail_date_range_end=gmail_date_range_end,
             github_date_range_start=github_date_range_start,
             github_date_range_end=github_date_range_end,
+            effective_calendar_date_range_start=calendar_date_range_start,
+            effective_calendar_date_range_end=calendar_date_range_end,
         )
     )
 
@@ -153,6 +161,8 @@ class TestGetSourceConfig:
                 github_repos=["me/repo-a"],
                 gmail_date_range_start=date(2026, 1, 1),
                 gmail_date_range_end=date(2026, 6, 30),
+                calendar_date_range_start=date(2026, 7, 1),
+                calendar_date_range_end=date(2026, 7, 31),
             ),
         )
 
@@ -167,6 +177,8 @@ class TestGetSourceConfig:
             "gmail_date_range_end": "2026-06-30",
             "github_date_range_start": None,
             "github_date_range_end": None,
+            "calendar_date_range_start": "2026-07-01",
+            "calendar_date_range_end": "2026-07-31",
         }
 
 
@@ -183,6 +195,8 @@ class TestPutSourceConfig:
             gmail_date_range_end=None,
             github_date_range_start=None,
             github_date_range_end=None,
+            calendar_date_range_start=None,
+            calendar_date_range_end=None,
         ):
             captured["local_files_watch_dirs"] = local_files_watch_dirs
             captured["notion_page_ids"] = notion_page_ids
@@ -192,18 +206,28 @@ class TestPutSourceConfig:
                 watch_dirs=local_files_watch_dirs or [],
                 notion_page_ids_list=notion_page_ids or [],
                 github_repos_list=github_repos or [],
-                gmail_date_range_start=(
+                effective_gmail_date_range_start=(
                     date.fromisoformat(gmail_date_range_start)
                     if gmail_date_range_start
-                    else None
+                    else date(2026, 1, 1)
                 ),
-                gmail_date_range_end=(
+                effective_gmail_date_range_end=(
                     date.fromisoformat(gmail_date_range_end)
                     if gmail_date_range_end
-                    else None
+                    else date(2026, 1, 1)
                 ),
                 github_date_range_start=None,
                 github_date_range_end=None,
+                effective_calendar_date_range_start=(
+                    date.fromisoformat(calendar_date_range_start)
+                    if calendar_date_range_start
+                    else date(2026, 1, 1)
+                ),
+                effective_calendar_date_range_end=(
+                    date.fromisoformat(calendar_date_range_end)
+                    if calendar_date_range_end
+                    else date(2026, 1, 1)
+                ),
             )
 
         monkeypatch.setattr("api.routes.settings.update_source_config", fake_update)
@@ -228,6 +252,36 @@ class TestPutSourceConfig:
         assert captured["notion_page_ids"] == ["page-1", "page-2"]
         assert captured["github_repos"] == ["me/repo-a"]
         assert captured["gmail_date_range_start"] == "2026-01-01"
+
+    def test_calendar_date_range_passes_through(self, client, monkeypatch):
+        captured = {}
+
+        def fake_update(*, calendar_date_range_start=None, **_kwargs):
+            captured["calendar_date_range_start"] = calendar_date_range_start
+            return SimpleNamespace(
+                watch_dirs=[],
+                notion_page_ids_list=[],
+                github_repos_list=[],
+                effective_gmail_date_range_start=date(2026, 1, 1),
+                effective_gmail_date_range_end=date(2026, 1, 1),
+                github_date_range_start=None,
+                github_date_range_end=None,
+                effective_calendar_date_range_start=date.fromisoformat(
+                    calendar_date_range_start
+                ),
+                effective_calendar_date_range_end=date(2026, 8, 1),
+            )
+
+        monkeypatch.setattr("api.routes.settings.update_source_config", fake_update)
+
+        response = client.put(
+            "/api/settings/sources",
+            json={"calendar_date_range_start": "2026-07-01"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["calendar_date_range_start"] == "2026-07-01"
+        assert captured["calendar_date_range_start"] == "2026-07-01"
 
     def test_config_error_is_mapped_to_500(self, client, monkeypatch):
         from config.settings import ConfigError

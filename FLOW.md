@@ -355,10 +355,11 @@ calls `pipeline/filters.py` next.
   recursively; extracts `.txt`/`.md` directly, `.pdf` via `pypdf`, `.docx`
   via `python-docx`; filters by `st_mtime > since`. A missing watch
   directory is logged and skipped, not fatal — other configured
-  directories still get scanned. `watch_dirs` itself falls back to
-  `config/settings.py::DEFAULT_WATCH_DIR` (created on demand) when
-  `LOCAL_FILES_WATCH_DIRS` is unset, rather than an empty list — see
-  DECISIONS.md, 2026-08-31.
+  directories still get scanned. `watch_dirs` is `[]` when
+  `LOCAL_FILES_WATCH_DIRS` is unset — watches nothing until the user
+  explicitly configures a folder; see DECISIONS.md, 2026-09-01 (this
+  reverts an earlier auto-created-default-folder behavior from
+  2026-08-31).
 - `extractors/notion.py` — lists every page the integration (`NOTION_API_KEY`)
   can see via `Client.search()` (paginated), unless `NOTION_PAGE_IDS` is
   configured, in which case only those pages are fetched directly by id
@@ -406,11 +407,13 @@ calls `pipeline/filters.py` next.
   attachments get their text extracted via the same `pypdf`/`python-docx`
   libraries `extractors/local_files.py` uses. A thread where every
   message was filtered out produces no item. `_effective_window()`
-  combines the incremental `since` cursor with `config/.env`'s
-  `GMAIL_DATE_RANGE_START`/`GMAIL_DATE_RANGE_END`, if set: the start date
-  floors `since` (via `max()`, never moving a later cursor backward) and
-  the end date adds an inclusive `before:` to the Gmail search query on
-  every run — see DECISIONS.md, 2026-08-30.
+  combines the incremental `since` cursor with
+  `settings.env.effective_gmail_date_range_start`/`_end` — defaulting to
+  the last 15 days when `GMAIL_DATE_RANGE_START`/`_END` are unset, never
+  unbounded (see DECISIONS.md, 2026-09-01): the start date floors `since`
+  (via `max()`, never moving a later cursor backward) and the end date
+  adds an inclusive `before:` to the Gmail search query on every run —
+  see DECISIONS.md, 2026-08-30.
 - `extractors/github.py` — per repo (scoped to `settings.env.github_repos_list`
   if set, else every accessible repo — see DECISIONS.md), extracts the
   README (re-checked via its own last-commit date, not every run),
@@ -424,11 +427,18 @@ calls `pipeline/filters.py` next.
   issues/starred repos (those endpoints have no server-side upper bound)
   — see DECISIONS.md, 2026-08-30.
 - `extractors/calendar.py` — lists the primary calendar's events via
-  `events().list(singleEvents=False, updatedMin=<since>)` — the
-  `singleEvents=False` is what keeps a recurring series as one event
-  (carrying a `recurrence` rule) instead of expanding it into one entry
-  per occurrence, satisfying "recurrence pattern stored once" for free,
-  server-side — see DECISIONS.md, 2026-08-30. Auth: same cached-OAuth-
+  `events().list(singleEvents=False, updatedMin=<since>, timeMin=<range
+  start>, timeMax=<range end + 1 day>)` — the `singleEvents=False` is what
+  keeps a recurring series as one event (carrying a `recurrence` rule)
+  instead of expanding it into one entry per occurrence, satisfying
+  "recurrence pattern stored once" for free, server-side — see
+  DECISIONS.md, 2026-08-30. `timeMin`/`timeMax` are a window on each
+  event's own start/end time — defaulting to today through 30 days out
+  when `CALENDAR_DATE_RANGE_START`/`_END` are unset (`settings.env
+  .effective_calendar_date_range_start`/`_end`) — an independent axis
+  from `updatedMin`'s "changed recently" that Google's API ANDs together
+  with it, same combined shape as Gmail's own range+incremental check.
+  See DECISIONS.md, 2026-09-01. Auth: same cached-OAuth-
   token pattern as `extractors/gmail.py` (own credentials/token file,
   `GOOGLE_CALENDAR_CREDENTIALS_PATH` / `data/calendar_token.json`), same
   one-time `setup_auth()` step
@@ -1041,14 +1051,22 @@ provider config. See DECISIONS.md, 2026-08-30.
 1. `GET /settings/sources` → `config/settings.py::get_settings().env`'s
    `watch_dirs`/`notion_page_ids_list` computed properties, read directly
    (same "config isn't storage/providers" reasoning as `GET /settings`
-   above)
+   above). Gmail's/Calendar's date-range fields come from
+   `effective_gmail_date_range_start`/`_end` and
+   `effective_calendar_date_range_start`/`_end` — always a real window,
+   defaulted when unset (see DECISIONS.md, 2026-09-01) — while GitHub's
+   own date range is read raw (`github_date_range_start`/`_end`, still
+   `None`-able)
 2. `PUT /settings/sources` → `config/settings.py::update_source_config()`
-   — writes `LOCAL_FILES_WATCH_DIRS`/`NOTION_PAGE_IDS` to `config/.env` via
+   — writes `LOCAL_FILES_WATCH_DIRS`/`NOTION_PAGE_IDS`/
+   `CALENDAR_DATE_RANGE_START`/`_END`/etc. to `config/.env` via
    `python-dotenv`'s `set_key()` (rewrites just those lines in place,
    leaving every other line/comment untouched), only the given fields (a
    partial update); a `ConfigError` (file I/O failure) maps to 500 via the
    shared handler
-3. Both return `{"local_files_watch_dirs": [...], "notion_page_ids": [...]}`
+3. Both return `{"local_files_watch_dirs": [...], "notion_page_ids": [...],
+   "github_repos": [...], "gmail_date_range_start"/"_end",
+   "github_date_range_start"/"_end", "calendar_date_range_start"/"_end"}`
 4. `extractors/notion.py::extract_new_items()` reads
    `notion_page_ids_list` on its next run: non-empty means fetch exactly
    those pages by id (`client.pages.retrieve()`) instead of the
@@ -1251,27 +1269,34 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    DECISIONS.md, 2026-08-30
 4. `SettingsPanel.jsx` — on mount, calls `api/client.js::getSettings()`,
    `getSourcesStatus()`, `getSourceConnections()`, and `getSourceConfig()`
-   in parallel, snapshotting the loaded values into `originalRef` — the
-   baseline every later diff compares against. Uses `useConfirm()`
-   (`hooks/useConfirm.jsx`, rendering `ConfirmDialog.jsx` — this project's
-   own centered modal, not the native `window.confirm()`, which looked
-   nothing like the rest of the app and couldn't render a bullet list or a
-   highlighted warning — see DECISIONS.md, 2026-08-30) for both of its
-   confirmations. "Save Changes" (`handleSave()`) first diffs every
-   editable field (`provider_mode`, both generation models,
-   `cloud_embedding_model`, the two source-scope textareas) against that
-   snapshot; if nothing changed it no-ops, else it awaits one `confirm()`
-   call whose `body` is a real `<ul>` of the changed fields plus a
-   separately-styled warning paragraph when `cloud_embedding_model` is
-   among them, and aborts entirely if cancelled. Only on confirm does it
-   call `putSettings()` (now sending all three model fields, including
-   `cloud_embedding_model`) and `putSourceConfig()` together; if the
-   embedding model was part of the
-   diff, it then also calls `onResetAll()` followed by
-   `onTriggerIngestion()` (the same `App.jsx`-owned flows the Danger Zone
-   button and "Run ingestion now" button call directly elsewhere) and
-   re-fetches `getSourcesStatus()`/`getSourceConnections()` — see
-   DECISIONS.md, 2026-08-30 (the un-freeze/confirm-dialog entry). Each
+   in parallel, snapshotting the loaded values into `lastSavedRef` — the
+   baseline every later field compares its own value against before
+   deciding to save. There is no "Save Changes" step: every field saves
+   itself the moment it's committed — see DECISIONS.md, 2026-09-01. A
+   `provider_mode` radio calls `saveLlmField("provider_mode", value)`
+   directly from its own `onChange`; the two generation-model text inputs
+   and the four source-scope textareas/date fields call their respective
+   save helper (`saveLlmField()`/`saveScopeTextarea()`/`saveDateField()`)
+   from `onBlur`, each first checking `lastSavedRef.current[key] !==
+   value` so an unchanged blur (click in, click away) is a no-op. Every
+   save helper follows the same shape: `putSettings()`/`putSourceConfig()`
+   with just the one changed field (both endpoints are partial-update),
+   then syncs `lastSavedRef` from the response so it always reflects the
+   server's own truth rather than the client's assumption. The one
+   exception is `cloud_embedding_model`'s `onBlur`, which calls
+   `saveEmbeddingModel()` instead of the generic `saveLlmField()` — it
+   still can't be silent, since changing it strands every existing
+   embedding, so it opens the same `useConfirm()` (`hooks/useConfirm.jsx`,
+   rendering `ConfirmDialog.jsx` — this project's own centered modal, not
+   the native `window.confirm()`) dialog as before with a danger-styled
+   warning; declining reverts the input to `lastSavedRef.current`'s value
+   (there's no Save button left to abandon an edit via otherwise). Only on
+   confirm does it call `putSettings({cloud_embedding_model})`, then
+   `onResetAll()` followed by `onTriggerIngestion()` (the same
+   `App.jsx`-owned flows the Danger Zone button and "Run ingestion now"
+   button call directly elsewhere) and re-fetches
+   `getSourcesStatus()`/`getSourceConnections()` — see DECISIONS.md,
+   2026-08-30 (the un-freeze/confirm-dialog entry) and 2026-09-01. Each
    connected-source card shows the live connection status
    (`getSourceConnections()`'s cache-or-fresh result) rather than the
    batch-run status alone; "Reverify" calls `verifySourceConnections()`
@@ -1280,12 +1305,14 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    2026-08-30. The Danger Zone's own "Reset all data" button and "Run
    ingestion now" each still have their own direct call path (with their
    own confirm, for the reset button) into the same `onResetAll`/
-   `onTriggerIngestion` props — the Save-Changes-triggered path above is
-   an additional caller, not a replacement. "Browse…" next to the local
-   folders field calls `postBrowseFolder()`; a non-null result is
-   appended as a new line in `watchDirsText` (skipped if already present),
-   composing with manually pasted paths rather than replacing them — see
-   DECISIONS.md, 2026-08-30. The "Data Ingestion" section also renders the
+   `onTriggerIngestion` props — the embedding-model-triggered path above
+   is an additional caller, not a replacement. "Browse…" next to the local
+   folders field calls `postBrowseFolder()`; a non-null result is appended
+   as a new line in `watchDirsText` (skipped if already present), composing
+   with manually pasted paths rather than replacing them, then calls
+   `saveScopeTextarea()` explicitly — a path picked this way never fires
+   the textarea's own `onBlur`, since the user never focused it — see
+   DECISIONS.md, 2026-08-30 and 2026-09-01. The "Data Ingestion" section also renders the
    `ingestionStatus` prop (from `App.jsx`, see above), when non-null, as a
    "Started at HH:MM:SS" line plus a progress bar — an indeterminate
    sliding-segment animation while `status === "running"` (no known total
@@ -1318,11 +1345,10 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    Ingestion" and "Connected Data Sources" render as one merged card with
    an internal divider (`.settings-section-header-bordered`) rather than
    two separate cards — same two handlers/states as before, just one DOM
-   boundary instead of two. "Save Changes" sits in `.settings-header`,
-   top-right next to the page title — moved there (from the bottom of
-   the left column, itself moved from full-width below both columns) per
-   direct request; each move is placement only, `handleSave()` itself is
-   unchanged throughout
+   boundary instead of two. A transient save-status line (`.save-action`,
+   "Saving…" / "Saved." / an error) sits in `.settings-header`, top-right
+   next to the page title, in place of the "Save Changes" button removed
+   2026-09-01 — the same spot the button used to occupy.
 5. `Toasts.jsx` — a pure display component: renders whichever
    `{id, kind, text}` entries are in `App.jsx`'s `toasts` state as a
    fixed top-right stack, each auto-removed after 7 seconds
@@ -1362,16 +1388,22 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    with their relationship `label`. A node's label text is truncated to 32
    characters (`truncateLabel()`) — long GitHub titles otherwise overlap
    and clutter the layout — with the full title available via a native
-   SVG `<title>` hover tooltip. See DECISIONS.md, 2026-08-31. The legend
-   lists every `source_type`
+   SVG `<title>` hover tooltip. See DECISIONS.md, 2026-08-31. A "Filter"
+   button in the toolbar (top-right, alongside zoom/fit) opens a floating
+   checkbox panel (`graph-view-filter-panel`, closes on an outside-click
+   `pointerdown` listener) listing every `source_type`
    except `browser_history` — that source is excluded from relationship
    detection entirely (`pipeline/relationships.py`, see CLAUDE.md), so a
-   node for it can never exist on this graph; listing it in the legend
-   would promise something that can never appear. See DECISIONS.md,
-   2026-08-30. Legend entries also double as filter toggles
-   (`visibleSourceTypes`, a `Set`) — filtering hides (not dims) non-
-   matching nodes/edges at render time only, never touching the running
-   simulation. Pan/zoom is a hand-rolled `{x, y, k}` transform applied via
+   node for it can never exist on this graph; listing it would promise
+   something that can never appear. See DECISIONS.md, 2026-08-30. This
+   replaced an earlier bottom-of-canvas legend whose swatches doubled as
+   filter toggles — same underlying state (`visibleSourceTypes`, a `Set`,
+   toggled via `toggleSourceType()`) and filtering behavior (hides, not
+   dims, non-matching nodes/edges at render time only, never touching the
+   running simulation), just moved into the toolbar and given a visible,
+   badge-counted button ("Filter (3/5)") plus "All"/"None" quick actions,
+   since the old legend read as decoration rather than a control — see
+   DECISIONS.md, 2026-09-01. Pan/zoom is a hand-rolled `{x, y, k}` transform applied via
    a wrapping `<g transform="translate(x,y) scale(k)">` (wheel to zoom
    anchored at the cursor, toolbar `+`/`−` buttons, dragging the
    background to pan) — `toSimulationPoint()` now inverts both the SVG's

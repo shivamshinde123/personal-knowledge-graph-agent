@@ -155,10 +155,19 @@ class SourceConfigResponse(BaseModel):
     Extension beyond ``docs/API_Specification.docx`` — configurable
     ingestion scope, not just credentials. See ``DECISIONS.md``.
 
-    The four date-range fields are plain ``YYYY-MM-DD`` strings (or
+    The six date-range fields are plain ``YYYY-MM-DD`` strings (or
     ``None``), not a ``date`` type — this matches an HTML
     ``<input type="date">``'s value directly, so the frontend needs no
     parsing/formatting boundary. See ``DECISIONS.md``.
+
+    ``gmail_date_range_start``/``_end`` and ``calendar_date_range_start``/
+    ``_end`` are never actually ``None`` in practice — they carry
+    ``EnvSettings.effective_gmail_date_range_start``/``_end`` and
+    ``effective_calendar_date_range_start``/``_end``, which default to a
+    rolling window (last 15 days / next 30 days) rather than "unset."
+    ``github_date_range_start``/``_end`` are the one pair that can
+    genuinely be ``None`` — GitHub's own range was never asked to default.
+    See ``DECISIONS.md``.
     """
 
     local_files_watch_dirs: list[str]
@@ -168,6 +177,8 @@ class SourceConfigResponse(BaseModel):
     gmail_date_range_end: str | None
     github_date_range_start: str | None
     github_date_range_end: str | None
+    calendar_date_range_start: str | None
+    calendar_date_range_end: str | None
 
 
 class SourceConfigUpdateRequest(BaseModel):
@@ -180,6 +191,8 @@ class SourceConfigUpdateRequest(BaseModel):
     gmail_date_range_end: str | None = None
     github_date_range_start: str | None = None
     github_date_range_end: str | None = None
+    calendar_date_range_start: str | None = None
+    calendar_date_range_end: str | None = None
 
 
 class BrowseFolderResponse(BaseModel):
