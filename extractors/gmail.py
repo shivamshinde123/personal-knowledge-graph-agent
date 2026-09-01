@@ -100,7 +100,9 @@ def extract_new_items(
             full — every message in it, not just the new ones — so the
             conversation is never embedded with earlier context missing.
             Combined with ``config/.env``'s ``GMAIL_DATE_RANGE_START``/
-            ``GMAIL_DATE_RANGE_END``, if set — see :func:`_effective_window`.
+            ``GMAIL_DATE_RANGE_END`` — defaults to the last 15 days when
+            unset (see ``EnvSettings.effective_gmail_date_range_start``/
+            ``_end``, ``DECISIONS.md``) — see :func:`_effective_window`.
         on_progress: Accepted for a uniform call shape with the other
             extractors in ``scheduler/daily_batch.py``'s ``_EXTRACTORS``
             list, but unused here — see ``extractors/base.py``. Tracked
@@ -128,8 +130,8 @@ def extract_new_items(
 
     since, until = _effective_window(
         since,
-        settings.env.gmail_date_range_start,
-        settings.env.gmail_date_range_end,
+        settings.env.effective_gmail_date_range_start,
+        settings.env.effective_gmail_date_range_end,
     )
     query_parts = []
     if since is not None:

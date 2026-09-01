@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from datetime import date
+from datetime import date, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -237,6 +237,13 @@ class EnvSettings(BaseSettings):
     github_date_range_start: date | None = None
     github_date_range_end: date | None = None
     google_calendar_credentials_path: Path | None = None
+    # A window on each event's own start time (Google Calendar API's
+    # timeMin/timeMax), not the incremental `since`/`updatedMin` check
+    # extract_new_items() already does — the two are independent, ANDed
+    # filters: "changed recently" vs "happening in this window." See
+    # effective_calendar_date_range_start/_end below, DECISIONS.md.
+    calendar_date_range_start: date | None = None
+    calendar_date_range_end: date | None = None
     browser_history_path: Path | None = None
     local_files_watch_dirs: str = ""
 
@@ -330,6 +337,35 @@ class EnvSettings(BaseSettings):
             :attr:`notion_page_ids_list`.
         """
         return [part.strip() for part in self.github_repos.split(",") if part.strip()]
+
+    # Rolling defaults for Gmail/Calendar's date-range scope, unlike
+    # watch_dirs/notion_page_ids_list/github_repos_list above: an unset
+    # range here always means "the last/next N days," not "unbounded" —
+    # explicitly requested, since a fresh install pulling someone's
+    # *entire* mailbox or calendar by default is rarely what's wanted.
+    # GitHub's own date range (github_date_range_start/_end) intentionally
+    # keeps the old "unset means unbounded" behavior — this default was
+    # only asked for Gmail and Calendar. See DECISIONS.md.
+
+    @property
+    def effective_gmail_date_range_start(self) -> date:
+        """``GMAIL_DATE_RANGE_START``, or 15 days ago if unset."""
+        return self.gmail_date_range_start or (date.today() - timedelta(days=15))
+
+    @property
+    def effective_gmail_date_range_end(self) -> date:
+        """``GMAIL_DATE_RANGE_END``, or today if unset."""
+        return self.gmail_date_range_end or date.today()
+
+    @property
+    def effective_calendar_date_range_start(self) -> date:
+        """``CALENDAR_DATE_RANGE_START``, or today if unset."""
+        return self.calendar_date_range_start or date.today()
+
+    @property
+    def effective_calendar_date_range_end(self) -> date:
+        """``CALENDAR_DATE_RANGE_END``, or 30 days from now if unset."""
+        return self.calendar_date_range_end or (date.today() + timedelta(days=30))
 
 
 class Settings(BaseModel):
@@ -466,6 +502,8 @@ def update_source_config(
     gmail_date_range_end: str | None = None,
     github_date_range_start: str | None = None,
     github_date_range_end: str | None = None,
+    calendar_date_range_start: str | None = None,
+    calendar_date_range_end: str | None = None,
     path: Path = DEFAULT_ENV_PATH,
 ) -> EnvSettings:
     """Update ``config/.env``'s source-scope variables on disk, in place.
@@ -496,6 +534,12 @@ def update_source_config(
             GitHub.
         github_date_range_end: Same as ``gmail_date_range_end``, for
             GitHub.
+        calendar_date_range_start: Same shape as ``gmail_date_range_start``,
+            but for Calendar — filters by each event's own start time, not
+            an incremental cursor; ``""``/``None`` behave the same way,
+            falling back to :attr:`EnvSettings.effective_calendar_date_range_start`
+            when cleared.
+        calendar_date_range_end: Same, but the ceiling.
         path: Path to the ``.env`` file. Defaults to the real one; passing
             a different path (tests) writes there instead and leaves the
             process-wide ``get_settings()`` cache untouched.
@@ -544,6 +588,8 @@ def update_source_config(
             "GMAIL_DATE_RANGE_END": gmail_date_range_end,
             "GITHUB_DATE_RANGE_START": github_date_range_start,
             "GITHUB_DATE_RANGE_END": github_date_range_end,
+            "CALENDAR_DATE_RANGE_START": calendar_date_range_start,
+            "CALENDAR_DATE_RANGE_END": calendar_date_range_end,
         }
         for key, value in date_fields.items():
             if value is not None:

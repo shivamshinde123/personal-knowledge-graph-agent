@@ -144,8 +144,16 @@ def install_fake_gmail(
         lambda: SimpleNamespace(
             env=SimpleNamespace(
                 gmail_credentials_path=gmail_credentials_path,
-                gmail_date_range_start=date_range_start,
-                gmail_date_range_end=date_range_end,
+                # Named for what extract_new_items() actually reads
+                # (EnvSettings.effective_gmail_date_range_start/_end,
+                # which default to a rolling window when unset — see
+                # config/settings.py, DECISIONS.md). This helper still
+                # accepts a plain None here to exercise
+                # _effective_window()'s own "no floor/ceiling" merge
+                # behavior in isolation; the defaulting itself is tested
+                # separately in tests/test_config/test_settings.py.
+                effective_gmail_date_range_start=date_range_start,
+                effective_gmail_date_range_end=date_range_end,
             ),
             config=SimpleNamespace(
                 filters=SimpleNamespace(
@@ -286,6 +294,15 @@ class TestHtmlFallback:
 
 
 class TestDateRangeScoping:
+    """Exercises _effective_window()'s own before/after merge logic.
+
+    Independent of whether a real, unset GMAIL_DATE_RANGE_START/_END
+    actually reaches it as None in practice — since 2026-09-01 it never
+    does; EnvSettings.effective_gmail_date_range_start/_end default to a
+    rolling 15-day window instead (see
+    tests/test_config/test_settings.py, DECISIONS.md).
+    """
+
     def test_no_range_configured_has_no_before_or_after(self, monkeypatch):
         world = install_fake_gmail(monkeypatch, [message("m1", "t1")])
 
