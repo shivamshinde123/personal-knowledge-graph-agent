@@ -3,7 +3,7 @@
 # Reference: docs/Environment_Config_Reference.docx section 4.
 
 llm:
-  provider_mode: fully_local # fully_local | fully_cloud -- controls generation only; embedding is always cloud, see below
+  provider_mode: fully_cloud # fully_local | fully_cloud -- controls generation only; embedding is always cloud, see below
   local_generation_model: llama3:8b # used when provider_mode is fully_local
   cloud_generation_model: anthropic/claude-sonnet-4 # used when provider_mode is fully_cloud
   cloud_embedding_model: openai/text-embedding-3-small # always used, regardless of provider_mode -- there is no local embedding path. OPENROUTER_API_KEY is required even under fully_local. Changing this needs a full reset + re-ingest -- see DECISIONS.md

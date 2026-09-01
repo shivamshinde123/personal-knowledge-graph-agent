@@ -25,7 +25,7 @@ class TestLoadConfig:
     def test_parses_the_committed_config_yaml(self):
         config = load_config()
 
-        assert config.llm.provider_mode == "fully_local"
+        assert config.llm.provider_mode == "fully_cloud"
         assert config.chunking.target_chunk_size_tokens == 400
         assert config.chunking.chunk_overlap_tokens == 40
         assert config.retrieval.top_k_vector == 8
@@ -101,25 +101,8 @@ class TestEnvSettings:
             Path("C:/code"),
         ]
 
-    def test_watch_dirs_falls_back_to_the_default_folder_when_unset(
-        self, monkeypatch, tmp_path
-    ):
-        import config.settings as settings_module
-
-        fake_default = tmp_path / "watched"
-        monkeypatch.setattr(settings_module, "DEFAULT_WATCH_DIR", fake_default)
-
-        assert EnvSettings(local_files_watch_dirs="").watch_dirs == [fake_default]
-
-    def test_the_default_watch_folder_is_created_on_demand(self, monkeypatch, tmp_path):
-        import config.settings as settings_module
-
-        fake_default = tmp_path / "watched"
-        monkeypatch.setattr(settings_module, "DEFAULT_WATCH_DIR", fake_default)
-
-        _ = EnvSettings(local_files_watch_dirs="").watch_dirs
-
-        assert fake_default.is_dir()
+    def test_watch_dirs_is_empty_when_unset(self):
+        assert EnvSettings(local_files_watch_dirs="").watch_dirs == []
 
     def test_watch_dirs_ignores_empty_segments(self):
         env = EnvSettings(local_files_watch_dirs="C:/notes,,  ,")
@@ -591,7 +574,7 @@ class TestGetSettings:
     def test_returns_both_halves(self):
         settings = get_settings()
 
-        assert settings.config.llm.provider_mode == "fully_local"
+        assert settings.config.llm.provider_mode == "fully_cloud"
         assert settings.env.fastapi_port > 0
 
     def test_result_is_cached(self):
