@@ -17,9 +17,9 @@ LangSmith, and secondarily as a genuinely useful personal tool.
 > setup (below).
 
 <p align="center">
-  <img src="docs/screenshots/chat.png" width="80%" alt="Chat screen" />
+  <img src="docs/screenshots/chat.png" width="100%" alt="Chat screen" />
   <br />
-  <img src="docs/screenshots/graph.png" width="80%" alt="Relationship graph" />
+  <img src="docs/screenshots/graph.png" width="100%" alt="Relationship graph" />
 </p>
 
 ## What it does
@@ -151,7 +151,7 @@ source from the toolbar.
 ## Settings
 
 <p align="center">
-  <img src="docs/screenshots/settings.png" width="80%" alt="Settings screen" />
+  <img src="docs/screenshots/settings.png" width="100%" alt="Settings screen" />
 </p>
 
 Every setting is editable from the Settings screen and saves itself
