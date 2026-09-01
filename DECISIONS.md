@@ -8,6 +8,44 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-09-01 — Local embedding via Ollama restored (frontend): double-confirm + auto-reset on a provider_mode switch
+
+**Context**: Follow-up to the backend half of issue #88 (see the entry directly below). With both embedding fields now freely editable and `provider_mode` switching which one is active, a mode switch silently invalidates every existing embedding — the same dimension-mismatch risk an earlier iteration solved by *freezing* both embedding fields, which this issue explicitly asked not to do. Instead, the switch itself needed to become deliberately hard to trigger by accident and destructive-by-design: warn clearly, confirm twice, then wipe the database automatically (no separate manual "Reset all data" click needed) — but stop short of auto-triggering re-ingestion, unlike the existing `cloud_embedding_model`-change flow.
+
+**Decision**:
+1. `ConfirmDialog.jsx` gains a `critical` prop, layered on top of (not replacing) the existing `danger` prop — `.confirm-dialog.critical`/`.confirm-backdrop.critical` in `index.css` render the *entire* dialog (not just the confirm button) on a solid red background with a white confirm button, a visibly more alarming treatment than `danger`'s red-accented button alone. `useConfirm()` passes `critical` through unchanged, same as every other option.
+2. `SettingsPanel.jsx`'s Models section now shows only the generation + embedding pair matching the active `provider_mode` (`isLocal` → local pair, `isCloud` → cloud pair), not all four fields with the inactive ones merely disabled as before — both fields of the inactive pair are still round-tripped through `GET`/`PUT /api/settings` untouched, so switching back doesn't lose an edited value.
+3. `saveEmbeddingModel()` (previously hardcoded to `cloud_embedding_model`) is generalized to take the field name as a parameter, so both `local_embedding_model` and `cloud_embedding_model` share the same confirm-then-reset-then-reingest flow — changing either embedding model in place, without switching modes, still needs a reset since it's still a vector-space change.
+4. New `saveProviderMode(value)`: awaits two consecutive `confirm({critical: true, ...})` calls (a shared `ProviderModeSwitchWarning` body, since neither prompt is meant to feel like "the real one" — the second exists purely as friction), reverting the radio to its last-saved value if either is declined. Only after both confirms does it call `putSettings({provider_mode})` then `onResetAll()` — explicitly not followed by `onTriggerIngestion()`, unlike `saveEmbeddingModel()`'s flow, per the issue's explicit requirement that a mode switch never auto-starts ingestion.
+
+**Alternatives considered**: reusing the existing `danger` prop for the mode-switch dialog instead of adding `critical` — rejected because the issue explicitly asked for something visually more severe than the app's existing danger styling, and reusing the same look would make the mode switch feel no more consequential than "Reset all data," when it's strictly worse (irreversible data loss *plus* no auto-recovery path via re-ingestion).
+
+**Verified**: `npm run lint`/`npm run build` clean. Not separately unit-tested (no existing frontend test suite in this project — see `Coding_Conventions.docx`); not yet manually verified against a live Ollama instance (no local embedding model pulled on this machine as of this commit) — the confirm-dialog flow, field visibility, and build were checked, but a real `fully_local` embedding call has not been exercised end-to-end yet.
+
+**Affects**: `frontend/src/components/ConfirmDialog.jsx`, `frontend/src/hooks/useConfirm.jsx`, `frontend/src/components/SettingsPanel.jsx`, `frontend/src/index.css`.
+
+---
+
+## 2026-09-01 — Local embedding via Ollama restored (backend); `fully_local` genuinely zero-cost again
+
+**Context**: A real ingestion run under `fully_cloud` cost roughly $20-25 and took ~3 hours (see the README's cost/time note), almost entirely on cloud LLM calls. `provider_mode` had drifted to only controlling *generation* — embedding always went through OpenRouter regardless of mode (see the multi-step history in this file's earlier `cloud_embedding_model`/local-embedding-removal entries), meaning `fully_local` still required `OPENROUTER_API_KEY` and still incurred embedding cost on every ingested item. Issue #88 asked to bring back a genuine "fully local" mode: both generation and embedding local, no cloud dependency at all, using Ollama only (explicitly not `sentence-transformers`, the original local-embedding path, to avoid juggling two different local inference backends) — while keeping both embedding fields (local and cloud) freely editable rather than re-freezing them as a previous iteration did.
+
+**Decision** (backend half — frontend double-confirm/reset/UI work is a separate, later commit):
+1. `providers/local_provider.py::create_local_provider()` now builds an embedding function too, via `langchain_ollama.OllamaEmbeddings` (mirrors `create_openrouter_provider()`'s own `OpenAIEmbeddings`-via-LangChain pattern) — the same "go through LangChain, not a hand-rolled HTTP call" convention as the cloud side.
+2. `providers/base.py::get_provider("embedding")` now branches on `provider_mode` like every other task, instead of unconditionally resolving to OpenRouter.
+3. `config/settings.py::LLMConfig` gains `local_embedding_model: str = "nomic-embed-text"` back as a real field; `update_llm_config()` gained a matching parameter; `config.yaml` documents it alongside the other three model fields.
+4. `api/schemas.py`/`api/routes/settings.py`: `local_embedding_model` added to `SettingsResponse`/`SettingsUpdateRequest`/`SettingsUpdateResponse` and threaded through both routes.
+
+Unlike the earlier "freeze both embedding fields" iteration (forcing both to the same 384 output dimensionality so a `provider_mode` switch could never mismatch vectors), this time both embedding models stay independently editable, per the issue's explicit request. The dimension-mismatch risk this reopens (switching modes, or editing either embedding model to a different width, can leave Chroma holding vectors from an incompatible space) is *not* guarded anywhere in this backend layer — it's deliberately left to the frontend, which issue #88 requires to treat a `provider_mode` switch as fully destructive (double-confirm, then an automatic full reset, no auto re-ingest) before this code is trusted with real data. That frontend work has not landed yet as of this commit — do not treat local-embedding support as safe to exercise via a raw `provider_mode` switch through the API without it.
+
+**Alternatives considered**: re-freezing both embedding models to a shared dimensionality again, like the earlier iteration — rejected because the issue explicitly asked for both fields to stay editable; suggesting suitable local models for the user's hardware via `llmfit` — investigated and explicitly skipped (separate Rust binary requiring manual install, weaker GPU detection on Windows, and unreliable once this app is Dockerized per issue #52's container-based hardware-detection problem).
+
+**Verified**: `uv run pytest` — updated `tests/test_providers/test_local_provider.py` (embed_fn built from the configured/overridden model and host, `generate_embeddings()` delegates to it), `tests/test_providers/test_base.py` (`get_provider("embedding")` now resolves local under `fully_local`), `tests/test_config/test_settings.py`, `tests/test_api/test_settings_route.py`. Full suite passes except one pre-existing, unrelated, environment-dependent failure (`TestEffectiveDateRanges::test_github_still_has_no_default_when_unset`, caused by this machine's own `config/.env` having `GITHUB_DATE_RANGE_START` set — not caused by this change). `black`/`ruff` clean.
+
+**Affects**: `providers/local_provider.py`, `providers/base.py`, `providers/openrouter_provider.py` (docstrings only), `config/settings.py`, `config/config.yaml`, `api/schemas.py`, `api/routes/settings.py`, and the corresponding test files. Frontend double-confirm/auto-reset/field-visibility work tracked separately, same issue (#88).
+
+---
+
 ## 2026-09-01 — Restored an always-visible color-key legend on the graph
 
 **Context**: When the per-source filter moved from a passive bottom legend into a toolbar "Filter" button/panel (see the toolbar-panel entry below), the color key went with it — the panel only renders while open, so there was no longer any way to see what a node's color meant without opening Filter first. Flagged directly after using the real app.

@@ -16,6 +16,13 @@ import { useEffect, useRef } from "react";
  *   JSX (e.g. a bullet list, a highlighted warning paragraph)
  * @param {boolean} [props.danger] - styles the confirm button red instead
  *   of the accent color, for destructive/high-consequence actions
+ * @param {boolean} [props.critical] - the most severe visual treatment in
+ *   the app: the whole dialog (not just the confirm button) renders on a
+ *   solid red background, for actions more consequential than a normal
+ *   "danger" prompt — currently only the provider-mode switch (Local <->
+ *   Cloud), which silently invalidates every existing embedding and
+ *   triggers an automatic full data wipe. Implies `danger`-equivalent
+ *   button styling. See DECISIONS.md.
  * @param {string} [props.confirmLabel]
  * @param {string} [props.cancelLabel]
  * @param {() => void} props.onConfirm
@@ -25,6 +32,7 @@ function ConfirmDialog({
   title,
   body,
   danger,
+  critical,
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
   onConfirm,
@@ -42,9 +50,12 @@ function ConfirmDialog({
   }, [onCancel]);
 
   return (
-    <div className="confirm-backdrop" onClick={onCancel}>
+    <div
+      className={`confirm-backdrop${critical ? " critical" : ""}`}
+      onClick={onCancel}
+    >
       <div
-        className="confirm-dialog"
+        className={`confirm-dialog${critical ? " critical" : ""}`}
         role="alertdialog"
         aria-modal="true"
         aria-labelledby={title ? "confirm-dialog-title" : undefined}
@@ -67,7 +78,7 @@ function ConfirmDialog({
           <button
             type="button"
             ref={confirmButtonRef}
-            className={`confirm-dialog-confirm${danger ? " danger" : ""}`}
+            className={`confirm-dialog-confirm${danger || critical ? " danger" : ""}`}
             onClick={onConfirm}
           >
             {confirmLabel}

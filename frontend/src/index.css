@@ -1576,6 +1576,53 @@ a {
   background: #a52f22;
 }
 
+/* ---- Critical confirm dialog ----
+ * The most severe visual treatment in the app: the whole dialog (not just
+ * the confirm button) renders on a solid red background, reserved for the
+ * provider-mode switch (Local <-> Cloud) — more consequential than any
+ * other confirm in the app, since it silently invalidates every existing
+ * embedding and triggers an automatic full data wipe. Deliberately more
+ * alarming than the plain `.danger` variant above. See DECISIONS.md. */
+
+.confirm-backdrop.critical {
+  background: rgba(80, 0, 0, 0.6);
+}
+
+.confirm-dialog.critical {
+  background: var(--danger);
+  border: 2px solid #7a1f14;
+  box-shadow: 0 12px 40px rgba(122, 31, 20, 0.6);
+}
+
+.confirm-dialog.critical .confirm-dialog-title,
+.confirm-dialog.critical .confirm-dialog-body {
+  color: #fff;
+}
+
+.confirm-dialog.critical .confirm-dialog-warning {
+  border-color: #fff;
+  background: rgba(0, 0, 0, 0.2);
+  color: #fff;
+}
+
+.confirm-dialog.critical .confirm-dialog-cancel {
+  border-color: #fff;
+  color: #fff;
+}
+
+.confirm-dialog.critical .confirm-dialog-cancel:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.confirm-dialog.critical .confirm-dialog-confirm {
+  background: #fff;
+  color: var(--danger);
+}
+
+.confirm-dialog.critical .confirm-dialog-confirm:hover {
+  background: #f2f2f2;
+}
+
 /* ---- Ingestion progress ---- */
 
 .ingestion-progress {

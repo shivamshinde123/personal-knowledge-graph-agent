@@ -242,28 +242,29 @@ only `providers/base.py`'s `get_provider()` and its return type,
 `ProviderInterface`.
 
 1. `get_provider(task)` — `task` is `"metadata"`, `"relationship"`,
-   `"condense"`, `"answer"`, `"eval"`, or `"embedding"`. For every task
-   except `"embedding"`, reads `settings.config.llm.provider_mode` and
+   `"condense"`, `"answer"`, `"eval"`, or `"embedding"`. Every task,
+   including `"embedding"`, reads `settings.config.llm.provider_mode` and
    returns `create_local_provider()` (Ollama) for `fully_local`, or
    `create_openrouter_provider()` (OpenRouter) for `fully_cloud` — there is
-   no `mixed` mode (removed — see DECISIONS.md, 2026-08-30). `"embedding"`
-   is a special case: it **always** returns `create_openrouter_provider()`,
-   regardless of `provider_mode` — there is no local embedding path at all
-   (removed — see DECISIONS.md, 2026-08-30, latest entry). This means
-   `OPENROUTER_API_KEY` is required even under `fully_local`, purely for
-   embedding; `fully_local` only means generation is free/offline.
+   no `mixed` mode (removed — see DECISIONS.md, 2026-08-30). Local
+   embedding was brought back via Ollama (see DECISIONS.md, 2026-09-01,
+   "Local embedding via Ollama restored"), reversing an earlier design
+   where `"embedding"` always resolved to OpenRouter regardless of mode —
+   `fully_local` is once again zero-cost and zero-network for both
+   generation and embedding.
 2. Both concrete providers construct a `LangChainProvider` around a
    LangChain chat model (`ChatOllama` / `ChatOpenAI`) for their prompt
    building, JSON response parsing, and retry-with-backoff — shared by
-   both. Only `create_openrouter_provider()` also builds an `embed_fn`
-   (wrapping a LangChain `OpenAIEmbeddings` pointed at OpenRouter's base
-   URL, `openrouter_provider.py::EMBEDDING_MODEL`, truncated to 384
-   dimensions via the `dimensions` parameter — verified directly against
-   the real OpenRouter API) — `create_local_provider()` passes no
-   `embed_fn` at all, so calling `generate_embeddings()` on a local
-   provider raises `ProviderError` (never actually reached in practice,
-   since `get_provider("embedding")` never returns one — see
-   DECISIONS.md, 2026-08-30, latest entry). The `ChatOpenAI`
+   both. Both also build an `embed_fn`: `create_local_provider()` wraps a
+   LangChain `OllamaEmbeddings` (`llm.local_embedding_model`, default
+   `nomic-embed-text`); `create_openrouter_provider()` wraps a LangChain
+   `OpenAIEmbeddings` pointed at OpenRouter's base URL
+   (`llm.cloud_embedding_model`). Neither forces a shared output
+   dimensionality any more — switching `provider_mode`, or editing either
+   embedding model, can leave Chroma holding vectors from an incompatible
+   space; the frontend is responsible for treating a `provider_mode`
+   switch as destructive (double-confirm, then an automatic full reset)
+   rather than anything enforced here. The `ChatOpenAI`
    (OpenRouter) side always passes an explicit
    `max_tokens` (`llm.cloud_max_tokens`, default `4096`) — left unset it
    would default to the routed model's own maximum (64000 for
@@ -312,11 +313,9 @@ only `providers/base.py`'s `get_provider()` and its return type,
    `generate_relationship()` (see DECISIONS.md, 2026-08-29)
 8. `provider.generate_embeddings(texts)` — called by
    `pipeline/embeddings.py::embed_chunks()`/`embed_query()` (see below);
-   returns one vector per input text. Always the OpenRouter provider's
-   `embed_fn` in practice — `get_provider("embedding")` never returns the
-   local provider (see point 1 above) — so `provider_mode` has no effect
-   on embeddings at all any more; only which *generation* provider is
-   used varies by mode (see DECISIONS.md, 2026-08-30, latest entry)
+   returns one vector per input text. Follows `provider_mode` like every
+   other task (see point 1 above) — Ollama's `embed_fn` under
+   `fully_local`, OpenRouter's under `fully_cloud`.
 
 ---
 
@@ -998,37 +997,37 @@ See DECISIONS.md, 2026-08-29.
 ## Entry point: `GET /api/settings` (`api/routes/settings.py`)
 
 1. `config/settings.py::get_settings().config.llm` read directly for all
-   three model fields (the two generation models plus
-   `cloud_embedding_model`) — no `agent/` intermediary, since `config`
-   isn't `storage`/`providers` (see DECISIONS.md, 2026-08-25).
-   `cloud_embedding_model` is a normal `config.llm` field like the others
-   now, not a `providers/`-layer constant needing its own thin wrapper —
-   see DECISIONS.md, 2026-08-30 (the un-freeze entry)
+   four model fields (both generation models, both embedding models) — no
+   `agent/` intermediary, since `config` isn't `storage`/`providers` (see
+   DECISIONS.md, 2026-08-25).
 2. Returns `{"provider_mode", "local_generation_model",
-   "cloud_generation_model", "cloud_embedding_model"}` — no
-   `local_embedding_model` at all, since there's no local embedding path —
-   extends `docs/API_Specification.docx` section 3.6's original two-field
-   shape (see DECISIONS.md, 2026-08-30, all entries)
+   "local_embedding_model", "cloud_generation_model",
+   "cloud_embedding_model"}` — `local_embedding_model` restored (see
+   DECISIONS.md, 2026-09-01, "Local embedding via Ollama restored") after
+   an earlier iteration removed it entirely; extends
+   `docs/API_Specification.docx` section 3.6's original two-field shape
 
 ---
 
 ## Entry point: `PUT /api/settings` (`api/routes/settings.py`)
 
 1. Request body validated against `api/schemas.py::SettingsUpdateRequest`
-   (`provider_mode`, `local_generation_model`, `cloud_generation_model`,
-   `cloud_embedding_model` — all optional, a partial update) — an invalid
-   `provider_mode` value is a 422 via the shared validation-error handler
+   (`provider_mode`, `local_generation_model`, `local_embedding_model`,
+   `cloud_generation_model`, `cloud_embedding_model` — all optional, a
+   partial update) — an invalid `provider_mode` value is a 422 via the
+   shared validation-error handler
 2. `config/settings.py::update_llm_config()` called with whichever fields
    were given (see "Shared: configuration loading" above for its own
    steps) — a `ConfigError` (bad resulting config, or a file I/O failure)
    is caught by `api/main.py`'s shared handler, mapped to 500. This route
-   itself has no special handling for a `cloud_embedding_model` change —
-   the "confirm, then reset + re-ingest" behavior is entirely
+   itself has no special handling for a `provider_mode` switch or either
+   embedding-model change — the "confirm, then reset (+ re-ingest for
+   `cloud_embedding_model` only)" behavior is entirely
    `SettingsPanel.jsx`'s responsibility (see below), not enforced here
 3. Returns `{"status": "updated", "provider_mode",
-   "local_generation_model", "cloud_generation_model",
-   "cloud_embedding_model"}`, reflecting the freshly written-and-reread
-   configuration
+   "local_generation_model", "local_embedding_model",
+   "cloud_generation_model", "cloud_embedding_model"}`, reflecting the
+   freshly written-and-reread configuration
 
 ---
 
@@ -1301,31 +1300,53 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    in parallel, snapshotting the loaded values into `lastSavedRef` — the
    baseline every later field compares its own value against before
    deciding to save. There is no "Save Changes" step: every field saves
-   itself the moment it's committed — see DECISIONS.md, 2026-09-01. A
-   `provider_mode` radio calls `saveLlmField("provider_mode", value)`
-   directly from its own `onChange`; the two generation-model text inputs
-   and the four source-scope textareas/date fields call their respective
-   save helper (`saveLlmField()`/`saveScopeTextarea()`/`saveDateField()`)
-   from `onBlur`, each first checking `lastSavedRef.current[key] !==
-   value` so an unchanged blur (click in, click away) is a no-op. Every
-   save helper follows the same shape: `putSettings()`/`putSourceConfig()`
-   with just the one changed field (both endpoints are partial-update),
-   then syncs `lastSavedRef` from the response so it always reflects the
-   server's own truth rather than the client's assumption. The one
-   exception is `cloud_embedding_model`'s `onBlur`, which calls
-   `saveEmbeddingModel()` instead of the generic `saveLlmField()` — it
-   still can't be silent, since changing it strands every existing
-   embedding, so it opens the same `useConfirm()` (`hooks/useConfirm.jsx`,
-   rendering `ConfirmDialog.jsx` — this project's own centered modal, not
-   the native `window.confirm()`) dialog as before with a danger-styled
-   warning; declining reverts the input to `lastSavedRef.current`'s value
-   (there's no Save button left to abandon an edit via otherwise). Only on
-   confirm does it call `putSettings({cloud_embedding_model})`, then
-   `onResetAll()` followed by `onTriggerIngestion()` (the same
-   `App.jsx`-owned flows the Danger Zone button and "Run ingestion now"
-   button call directly elsewhere) and re-fetches
-   `getSourcesStatus()`/`getSourceConnections()` — see DECISIONS.md,
-   2026-08-30 (the un-freeze/confirm-dialog entry) and 2026-09-01. Each
+   itself the moment it's committed — see DECISIONS.md, 2026-09-01. The
+   Models section renders only the generation + embedding pair matching
+   `settings.provider_mode` (`isLocal ? local_* : cloud_*`) — not all four
+   fields at once — but both fields of the inactive pair are still kept in
+   `settings` (round-tripped through every `GET`/`PUT /api/settings` call)
+   so switching modes and back doesn't lose an edited-but-inactive value.
+   See DECISIONS.md, 2026-09-01, "Local embedding via Ollama restored
+   (frontend)". The two generation-model text inputs and the four
+   source-scope textareas/date fields call their respective save helper
+   (`saveLlmField()`/`saveScopeTextarea()`/`saveDateField()`) from
+   `onBlur`, each first checking `lastSavedRef.current[key] !== value` so
+   an unchanged blur (click in, click away) is a no-op. Every save helper
+   follows the same shape: `putSettings()`/`putSourceConfig()` with just
+   the one changed field (both endpoints are partial-update), then syncs
+   `lastSavedRef` from the response so it always reflects the server's own
+   truth rather than the client's assumption. Either embedding model
+   field's `onBlur` calls `saveEmbeddingModel(apiKey, value)` instead of
+   the generic `saveLlmField()` — it still can't be silent, since changing
+   it strands every existing embedding, so it opens the same
+   `useConfirm()` (`hooks/useConfirm.jsx`, rendering `ConfirmDialog.jsx` —
+   this project's own centered modal, not the native `window.confirm()`)
+   dialog as before with a danger-styled warning; declining reverts the
+   input to `lastSavedRef.current`'s value (there's no Save button left to
+   abandon an edit via otherwise). Only on confirm does it call
+   `putSettings({[apiKey]: value})`, then `onResetAll()` followed by
+   `onTriggerIngestion()` (the same `App.jsx`-owned flows the Danger Zone
+   button and "Run ingestion now" button call directly elsewhere) and
+   re-fetches `getSourcesStatus()`/`getSourceConnections()` — see
+   DECISIONS.md, 2026-08-30 (the un-freeze/confirm-dialog entry) and
+   2026-09-01.
+
+   The `provider_mode` radio's own `onChange` calls `saveProviderMode(value)`
+   instead — a switch between Local and Cloud is treated as the single
+   most consequential action in Settings, since it changes which embedding
+   model is active and the two modes' embedding spaces are never
+   compatible. `saveProviderMode()` awaits **two** consecutive
+   `useConfirm()` prompts in sequence (declining either aborts and reverts
+   the radio pick), both passed `critical: true` — a new dialog variant
+   (`ConfirmDialog.jsx`'s `critical` prop, `.confirm-dialog.critical` /
+   `.confirm-backdrop.critical` in `index.css`) that renders the entire
+   dialog on a solid red background, more alarming than the plain
+   `danger`-styled button variant every other confirm in this file uses.
+   Only after both confirms does it call `putSettings({provider_mode})`,
+   then `onResetAll()` — but, unlike the embedding-model flow above,
+   deliberately stops there: no `onTriggerIngestion()` call, so a mode
+   switch never starts a run on its own. See DECISIONS.md, 2026-09-01,
+   "Local embedding via Ollama restored (frontend)". Each
    connected-source card shows the live connection status
    (`getSourceConnections()`'s cache-or-fresh result) rather than the
    batch-run status alone; "Reverify" calls `verifySourceConnections()`

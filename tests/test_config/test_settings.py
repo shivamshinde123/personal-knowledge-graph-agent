@@ -31,12 +31,7 @@ class TestLoadConfig:
         assert config.retrieval.top_k_vector == 8
         assert config.retrieval.relationship_candidate_count == 10
         assert config.llm.cloud_embedding_model == "openai/text-embedding-3-small"
-
-    def test_llm_config_has_no_local_embedding_model_field(self):
-        """There is no local embedding path — see LLMConfig's docstring."""
-        config = load_config()
-
-        assert not hasattr(config.llm, "local_embedding_model")
+        assert config.llm.local_embedding_model == "nomic-embed-text"
 
     def test_parses_nested_filter_rules(self):
         config = load_config()
@@ -348,17 +343,15 @@ class TestUpdateLlmConfig:
         assert "domain_blocklist:" in written
         assert "google.com/search" in written
 
-    def test_local_embedding_model_is_not_an_accepted_parameter(self, tmp_path):
-        """There is no local embedding path.
-
-        The function signature has no parameter for one, unlike
-        cloud_embedding_model.
-        """
+    def test_updates_the_local_embedding_model(self, tmp_path):
         config_path = tmp_path / "config.yaml"
         config_path.write_text(_SAMPLE_CONFIG, encoding="utf-8")
 
-        with pytest.raises(TypeError):
-            update_llm_config(local_embedding_model="x", path=config_path)
+        result = update_llm_config(
+            local_embedding_model="mxbai-embed-large", path=config_path
+        )
+
+        assert result.llm.local_embedding_model == "mxbai-embed-large"
 
     def test_updates_the_cloud_embedding_model(self, tmp_path):
         config_path = tmp_path / "config.yaml"

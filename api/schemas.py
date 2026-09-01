@@ -114,18 +114,21 @@ class ConnectionsResponse(BaseModel):
 class SettingsResponse(BaseModel):
     """``GET /api/settings`` response body.
 
-    Two *generation* model fields (follow ``provider_mode``) plus one
-    *embedding* model field (always cloud, regardless of ``provider_mode``
-    — there is no local embedding path). All three are settable. Changing
-    ``cloud_embedding_model`` is a bigger deal than the other two — it
-    changes which embedding space every future vector lands in — but
-    nothing here enforces a reset when it changes; that's the frontend's
-    job (a confirm prompt, then an automatic reset + re-ingest). See
-    ``DECISIONS.md``.
+    Two generation/embedding pairs — local (Ollama) and cloud
+    (OpenRouter) — all four fields settable regardless of which
+    ``provider_mode`` is currently active; the frontend only *displays*
+    the pair matching the active mode. Changing ``provider_mode`` itself
+    is the bigger deal: it changes which embedding space every future
+    vector lands in, so the frontend treats it as destructive (a double
+    confirm, then an automatic full reset). Changing ``cloud_embedding_model``
+    in place, without switching modes, still needs a reset + re-ingest for
+    the same reason. Nothing here enforces either reset; that's the
+    frontend's job. See ``DECISIONS.md``.
     """
 
     provider_mode: ProviderMode
     local_generation_model: str
+    local_embedding_model: str
     cloud_generation_model: str
     cloud_embedding_model: str
 
@@ -135,6 +138,7 @@ class SettingsUpdateRequest(BaseModel):
 
     provider_mode: ProviderMode | None = None
     local_generation_model: str | None = None
+    local_embedding_model: str | None = None
     cloud_generation_model: str | None = None
     cloud_embedding_model: str | None = None
 
@@ -145,6 +149,7 @@ class SettingsUpdateResponse(BaseModel):
     status: Literal["updated"]
     provider_mode: ProviderMode
     local_generation_model: str
+    local_embedding_model: str
     cloud_generation_model: str
     cloud_embedding_model: str
 

@@ -227,16 +227,14 @@ class ProviderInterface(ABC):
     def generate_embeddings(self, texts: Sequence[str]) -> list[list[float]]:
         """Embed a batch of texts into vectors.
 
-        Unlike generation, embedding does not follow ``provider_mode`` —
-        ``get_provider("embedding")`` always resolves to OpenRouter,
-        regardless of mode (see ``get_provider()``'s own docstring). There
-        is only one embedding model in play at any time
-        (``settings.config.llm.cloud_embedding_model``), user-editable —
-        so a mode switch can never mismatch vectors the way switching
-        between two separate models could, but changing the embedding
-        model itself still can; the frontend confirms with the user and
-        triggers a reset + re-ingest when it changes. Requires
-        ``OPENROUTER_API_KEY`` even under ``fully_local``.
+        Embedding follows ``provider_mode`` just like generation does —
+        ``get_provider("embedding")`` resolves to Ollama under
+        ``fully_local`` and OpenRouter under ``fully_cloud`` (see
+        ``get_provider()``'s own docstring). Switching modes therefore
+        switches which embedding model is active; the frontend treats this
+        as destructive (double-confirm, then an automatic full reset)
+        since vectors from the two models are not compatible with each
+        other. See ``DECISIONS.md``.
 
         Args:
             texts: The texts to embed, in the order results are returned.
@@ -614,22 +612,21 @@ class LangChainProvider(ProviderInterface):
 def get_provider(task: Task) -> ProviderInterface:
     """Select the configured provider for a given task.
 
-    ``"embedding"`` always resolves to OpenRouter, regardless of
-    ``provider_mode`` — there is no local embedding path any more (removed
-    — see DECISIONS.md). This means embedding calls need
-    ``OPENROUTER_API_KEY`` configured even under ``fully_local``, which is
-    otherwise meant to have no network dependency; ingestion (which always
-    embeds) will fail for every item under `fully_local` without that key
-    set. This is a deliberate trade-off, not an oversight — a single,
-    cloud-only embedding model can never have a mode-driven dimension
-    mismatch to worry about at all, which was worth more than preserving
-    `fully_local`'s previous "zero network calls" property. See
-    DECISIONS.md.
+    Every task, including ``"embedding"``, reads
+    ``settings.config.llm.provider_mode`` — ``fully_local``: both
+    generation and embedding run through Ollama, with no network
+    dependency at all. ``fully_cloud``: both run through OpenRouter. There
+    is no ``mixed`` mode (removed — see DECISIONS.md). This is a deliberate
+    re-reversal of an earlier design where embedding always went through
+    OpenRouter regardless of mode — brought back local embedding to make
+    ``fully_local`` a genuinely zero-cost, zero-network mode again (see
+    DECISIONS.md for the full history and why).
 
-    Every other task reads ``settings.config.llm.provider_mode`` —
-    ``fully_local``: generation runs through Ollama. ``fully_cloud``:
-    generation runs through OpenRouter. There is no ``mixed`` mode
-    (removed — see DECISIONS.md).
+    Switching ``provider_mode`` switches which embedding model is active;
+    since Chroma vectors from different embedding models are not
+    compatible with each other, the frontend treats a mode switch as
+    destructive (double-confirm, then an automatic full reset) rather than
+    leaving mismatched vectors in place.
 
     Args:
         task: Which kind of call the returned provider will be used for.
@@ -639,15 +636,11 @@ def get_provider(task: Task) -> ProviderInterface:
 
     Raises:
         ProviderError: If the resolved provider is misconfigured (e.g. no
-            OpenRouter API key set while cloud access is required — always
-            required for ``"embedding"``, only required for other tasks
-            under ``fully_cloud``).
+            OpenRouter API key set under ``fully_cloud``).
     """
     from providers.local_provider import create_local_provider
     from providers.openrouter_provider import create_openrouter_provider
 
-    if task == "embedding":
-        return create_openrouter_provider()
     mode = get_settings().config.llm.provider_mode
     if mode == "fully_cloud":
         return create_openrouter_provider()
