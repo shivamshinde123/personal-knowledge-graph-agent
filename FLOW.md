@@ -407,11 +407,13 @@ calls `pipeline/filters.py` next.
   attachments get their text extracted via the same `pypdf`/`python-docx`
   libraries `extractors/local_files.py` uses. A thread where every
   message was filtered out produces no item. `_effective_window()`
-  combines the incremental `since` cursor with `config/.env`'s
-  `GMAIL_DATE_RANGE_START`/`GMAIL_DATE_RANGE_END`, if set: the start date
-  floors `since` (via `max()`, never moving a later cursor backward) and
-  the end date adds an inclusive `before:` to the Gmail search query on
-  every run — see DECISIONS.md, 2026-08-30.
+  combines the incremental `since` cursor with
+  `settings.env.effective_gmail_date_range_start`/`_end` — defaulting to
+  the last 15 days when `GMAIL_DATE_RANGE_START`/`_END` are unset, never
+  unbounded (see DECISIONS.md, 2026-09-01): the start date floors `since`
+  (via `max()`, never moving a later cursor backward) and the end date
+  adds an inclusive `before:` to the Gmail search query on every run —
+  see DECISIONS.md, 2026-08-30.
 - `extractors/github.py` — per repo (scoped to `settings.env.github_repos_list`
   if set, else every accessible repo — see DECISIONS.md), extracts the
   README (re-checked via its own last-commit date, not every run),
@@ -425,11 +427,18 @@ calls `pipeline/filters.py` next.
   issues/starred repos (those endpoints have no server-side upper bound)
   — see DECISIONS.md, 2026-08-30.
 - `extractors/calendar.py` — lists the primary calendar's events via
-  `events().list(singleEvents=False, updatedMin=<since>)` — the
-  `singleEvents=False` is what keeps a recurring series as one event
-  (carrying a `recurrence` rule) instead of expanding it into one entry
-  per occurrence, satisfying "recurrence pattern stored once" for free,
-  server-side — see DECISIONS.md, 2026-08-30. Auth: same cached-OAuth-
+  `events().list(singleEvents=False, updatedMin=<since>, timeMin=<range
+  start>, timeMax=<range end + 1 day>)` — the `singleEvents=False` is what
+  keeps a recurring series as one event (carrying a `recurrence` rule)
+  instead of expanding it into one entry per occurrence, satisfying
+  "recurrence pattern stored once" for free, server-side — see
+  DECISIONS.md, 2026-08-30. `timeMin`/`timeMax` are a window on each
+  event's own start/end time — defaulting to today through 30 days out
+  when `CALENDAR_DATE_RANGE_START`/`_END` are unset (`settings.env
+  .effective_calendar_date_range_start`/`_end`) — an independent axis
+  from `updatedMin`'s "changed recently" that Google's API ANDs together
+  with it, same combined shape as Gmail's own range+incremental check.
+  See DECISIONS.md, 2026-09-01. Auth: same cached-OAuth-
   token pattern as `extractors/gmail.py` (own credentials/token file,
   `GOOGLE_CALENDAR_CREDENTIALS_PATH` / `data/calendar_token.json`), same
   one-time `setup_auth()` step
@@ -1042,14 +1051,22 @@ provider config. See DECISIONS.md, 2026-08-30.
 1. `GET /settings/sources` → `config/settings.py::get_settings().env`'s
    `watch_dirs`/`notion_page_ids_list` computed properties, read directly
    (same "config isn't storage/providers" reasoning as `GET /settings`
-   above)
+   above). Gmail's/Calendar's date-range fields come from
+   `effective_gmail_date_range_start`/`_end` and
+   `effective_calendar_date_range_start`/`_end` — always a real window,
+   defaulted when unset (see DECISIONS.md, 2026-09-01) — while GitHub's
+   own date range is read raw (`github_date_range_start`/`_end`, still
+   `None`-able)
 2. `PUT /settings/sources` → `config/settings.py::update_source_config()`
-   — writes `LOCAL_FILES_WATCH_DIRS`/`NOTION_PAGE_IDS` to `config/.env` via
+   — writes `LOCAL_FILES_WATCH_DIRS`/`NOTION_PAGE_IDS`/
+   `CALENDAR_DATE_RANGE_START`/`_END`/etc. to `config/.env` via
    `python-dotenv`'s `set_key()` (rewrites just those lines in place,
    leaving every other line/comment untouched), only the given fields (a
    partial update); a `ConfigError` (file I/O failure) maps to 500 via the
    shared handler
-3. Both return `{"local_files_watch_dirs": [...], "notion_page_ids": [...]}`
+3. Both return `{"local_files_watch_dirs": [...], "notion_page_ids": [...],
+   "github_repos": [...], "gmail_date_range_start"/"_end",
+   "github_date_range_start"/"_end", "calendar_date_range_start"/"_end"}`
 4. `extractors/notion.py::extract_new_items()` reads
    `notion_page_ids_list` on its next run: non-empty means fetch exactly
    those pages by id (`client.pages.retrieve()`) instead of the
@@ -1371,16 +1388,22 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    with their relationship `label`. A node's label text is truncated to 32
    characters (`truncateLabel()`) — long GitHub titles otherwise overlap
    and clutter the layout — with the full title available via a native
-   SVG `<title>` hover tooltip. See DECISIONS.md, 2026-08-31. The legend
-   lists every `source_type`
+   SVG `<title>` hover tooltip. See DECISIONS.md, 2026-08-31. A "Filter"
+   button in the toolbar (top-right, alongside zoom/fit) opens a floating
+   checkbox panel (`graph-view-filter-panel`, closes on an outside-click
+   `pointerdown` listener) listing every `source_type`
    except `browser_history` — that source is excluded from relationship
    detection entirely (`pipeline/relationships.py`, see CLAUDE.md), so a
-   node for it can never exist on this graph; listing it in the legend
-   would promise something that can never appear. See DECISIONS.md,
-   2026-08-30. Legend entries also double as filter toggles
-   (`visibleSourceTypes`, a `Set`) — filtering hides (not dims) non-
-   matching nodes/edges at render time only, never touching the running
-   simulation. Pan/zoom is a hand-rolled `{x, y, k}` transform applied via
+   node for it can never exist on this graph; listing it would promise
+   something that can never appear. See DECISIONS.md, 2026-08-30. This
+   replaced an earlier bottom-of-canvas legend whose swatches doubled as
+   filter toggles — same underlying state (`visibleSourceTypes`, a `Set`,
+   toggled via `toggleSourceType()`) and filtering behavior (hides, not
+   dims, non-matching nodes/edges at render time only, never touching the
+   running simulation), just moved into the toolbar and given a visible,
+   badge-counted button ("Filter (3/5)") plus "All"/"None" quick actions,
+   since the old legend read as decoration rather than a control — see
+   DECISIONS.md, 2026-09-01. Pan/zoom is a hand-rolled `{x, y, k}` transform applied via
    a wrapping `<g transform="translate(x,y) scale(k)">` (wheel to zoom
    anchored at the cursor, toolbar `+`/`−` buttons, dragging the
    background to pan) — `toSimulationPoint()` now inverts both the SVG's
