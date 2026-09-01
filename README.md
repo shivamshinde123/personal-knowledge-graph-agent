@@ -93,6 +93,44 @@ key is required either way. Changing the embedding model requires a full
 data reset and re-ingestion, since existing vectors won't match the new
 model's space.
 
+### A note on ingestion cost and time — local is preferred
+
+Ingestion time and, under Cloud Generation, real dollar cost both scale
+with **how many items get processed and related**, not with how the sources
+are configured otherwise. Two things drive that count far more than
+anything else:
+
+- **Relationship detection dominates the time.** Every processed item
+  (aside from Browser History, which is excluded entirely) is checked
+  against the rest of the knowledge base for relationships — a vector
+  search plus one or more LLM confirmation calls, per item. This step alone
+  can take several times longer than extracting and storing the same items
+  in the first place, especially under Cloud Generation, where each
+  confirmation is a network round trip.
+- **GitHub is usually the largest single contributor**, because commits,
+  PRs, issues, and starred repos have no date range configured by default —
+  every repository's *entire* history is pulled and related on the first
+  run. A handful of long-lived repositories can easily produce more items
+  than every other source combined.
+
+In practice, a real run of just this project's own repository plus a
+handful of other sources — a few hundred items in total — took a few hours
+and cost real money on Cloud Generation, almost entirely from GitHub's
+unbounded history. Scaling that up to many projects/repositories at once,
+each with similarly long history, without narrowing GitHub's date range
+first, can realistically stretch into many hours (or longer) and a
+correspondingly larger cloud bill.
+
+**Local Generation is the preferred choice for any ingestion at meaningful
+scale** — it has no per-call cost, and while it depends on local hardware for
+speed, it doesn't turn a large backfill into an open-ended cloud expense.
+Cloud Generation is better suited to smaller, more selective ingestion
+scopes, or to answer synthesis at query time (a single call per question)
+rather than the ingestion-time relationship-detection step. Narrowing
+GitHub's (and any other source's) date range before a large first run is
+the single most effective way to control both time and cost regardless of
+which provider is chosen.
+
 ### How the relationship graph is created
 
 After a batch finishes storing items, each one is checked against the rest
