@@ -704,6 +704,45 @@ test doubles/temp resources instead.
 
 ---
 
+## Entry point: `scheduler/loop.py` (`run_forever()`)
+
+Run via `uv run python -m scheduler.loop` — the Docker-only counterpart to
+`scheduler/daily_batch.py` above. `docker-compose.yml` runs this as its own
+long-lived `scheduler` service, replacing "register a cron/Task Scheduler
+entry by hand" entirely for a containerized deployment, since there's no
+host-level cron/Task Scheduler inside a container to register with instead.
+A manual (non-Docker) developer setup still uses real cron/Task Scheduler
+against `scheduler/daily_batch.py` directly, as documented in the README —
+this loop doesn't replace that path. See DECISIONS.md (issue #52).
+
+1. `run_forever()` reads `now_fn()` once at startup as `last_check`, then
+   loops forever: `sleep(poll_interval_seconds)` (default 30s), reads
+   `now_fn()` again, and calls `config.settings.reload_settings()` fresh
+   on every iteration — not just once at startup — so editing
+   `config.yaml`'s `ingestion.schedule` from Settings takes effect within
+   one poll interval, without restarting this container
+2. `_should_run(schedule, last_check, now)` — `croniter(schedule,
+   last_check).get_next(datetime) <= now`. Searching strictly after
+   `last_check` (not `now`) means the same fire time is never matched
+   twice across consecutive polls
+3. **Branch point**: if due, calls `scheduler.daily_batch.main()` (the
+   exact same entrypoint a manual cron/Task Scheduler registration would
+   call) — a raised exception here is logged (`logger.exception()`) and
+   swallowed, never ending the loop, the same "one bad run doesn't end the
+   schedule" reasoning `daily_batch.py`'s own per-source/per-item error
+   handling already has
+4. `last_check` is updated to `now` regardless of whether a run happened,
+   so the next iteration's search window starts from here
+
+`sleep`, `now_fn`, and `run_batch` are all injectable keyword arguments,
+defaulting to the real `time.sleep`/wall clock/`daily_batch.main` — tests
+substitute a `sleep` that raises after a fixed number of calls (the only
+way to terminate an intentionally infinite loop deterministically) and a
+`now_fn` that advances a fake clock per call, since real elapsed time
+between two calls to a mocked `sleep` is otherwise near zero.
+
+---
+
 ## Shared: query router (`agent/router.py`)
 
 Not an entry point itself — will be called by `agent/graph.py::run()` once
