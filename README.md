@@ -104,11 +104,12 @@ vectors won't match a new model's space.
 The **first ingestion run is the expensive one.** It has to work through
 everything a source has ever produced — every file, every email in range,
 every commit and issue a repository has ever had — and every one of those
-items also has to be checked against the rest of the knowledge base for
-relationships, which is its own LLM call per item on top of extracting and
-embedding it. That combination is what makes an initial backfill slow, and
-under Cloud Generation, the point where real dollar cost shows up: a lot of
-items, each needing its own round trip to a paid API.
+items also has to be embedded, checked against the rest of the knowledge
+base for relationships (its own LLM call per item), and have its metadata
+extracted. That combination is what makes an initial backfill slow, and
+under Cloud mode, the point where real dollar cost shows up: a lot of
+items, each needing its own round trip to a paid API for generation *and*
+embedding.
 
 **After that first run, ingestion settles into something much lighter.**
 Each later run only has to look at what actually changed since the day
@@ -119,17 +120,17 @@ some new content, and that content still needs the same
 extract-embed-relate treatment, so there's a real, ongoing cost baked into
 just keeping the knowledge base current. On top of that, actually *using*
 the assistant — asking it questions — has its own ongoing cost under Cloud
-Generation, since every answer is its own LLM call at the moment you ask
-it, separate from anything ingestion does.
+mode, since every answer is its own LLM call at the moment you ask it,
+separate from anything ingestion does.
 
 So the honest shape of it is: **high once, then low but never zero** — a
 steady background cost from daily upkeep, plus whatever chatting with it
-costs on top. **Local Generation is the preferred choice** for exactly this
-reason: it removes the per-call cost from both sides of that equation —
-the daily upkeep and the chatting — at the cost of depending on local
-hardware for speed instead. Cloud Generation is easiest to justify for the
-first, one-time backfill of a small or carefully scoped set of sources, not
-as the everyday running mode.
+costs on top. **Local mode is the preferred choice** for exactly this
+reason: it removes the per-call cost from generation, embedding, *and*
+chatting all at once, at the cost of depending on local hardware for speed
+instead. Cloud mode is easiest to justify for the first, one-time backfill
+of a small or carefully scoped set of sources, not as the everyday running
+mode.
 
 ### How the relationship graph is created
 
