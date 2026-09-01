@@ -59,11 +59,15 @@ function truncateLabel(title) {
  * Also supports: per-source-type filtering (a "Filter" toolbar button
  * opens a checkbox panel — deliberately in the toolbar rather than a
  * passive legend at the bottom, so it reads as an actual control, not
- * decoration — see DECISIONS.md), pan/zoom (wheel, +/- buttons, drag the
- * background), clicking a node to highlight its immediate neighborhood
- * and dim the rest, and fitting the whole (visible) graph into view
- * automatically once the simulation settles, whenever the filter set
- * changes, or on demand via a "Fit view" button. See DECISIONS.md.
+ * decoration — see DECISIONS.md), a separate always-visible color-key
+ * legend (bottom-left — the filter panel alone only shows while open, so
+ * without this there'd be no way to tell what a color means at a glance;
+ * a hidden source's entry dims rather than disappearing), pan/zoom (wheel,
+ * +/- buttons, drag the background), clicking a node to highlight its
+ * immediate neighborhood and dim the rest, and fitting the whole (visible)
+ * graph into view automatically once the simulation settles, whenever the
+ * filter set changes, or on demand via a "Fit view" button. See
+ * DECISIONS.md.
  */
 function GraphView() {
   const [graph, setGraph] = useState(null);
@@ -543,6 +547,24 @@ function GraphView() {
             })}
           </div>
         )}
+        <ul className="graph-view-legend">
+          {FILTERABLE_SOURCE_TYPES.map((sourceType) => (
+            <li
+              key={sourceType}
+              className={
+                visibleSourceTypes.has(sourceType)
+                  ? ""
+                  : "graph-view-legend-hidden"
+              }
+            >
+              <span
+                className="graph-view-legend-swatch"
+                style={{ backgroundColor: SOURCE_TYPE_COLORS[sourceType] }}
+              />
+              {sourceType.replace("_", " ")}
+            </li>
+          ))}
+        </ul>
         <svg
           ref={svgRef}
           className="graph-view-svg"

@@ -1382,6 +1382,39 @@ a {
   display: inline-block;
 }
 
+/* Always-visible color key — separate from .graph-view-filter-panel, which
+   is the interactive on/off control and only shows while open. Without
+   this, there's no way to tell what a color means without opening Filter
+   first. See DECISIONS.md. */
+.graph-view-legend {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  z-index: 1;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.graph-view-legend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-transform: capitalize;
+}
+
+.graph-view-legend-hidden {
+  opacity: 0.35;
+}
+
 .graph-view-filter-button.active {
   border-color: var(--accent);
   color: var(--accent);

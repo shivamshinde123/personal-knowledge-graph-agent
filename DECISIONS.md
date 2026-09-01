@@ -8,6 +8,16 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-09-01 — Restored an always-visible color-key legend on the graph
+
+**Context**: When the per-source filter moved from a passive bottom legend into a toolbar "Filter" button/panel (see the toolbar-panel entry below), the color key went with it — the panel only renders while open, so there was no longer any way to see what a node's color meant without opening Filter first. Flagged directly after using the real app.
+
+**Decision**: added back a small, always-visible, non-interactive legend (`graph-view-legend`, bottom-left of the canvas) — one entry per filterable source type, its swatch and label, independent of the interactive Filter panel. An entry dims (doesn't disappear) when that source is currently hidden by the filter, so the legend stays a consistent reference regardless of filter state. This is deliberately separate from the filter panel, not a merge of the two — the panel is the control (checkboxes, All/None), this is just the reference.
+
+**Affects**: `frontend/src/components/GraphView.jsx`, `frontend/src/index.css`.
+
+---
+
 ## 2026-09-01 — Settings sections rebalanced across the two columns
 
 **Context**: Adding the "Calendar date range" section pushed the right column (source scope + date ranges + Data Ingestion/Connected Sources) considerably taller than the left (Generation Provider/Models/Danger Zone) — asked to balance the two visually. A single centered column (no side-by-side split at all) was tried first, directly per a request, then reverted per a follow-up one, in favor of keeping the two-column layout but rebalancing which sections go in which column.
