@@ -8,6 +8,20 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-09-01 — cancel_ingestion() no longer finalizes "cancelled" on an unconfirmed kill
+
+**Context**: GitHub Copilot's review of this PR flagged a real gap in the force-kill cancel logic added the same day: `cancel_ingestion()` only guarded the *kill attempt* on `run.pid is not None`, but unconditionally finalized the row to `status="cancelled"` afterward regardless of whether the kill actually happened. Two real cases fell through: a run with no recorded `pid` (e.g. a legacy row from before that column existed) skipped the kill entirely but still got marked cancelled, and an `OSError` other than `ProcessLookupError` (e.g. a permissions failure) left the process possibly still running while the DB claimed otherwise. Either way, the batch process could still be alive and writing to storage while `ingestion_runs` said the run was over — a real state mismatch that could let a second run start concurrently with the "cancelled" one.
+
+**Decision**: `cancel_ingestion()` now only finalizes `status="cancelled"` when the kill is actually confirmed — the signal was delivered successfully, or the process was already gone (`ProcessLookupError`). A missing `pid` returns immediately after setting the cooperative `cancel_requested` flag, without touching `status`; a kill that raises any other `OSError` logs the same warning as before but also returns without finalizing. In both cases the row is left `"running"` for the batch to finalize itself once it reaches its own next check point (or for a human to investigate if it's genuinely wedged) — never a guess dressed up as a confirmed outcome.
+
+**Alternatives considered**: none — this is a straightforward correctness fix following the reviewer's own suggested shape (only set the cooperative flag, don't touch status, when the kill can't be confirmed).
+
+**Verified**: `uv run pytest` — `tests/test_agent/test_ingest_trigger.py::TestCancelIngestion::test_a_missing_pid_does_not_finalize_the_run` rewritten to assert `status == "running"` instead of `"cancelled"`; new `test_a_failed_kill_does_not_finalize_the_run` covers the `OSError` path. Full suite passes; `black`/`ruff` clean.
+
+**Affects**: `agent/ingest_trigger.py`, `tests/test_agent/test_ingest_trigger.py`.
+
+---
+
 ## 2026-09-01 — Settings sections rebalanced across the two columns
 
 **Context**: Adding the "Calendar date range" section pushed the right column (source scope + date ranges + Data Ingestion/Connected Sources) considerably taller than the left (Generation Provider/Models/Danger Zone) — asked to balance the two visually. A single centered column (no side-by-side split at all) was tried first, directly per a request, then reverted per a follow-up one, in favor of keeping the two-column layout but rebalancing which sections go in which column.

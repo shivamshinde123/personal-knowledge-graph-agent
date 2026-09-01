@@ -1195,18 +1195,29 @@ source's extraction phase finishes; see that entry for why).
       point's step 1 below). If the run isn't found, or isn't
       `status == "running"` anymore, stops here — nothing to kill,
       nothing to finalize
+   b'. If `pid` is `None` (a legacy run predating that column), stops here
+      too — with no way to confirm the process has actually stopped,
+      finalizing as `"cancelled"` would misrepresent reality; only the
+      cooperative flag from step 2a is left in place. See DECISIONS.md,
+      2026-09-01 ("cancel_ingestion() no longer finalizes... on an
+      unconfirmed kill")
    c. `os.kill(pid, signal.SIGTERM)` — on Windows this maps to
       `TerminateProcess()`, an immediate forceful kill, not a catchable
-      signal. A `ProcessLookupError` (already exited) or other `OSError`
-      is caught and logged, not raised
-   d. Re-reads the run; only if it's *still* `"running"` (guards a race
-      against the batch legitimately finishing in the gap between b and
-      c) calls `complete_ingestion_run(status="cancelled", ...)` directly
-      — a force-killed process can never call this itself on its way out
-3. Returns `200 {"status": "cancel_requested"}` — by the time this
-   response is sent, the process has actually already been killed and the
-   row finalized (steps 2b-2d all happen synchronously before the
-   response), unlike the earlier purely-cooperative design where this
+      signal. A `ProcessLookupError` (already exited) is caught and
+      treated as a confirmed stop; any other `OSError` is caught, logged,
+      and treated as an *unconfirmed* kill — stops here without
+      finalizing, same reasoning as step b'
+   d. Only on a confirmed kill: re-reads the run, and only if it's
+      *still* `"running"` (guards a race against the batch legitimately
+      finishing in the gap between b and c) calls
+      `complete_ingestion_run(status="cancelled", ...)` directly — a
+      force-killed process can never call this itself on its way out
+3. Returns `200 {"status": "cancel_requested"}` regardless of whether the
+   kill was confirmed — by the time this response is sent, a confirmed
+   kill has already finalized the row (steps 2b-2d all happen
+   synchronously before the response) but an unconfirmed one has not, and
+   the caller finds out which by polling `GET /api/sources/status`
+   afterward, unlike the earlier purely-cooperative design where this
    response meant "the flag is set, actual stopping happens whenever the
    process gets around to checking it"
 

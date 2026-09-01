@@ -104,7 +104,14 @@ class TestCancelIngestion:
         assert run.status == "cancelled"
         assert run.error_log == "Force-stopped by user"
 
-    def test_a_missing_pid_still_finalizes_the_run(self, conn, monkeypatch):
+    def test_a_missing_pid_does_not_finalize_the_run(self, conn, monkeypatch):
+        """A missing pid means the kill can never be confirmed.
+
+        Finalizing as "cancelled" anyway would misrepresent reality (the
+        process could still be running) and could let a second run start
+        concurrently. Only the cooperative flag is set; status is left
+        alone for the batch to finalize itself. See DECISIONS.md.
+        """
         calls = []
         monkeypatch.setattr(
             "agent.ingest_trigger.os.kill", lambda pid, sig: calls.append(pid)
@@ -116,7 +123,28 @@ class TestCancelIngestion:
         cancel_ingestion(conn, run_id)
 
         assert calls == []  # nothing to kill
-        assert get_ingestion_run(conn, run_id).status == "cancelled"
+        run = get_ingestion_run(conn, run_id)
+        assert run.status == "running"
+        assert is_cancellation_requested(conn, run_id) is True
+
+    def test_a_failed_kill_does_not_finalize_the_run(self, conn, monkeypatch):
+        """An OSError other than ProcessLookupError means the kill is unconfirmed.
+
+        E.g. a permissions error — the process could still be alive, so
+        this must not claim it stopped. Same reasoning as a missing pid.
+        """
+
+        def raise_permission_error(pid, sig):
+            raise PermissionError("Access is denied")
+
+        monkeypatch.setattr("agent.ingest_trigger.os.kill", raise_permission_error)
+        run_id = start_ingestion_run(conn)
+
+        cancel_ingestion(conn, run_id)  # must not raise
+
+        run = get_ingestion_run(conn, run_id)
+        assert run.status == "running"
+        assert is_cancellation_requested(conn, run_id) is True
 
     def test_an_already_exited_pid_does_not_raise(self, conn, monkeypatch):
         def raise_not_found(pid, sig):
