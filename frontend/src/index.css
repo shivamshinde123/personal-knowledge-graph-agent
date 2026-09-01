@@ -1375,45 +1375,74 @@ a {
   font-size: 12px;
 }
 
-.graph-view-legend {
-  list-style: none;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin: 16px 0 0;
-  padding: 0;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.graph-view-legend li {
-  display: flex;
-  align-items: center;
-}
-
-.graph-view-legend-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  border: none;
-  background: none;
-  color: inherit;
-  font: inherit;
-  padding: 0;
-  cursor: pointer;
-  opacity: 1;
-  transition: opacity 0.15s ease;
-}
-
-.graph-view-legend-toggle.inactive {
-  opacity: 0.35;
-}
-
 .graph-view-legend-swatch {
   width: 10px;
   height: 10px;
   border-radius: 50%;
   display: inline-block;
+}
+
+.graph-view-filter-button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.graph-view-filter-panel {
+  position: absolute;
+  top: 52px;
+  right: 12px;
+  z-index: 2;
+  width: 200px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  font-size: 13px;
+  color: var(--text);
+}
+
+.graph-view-filter-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.graph-view-filter-panel-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.graph-view-filter-panel-actions button {
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  padding: 0;
+  cursor: pointer;
+}
+
+.graph-view-filter-panel-actions button:hover {
+  text-decoration: underline;
+}
+
+.graph-view-filter-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  cursor: pointer;
+  text-transform: capitalize;
+}
+
+.graph-view-filter-option input {
+  cursor: pointer;
 }
 
 /* ---- Confirm dialog ---- */

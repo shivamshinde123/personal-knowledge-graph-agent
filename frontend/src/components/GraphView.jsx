@@ -72,12 +72,14 @@ function truncateLabel(title) {
  * around wherever it's dropped, rather than a static picture. See
  * DECISIONS.md.
  *
- * Also supports: per-source-type filtering (legend chips double as
- * toggles), pan/zoom (wheel, +/- buttons, drag the background), clicking
- * a node to highlight its immediate neighborhood and dim the rest, and
- * fitting the whole (visible) graph into view automatically once the
- * simulation settles, whenever the filter set changes, or on demand via
- * a "Fit view" button. See DECISIONS.md.
+ * Also supports: per-source-type filtering (a "Filter" toolbar button
+ * opens a checkbox panel — deliberately in the toolbar rather than a
+ * passive legend at the bottom, so it reads as an actual control, not
+ * decoration — see DECISIONS.md), pan/zoom (wheel, +/- buttons, drag the
+ * background), clicking a node to highlight its immediate neighborhood
+ * and dim the rest, and fitting the whole (visible) graph into view
+ * automatically once the simulation settles, whenever the filter set
+ * changes, or on demand via a "Fit view" button. See DECISIONS.md.
  */
 function GraphView() {
   const [graph, setGraph] = useState(null);
@@ -94,6 +96,8 @@ function GraphView() {
     () => new Set(FILTERABLE_SOURCE_TYPES),
   );
   const [selectedNodeId, setSelectedNodeId] = useState(null);
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const filterPanelRef = useRef(null);
   // Pan/zoom transform, applied to a <g> wrapping the rendered edges/nodes:
   // viewBoxPoint = k * simulationPoint + (x, y). Node/edge coordinates
   // themselves stay in raw, untransformed simulation space always — only
@@ -220,6 +224,23 @@ function GraphView() {
     if (!hasAutoFittedRef.current) return;
     fitToView();
   }, [visibleSourceTypes]);
+
+  // Closes the filter panel on an outside click — checkbox clicks inside
+  // it don't close it (so toggling several sources in a row doesn't need
+  // reopening each time), only a click elsewhere does.
+  useEffect(() => {
+    if (!isFilterOpen) return undefined;
+    function handlePointerDown(event) {
+      if (
+        filterPanelRef.current &&
+        !filterPanelRef.current.contains(event.target)
+      ) {
+        setIsFilterOpen(false);
+      }
+    }
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [isFilterOpen]);
 
   const visibleNodeIds = useMemo(
     () =>
@@ -462,6 +483,20 @@ function GraphView() {
         <div className="graph-view-toolbar">
           <button
             type="button"
+            className={`graph-view-toolbar-button graph-view-filter-button ${
+              visibleSourceTypes.size < FILTERABLE_SOURCE_TYPES.length
+                ? "active"
+                : ""
+            }`}
+            onClick={() => setIsFilterOpen((prev) => !prev)}
+            aria-expanded={isFilterOpen}
+          >
+            Filter
+            {visibleSourceTypes.size < FILTERABLE_SOURCE_TYPES.length &&
+              ` (${visibleSourceTypes.size}/${FILTERABLE_SOURCE_TYPES.length})`}
+          </button>
+          <button
+            type="button"
             className="graph-view-toolbar-button"
             onClick={() => zoomBy(1 / ZOOM_STEP)}
             aria-label="Zoom out"
@@ -484,6 +519,46 @@ function GraphView() {
             Fit view
           </button>
         </div>
+        {isFilterOpen && (
+          <div className="graph-view-filter-panel" ref={filterPanelRef}>
+            <div className="graph-view-filter-panel-header">
+              <span>Filter by source</span>
+              <div className="graph-view-filter-panel-actions">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setVisibleSourceTypes(new Set(FILTERABLE_SOURCE_TYPES))
+                  }
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVisibleSourceTypes(new Set())}
+                >
+                  None
+                </button>
+              </div>
+            </div>
+            {FILTERABLE_SOURCE_TYPES.map((sourceType) => {
+              const active = visibleSourceTypes.has(sourceType);
+              return (
+                <label className="graph-view-filter-option" key={sourceType}>
+                  <input
+                    type="checkbox"
+                    checked={active}
+                    onChange={() => toggleSourceType(sourceType)}
+                  />
+                  <span
+                    className="graph-view-legend-swatch"
+                    style={{ backgroundColor: SOURCE_TYPE_COLORS[sourceType] }}
+                  />
+                  {sourceType.replace("_", " ")}
+                </label>
+              );
+            })}
+          </div>
+        )}
         <svg
           ref={svgRef}
           className="graph-view-svg"
@@ -589,27 +664,6 @@ function GraphView() {
           </g>
         </svg>
       </div>
-      <ul className="graph-view-legend">
-        {FILTERABLE_SOURCE_TYPES.map((sourceType) => {
-          const active = visibleSourceTypes.has(sourceType);
-          return (
-            <li key={sourceType}>
-              <button
-                type="button"
-                className={`graph-view-legend-toggle ${active ? "" : "inactive"}`}
-                onClick={() => toggleSourceType(sourceType)}
-                aria-pressed={active}
-              >
-                <span
-                  className="graph-view-legend-swatch"
-                  style={{ backgroundColor: SOURCE_TYPE_COLORS[sourceType] }}
-                />
-                {sourceType.replace("_", " ")}
-              </button>
-            </li>
-          );
-        })}
-      </ul>
     </main>
   );
 }
