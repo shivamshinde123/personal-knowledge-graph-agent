@@ -1162,33 +1162,6 @@ a {
   flex-shrink: 0;
 }
 
-.save-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 32px;
-  border-radius: 8px;
-  border: none;
-  background: var(--accent);
-  color: #fff;
-  font-size: 14px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-}
-
-.save-button img {
-  width: 13.5px;
-  height: 13.5px;
-}
-
-.save-button:hover:not(:disabled) {
-  background: var(--accent-hover);
-}
-
-.save-button:disabled {
-  opacity: 0.5;
-}
-
 .danger-zone {
   background: rgba(147, 0, 10, 0.05);
   border-color: rgba(255, 180, 171, 0.2);

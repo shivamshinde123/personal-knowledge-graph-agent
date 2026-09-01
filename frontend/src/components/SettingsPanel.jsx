@@ -11,7 +11,6 @@ import {
 } from "../api/client.js";
 import { useConfirm } from "../hooks/useConfirm.jsx";
 import radioCheckIcon from "../assets/icons/radio-check-icon.svg";
-import saveIcon from "../assets/icons/save-icon.svg";
 import ingestIcon from "../assets/icons/ingest-icon.svg";
 import reverifyIcon from "../assets/icons/reverify-icon.svg";
 import dangerIcon from "../assets/icons/danger-icon.svg";
@@ -51,6 +50,13 @@ const PROVIDER_MODES = [
  * cloud, editable but changing it triggers a confirm + auto reset +
  * re-ingest), and connected data source status. Per
  * docs/UIUX_Wireframes.docx section 3.
+ *
+ * Every field saves itself the moment it's committed (a radio pick, or a
+ * text/textarea/date field losing focus after an actual change) — there
+ * is no separate "Save Changes" step. This is simpler for the user at
+ * the cost of a save round-trip per field rather than one batched call;
+ * acceptable for a local, single-user system with no meaningful latency
+ * to the backend. See DECISIONS.md.
  *
  * @param {object} props
  * @param {() => Promise<void>} props.onTriggerIngestion - starts a batch
@@ -93,10 +99,11 @@ function SettingsPanel({
   const [isCancellingIngest, setIsCancellingIngest] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [isBrowsing, setIsBrowsing] = useState(false);
-  // The last-saved snapshot of every editable field, for diffing at save
-  // time — a ref, not state, since it's only ever read/written on load and
-  // on a successful save, never rendered directly.
-  const originalRef = useRef(null);
+  // The last-saved value of every editable field, so a field's onBlur can
+  // tell "actually changed" from "focused and clicked away again" before
+  // firing a save — a ref, not state, since it's only ever read/written
+  // around a save, never rendered directly.
+  const lastSavedRef = useRef(null);
   const [confirm, confirmDialog] = useConfirm();
 
   useEffect(() => {
@@ -125,7 +132,7 @@ function SettingsPanel({
           setGmailDateRangeEnd(gmailEnd);
           setGithubDateRangeStart(githubStart);
           setGithubDateRangeEnd(githubEnd);
-          originalRef.current = {
+          lastSavedRef.current = {
             ...settingsResult,
             watchDirsText: watchDirs,
             notionPageIdsText: notionPageIds,
@@ -145,11 +152,20 @@ function SettingsPanel({
     try {
       const { path } = await postBrowseFolder();
       if (path === null) return; // user cancelled the dialog
-      setWatchDirsText((prev) => {
-        const existing = linesToList(prev);
-        if (existing.includes(path)) return prev; // already added
-        return [...existing, path].join("\n");
-      });
+      const existing = linesToList(watchDirsText);
+      if (existing.includes(path)) return; // already added
+      const updated = [...existing, path].join("\n");
+      setWatchDirsText(updated);
+      // No blur event fires here — the picked path lands in the textarea
+      // without the user ever focusing it, so the usual onBlur save never
+      // triggers on its own; save explicitly instead.
+      await saveScopeTextarea(
+        "local_files_watch_dirs",
+        "watchDirsText",
+        setWatchDirsText,
+        updated,
+        [...existing, path],
+      );
     } catch (error) {
       onError(`Could not open the folder picker: ${error.message}`);
     } finally {
@@ -222,126 +238,117 @@ function SettingsPanel({
     }
   }
 
-  async function handleSave() {
-    const original = originalRef.current;
-    const changes = [];
-    if (settings.provider_mode !== original.provider_mode) {
-      changes.push(`Generation provider → ${settings.provider_mode}`);
-    }
-    if (settings.local_generation_model !== original.local_generation_model) {
-      changes.push(
-        `Local generation model → ${settings.local_generation_model}`,
-      );
-    }
-    if (settings.cloud_generation_model !== original.cloud_generation_model) {
-      changes.push(
-        `Cloud generation model → ${settings.cloud_generation_model}`,
-      );
-    }
-    const embeddingModelChanged =
-      settings.cloud_embedding_model !== original.cloud_embedding_model;
-    if (embeddingModelChanged) {
-      changes.push(`Embedding model → ${settings.cloud_embedding_model}`);
-    }
-    if (watchDirsText !== original.watchDirsText) {
-      changes.push("Local watch folders");
-    }
-    if (notionPageIdsText !== original.notionPageIdsText) {
-      changes.push("Notion page scope");
-    }
-    if (githubReposText !== original.githubReposText) {
-      changes.push("GitHub repository scope");
-    }
-    if (
-      gmailDateRangeStart !== original.gmailDateRangeStart ||
-      gmailDateRangeEnd !== original.gmailDateRangeEnd
-    ) {
-      changes.push("Gmail date range");
-    }
-    if (
-      githubDateRangeStart !== original.githubDateRangeStart ||
-      githubDateRangeEnd !== original.githubDateRangeEnd
-    ) {
-      changes.push("GitHub date range");
-    }
-
-    if (changes.length === 0) {
-      setSaveStatus({ ok: true, text: "Nothing changed." });
-      return;
-    }
-
-    const confirmed = await confirm({
-      title: "Save these changes?",
-      body: (
-        <>
-          <ul className="confirm-dialog-list">
-            {changes.map((change) => (
-              <li key={change}>{change}</li>
-            ))}
-          </ul>
-          {embeddingModelChanged && (
-            <p className="confirm-dialog-warning">
-              Changing the embedding model requires a full data reset and
-              re-ingestion — your existing embeddings won't match the new model.
-              Confirming will save this change, then automatically reset all
-              data and start a fresh ingestion run.
-            </p>
-          )}
-        </>
-      ),
-      danger: embeddingModelChanged,
-      confirmLabel: embeddingModelChanged ? "Save and reset" : "Save",
-    });
-    if (!confirmed) return;
-
+  /** Save one LLM-settings field the moment it's committed (radio pick, or blur). */
+  async function saveLlmField(apiKey, value) {
+    if (lastSavedRef.current[apiKey] === value) return; // no real change
     setIsSaving(true);
     setSaveStatus(null);
     try {
-      const [settingsResult] = await Promise.all([
-        putSettings({
-          provider_mode: settings.provider_mode,
-          local_generation_model: settings.local_generation_model,
-          cloud_generation_model: settings.cloud_generation_model,
-          cloud_embedding_model: settings.cloud_embedding_model,
-        }),
-        putSourceConfig({
-          local_files_watch_dirs: linesToList(watchDirsText),
-          notion_page_ids: linesToList(notionPageIdsText),
-          github_repos: linesToList(githubReposText),
-          gmail_date_range_start: gmailDateRangeStart,
-          gmail_date_range_end: gmailDateRangeEnd,
-          github_date_range_start: githubDateRangeStart,
-          github_date_range_end: githubDateRangeEnd,
-        }),
-      ]);
-      setSettings(settingsResult);
-      originalRef.current = {
-        ...settingsResult,
-        watchDirsText,
-        notionPageIdsText,
-        githubReposText,
-        gmailDateRangeStart,
-        gmailDateRangeEnd,
-        githubDateRangeStart,
-        githubDateRangeEnd,
-      };
+      const result = await putSettings({ [apiKey]: value });
+      setSettings(result);
+      lastSavedRef.current = { ...lastSavedRef.current, ...result };
       setSaveStatus({ ok: true, text: "Saved." });
+    } catch (error) {
+      setSaveStatus({ ok: false, text: error.message });
+    } finally {
+      setIsSaving(false);
+    }
+  }
 
-      if (embeddingModelChanged) {
-        setSaveStatus({
-          ok: true,
-          text: "Saved. Resetting data and re-ingesting…",
-        });
-        await onResetAll();
-        await onTriggerIngestion();
-        const [sourcesResult, connectionsResult] = await Promise.all([
-          getSourcesStatus(),
-          getSourceConnections(),
-        ]);
-        setSources(sourcesResult);
-        setConnections(connectionsResult);
-        setSaveStatus({ ok: true, text: "Saved. Re-ingestion started." });
-      }
+  /**
+   * The embedding model is the one field that can't just auto-save
+   * silently — changing it strands every existing embedding (a different
+   * model means a different vector space), so it still needs a confirm
+   * plus an automatic reset + re-ingest. Declining reverts the field to
+   * its last-saved value rather than leaving an unsaved edit sitting in
+   * the input with no "Save" button left to abandon it via.
+   */
+  async function saveEmbeddingModel(value) {
+    if (lastSavedRef.current.cloud_embedding_model === value) return;
+    const confirmed = await confirm({
+      title: "Change embedding model?",
+      body: (
+        <p className="confirm-dialog-warning">
+          Changing the embedding model requires a full data reset and
+          re-ingestion — your existing embeddings won't match the new model.
+          Confirming will save this change, then automatically reset all data
+          and start a fresh ingestion run.
+        </p>
+      ),
+      danger: true,
+      confirmLabel: "Save and reset",
+    });
+    if (!confirmed) {
+      setSettings((prev) => ({
+        ...prev,
+        cloud_embedding_model: lastSavedRef.current.cloud_embedding_model,
+      }));
+      return;
+    }
+
+    setIsSaving(true);
+    setSaveStatus({ ok: true, text: "Saving…" });
+    try {
+      const result = await putSettings({ cloud_embedding_model: value });
+      setSettings(result);
+      lastSavedRef.current = { ...lastSavedRef.current, ...result };
+      setSaveStatus({
+        ok: true,
+        text: "Saved. Resetting data and re-ingesting…",
+      });
+      await onResetAll();
+      await onTriggerIngestion();
+      const [sourcesResult, connectionsResult] = await Promise.all([
+        getSourcesStatus(),
+        getSourceConnections(),
+      ]);
+      setSources(sourcesResult);
+      setConnections(connectionsResult);
+      setSaveStatus({ ok: true, text: "Saved. Re-ingestion started." });
+    } catch (error) {
+      setSaveStatus({ ok: false, text: error.message });
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  /** Save one of the three source-scope textareas (watch dirs, Notion, GitHub). */
+  async function saveScopeTextarea(
+    apiKey,
+    lastSavedKey,
+    setText,
+    text,
+    listOverride,
+  ) {
+    if (lastSavedRef.current[lastSavedKey] === text) return;
+    setIsSaving(true);
+    setSaveStatus(null);
+    try {
+      const result = await putSourceConfig({
+        [apiKey]: listOverride ?? linesToList(text),
+      });
+      const joined = result[apiKey].join("\n");
+      setText(joined);
+      lastSavedRef.current[lastSavedKey] = joined;
+      setSaveStatus({ ok: true, text: "Saved." });
+    } catch (error) {
+      setSaveStatus({ ok: false, text: error.message });
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  /** Save one of the four Gmail/GitHub date-range fields. */
+  async function saveDateField(apiKey, lastSavedKey, setValue, value) {
+    if (lastSavedRef.current[lastSavedKey] === value) return;
+    setIsSaving(true);
+    setSaveStatus(null);
+    try {
+      const result = await putSourceConfig({ [apiKey]: value });
+      const newValue = result[apiKey] ?? "";
+      setValue(newValue);
+      lastSavedRef.current[lastSavedKey] = newValue;
+      setSaveStatus({ ok: true, text: "Saved." });
     } catch (error) {
       setSaveStatus({ ok: false, text: error.message });
     } finally {
@@ -399,20 +406,12 @@ function SettingsPanel({
           <h1>Settings</h1>
           <p className="settings-subtitle">
             Configure your ambient intelligence environment, models, and data
-            sources.
+            sources. Every change saves itself automatically.
           </p>
         </div>
         <div className="save-action">
-          <button
-            type="button"
-            className="save-button"
-            onClick={handleSave}
-            disabled={isSaving}
-          >
-            {isSaving ? "Saving…" : "Save Changes"}
-            <img src={saveIcon} alt="" aria-hidden="true" />
-          </button>
-          {saveStatus && (
+          {isSaving && <span className="save-status">Saving…</span>}
+          {!isSaving && saveStatus && (
             <span className={`save-status ${saveStatus.ok ? "" : "error"}`}>
               {saveStatus.text}
             </span>
@@ -440,12 +439,13 @@ function SettingsPanel({
                     name="provider_mode"
                     value={mode.value}
                     checked={selected}
-                    onChange={() =>
+                    onChange={() => {
                       setSettings((prev) => ({
                         ...prev,
                         provider_mode: mode.value,
-                      }))
-                    }
+                      }));
+                      saveLlmField("provider_mode", mode.value);
+                    }}
                   />
                   <span className="radio-option-dot">
                     {selected && (
@@ -471,7 +471,8 @@ function SettingsPanel({
               embedding option, so an OpenRouter API key is required either way.
               Changing the embedding model needs a full data reset and
               re-ingestion, since existing embeddings won't match the new model
-              — saving a change here will ask you to confirm that first.
+              — leaving this field after a change will ask you to confirm that
+              first.
             </p>
 
             <div className="model-field">
@@ -489,6 +490,9 @@ function SettingsPanel({
                     ...prev,
                     local_generation_model: event.target.value,
                   }))
+                }
+                onBlur={(event) =>
+                  saveLlmField("local_generation_model", event.target.value)
                 }
                 placeholder="e.g. llama3:8b"
               />
@@ -510,6 +514,9 @@ function SettingsPanel({
                     cloud_generation_model: event.target.value,
                   }))
                 }
+                onBlur={(event) =>
+                  saveLlmField("cloud_generation_model", event.target.value)
+                }
                 placeholder="e.g. anthropic/claude-sonnet-4"
               />
             </div>
@@ -530,6 +537,7 @@ function SettingsPanel({
                     cloud_embedding_model: event.target.value,
                   }))
                 }
+                onBlur={(event) => saveEmbeddingModel(event.target.value)}
                 placeholder="e.g. openai/text-embedding-3-small"
               />
             </div>
@@ -579,6 +587,14 @@ function SettingsPanel({
               rows={3}
               value={watchDirsText}
               onChange={(event) => setWatchDirsText(event.target.value)}
+              onBlur={(event) =>
+                saveScopeTextarea(
+                  "local_files_watch_dirs",
+                  "watchDirsText",
+                  setWatchDirsText,
+                  event.target.value,
+                )
+              }
               placeholder={"C:\\Users\\you\\Documents\\Notes"}
             />
           </section>
@@ -594,6 +610,14 @@ function SettingsPanel({
               rows={3}
               value={notionPageIdsText}
               onChange={(event) => setNotionPageIdsText(event.target.value)}
+              onBlur={(event) =>
+                saveScopeTextarea(
+                  "notion_page_ids",
+                  "notionPageIdsText",
+                  setNotionPageIdsText,
+                  event.target.value,
+                )
+              }
               placeholder="e.g. 1a2b3c4d5e6f7890abcd1234ef567890"
             />
           </section>
@@ -609,6 +633,14 @@ function SettingsPanel({
               rows={3}
               value={githubReposText}
               onChange={(event) => setGithubReposText(event.target.value)}
+              onBlur={(event) =>
+                saveScopeTextarea(
+                  "github_repos",
+                  "githubReposText",
+                  setGithubReposText,
+                  event.target.value,
+                )
+              }
               placeholder="e.g. octocat/hello-world"
             />
           </section>
@@ -628,6 +660,14 @@ function SettingsPanel({
                   onChange={(event) =>
                     setGmailDateRangeStart(event.target.value)
                   }
+                  onBlur={(event) =>
+                    saveDateField(
+                      "gmail_date_range_start",
+                      "gmailDateRangeStart",
+                      setGmailDateRangeStart,
+                      event.target.value,
+                    )
+                  }
                 />
               </label>
               <label>
@@ -636,6 +676,14 @@ function SettingsPanel({
                   type="date"
                   value={gmailDateRangeEnd}
                   onChange={(event) => setGmailDateRangeEnd(event.target.value)}
+                  onBlur={(event) =>
+                    saveDateField(
+                      "gmail_date_range_end",
+                      "gmailDateRangeEnd",
+                      setGmailDateRangeEnd,
+                      event.target.value,
+                    )
+                  }
                 />
               </label>
             </div>
@@ -656,6 +704,14 @@ function SettingsPanel({
                   onChange={(event) =>
                     setGithubDateRangeStart(event.target.value)
                   }
+                  onBlur={(event) =>
+                    saveDateField(
+                      "github_date_range_start",
+                      "githubDateRangeStart",
+                      setGithubDateRangeStart,
+                      event.target.value,
+                    )
+                  }
                 />
               </label>
               <label>
@@ -665,6 +721,14 @@ function SettingsPanel({
                   value={githubDateRangeEnd}
                   onChange={(event) =>
                     setGithubDateRangeEnd(event.target.value)
+                  }
+                  onBlur={(event) =>
+                    saveDateField(
+                      "github_date_range_end",
+                      "githubDateRangeEnd",
+                      setGithubDateRangeEnd,
+                      event.target.value,
+                    )
                   }
                 />
               </label>
