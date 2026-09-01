@@ -3,10 +3,11 @@
 # Reference: docs/Environment_Config_Reference.docx section 4.
 
 llm:
-  provider_mode: fully_cloud # fully_local | fully_cloud -- controls generation only; embedding is always cloud, see below
-  local_generation_model: llama3:8b # used when provider_mode is fully_local
+  provider_mode: fully_cloud # fully_local | fully_cloud -- selects which generation+embedding pair below is active. Switching this is destructive (see frontend double-confirm) -- it wipes all ingested data, since the two modes' embedding models are not vector-compatible
+  local_generation_model: llama3:8b # used when provider_mode is fully_local -- served by Ollama
+  local_embedding_model: nomic-embed-text # used when provider_mode is fully_local -- served by Ollama's embeddings API, not sentence-transformers
   cloud_generation_model: anthropic/claude-sonnet-4 # used when provider_mode is fully_cloud
-  cloud_embedding_model: openai/text-embedding-3-small # always used, regardless of provider_mode -- there is no local embedding path. OPENROUTER_API_KEY is required even under fully_local. Changing this needs a full reset + re-ingest -- see DECISIONS.md
+  cloud_embedding_model: openai/text-embedding-3-small # used when provider_mode is fully_cloud. Changing either embedding model needs a full reset (+ re-ingest for cloud_embedding_model) -- see DECISIONS.md
   cloud_max_tokens: 4096 # response token cap for cloud calls; unset defaults to the model's own max, which can exceed the account's remaining credit balance
 
 ingestion:

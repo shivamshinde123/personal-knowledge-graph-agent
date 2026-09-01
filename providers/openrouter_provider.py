@@ -1,17 +1,10 @@
 """OpenRouter-backed provider: the cloud half of the dual provider setup.
 
-Used for generation when ``provider_mode: fully_cloud``, and *always* for
-embedding regardless of ``provider_mode`` — there is no local embedding
-path any more (removed — see ``providers/base.py::get_provider()``,
-``DECISIONS.md``). This means an ingestion run under ``fully_local``
-still needs ``OPENROUTER_API_KEY`` configured, purely for embeddings; a
-missing key fails every item's embedding call, not just cloud-generation
-ones. See ``providers/base.py`` for the shared contract and
-implementation.
+Used for both generation and embedding when ``provider_mode: fully_cloud``.
+See ``providers/base.py`` for the shared contract and implementation.
 
-Unlike ``local_generation_model``/``cloud_generation_model``, the
-embedding model (``llm.cloud_embedding_model``) is user-editable but never
-via ``provider_mode`` — changing it is a bigger deal than changing a
+The embedding model (``llm.cloud_embedding_model``) is user-editable, like
+the generation model — changing it is a bigger deal than changing the
 generation model, since it changes which embedding space every future
 vector lands in. Nothing here enforces the "reset before changing"
 requirement — that's the frontend's job (a confirm prompt on save, then
@@ -72,16 +65,15 @@ def create_openrouter_provider(
         and every embedding call through the configured embedding model.
 
     Raises:
-        ProviderError: If ``OPENROUTER_API_KEY`` is not configured — always
-            required for embedding, regardless of ``provider_mode``, and
-            also required for generation under ``fully_cloud``.
+        ProviderError: If ``OPENROUTER_API_KEY`` is not configured — this
+            provider is only ever constructed under ``fully_cloud``, where
+            the key is required for both generation and embedding.
     """
     settings = get_settings()
     if not settings.env.openrouter_api_key:
         raise ProviderError(
             "OPENROUTER_API_KEY is not configured; set it in config/.env — "
-            "required for embedding regardless of provider_mode, and for "
-            "generation under fully_cloud."
+            "required for generation and embedding under fully_cloud."
         )
     resolved_model = model or settings.config.llm.cloud_generation_model
     resolved_embedding_model = (

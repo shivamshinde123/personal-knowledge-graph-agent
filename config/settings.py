@@ -106,21 +106,23 @@ def anchor_path(value: Path) -> Path:
 
 
 class LLMConfig(BaseModel):
-    """LLM provider selection: two *generation* models, one *embedding* model.
+    """LLM provider selection: a *generation* and an *embedding* model, per mode.
 
-    ``provider_mode`` only ever selects which *generation* model is used
-    (``local_generation_model`` vs ``cloud_generation_model``) — embedding
-    always goes through OpenRouter regardless of mode; there is no local
-    embedding path. ``cloud_embedding_model`` is user-editable like the
-    generation models, but changing it is a bigger deal: it changes which
-    embedding space every future vector lands in, so existing ones stop
-    being comparable to new ones. Nothing here enforces a reset when it
-    changes — that's the frontend's job (a confirm prompt, then an
-    automatic reset + re-ingest). See ``DECISIONS.md``.
+    ``provider_mode`` selects both which pair is active: ``fully_local``
+    uses ``local_generation_model``/``local_embedding_model`` (both served
+    by Ollama), ``fully_cloud`` uses ``cloud_generation_model``/
+    ``cloud_embedding_model`` (both served by OpenRouter). All four fields
+    stay editable regardless of the active mode. Switching modes changes
+    which embedding model is active, and Chroma vectors from different
+    embedding models are not compatible with each other — the frontend is
+    responsible for treating a mode switch as destructive (double-confirm,
+    then an automatic full reset) rather than silently leaving mismatched
+    vectors in place. See ``DECISIONS.md``.
     """
 
     provider_mode: ProviderMode = "fully_cloud"
     local_generation_model: str = "llama3:8b"
+    local_embedding_model: str = "nomic-embed-text"
     cloud_generation_model: str = "anthropic/claude-sonnet-4"
     cloud_embedding_model: str = "openai/text-embedding-3-small"
     cloud_max_tokens: int = 4096
@@ -402,6 +404,7 @@ def update_llm_config(
     *,
     provider_mode: ProviderMode | None = None,
     local_generation_model: str | None = None,
+    local_embedding_model: str | None = None,
     cloud_generation_model: str | None = None,
     cloud_embedding_model: str | None = None,
     path: Path = DEFAULT_CONFIG_PATH,
@@ -415,15 +418,19 @@ def update_llm_config(
     every comment in the file, including the ones documenting each
     setting's valid values — see ``DECISIONS.md``).
 
-    This function itself doesn't treat ``cloud_embedding_model`` specially
-    — the "changing it needs a reset + re-ingest" requirement is enforced
-    by the frontend (a confirm prompt before calling this), not here. See
-    ``LLMConfig``'s docstring, ``DECISIONS.md``.
+    This function itself doesn't treat ``provider_mode`` or either
+    embedding model specially — the "changing it needs a reset" (and, for
+    ``cloud_embedding_model`` only, a re-ingest too) requirement is
+    enforced by the frontend (a confirm prompt, or for ``provider_mode`` a
+    double confirm, before calling this), not here. See ``LLMConfig``'s
+    docstring, ``DECISIONS.md``.
 
     Args:
         provider_mode: New provider mode, or ``None`` to leave unchanged.
         local_generation_model: New local generation model tag, or
             ``None`` to leave unchanged.
+        local_embedding_model: New local embedding model tag, or ``None``
+            to leave unchanged.
         cloud_generation_model: New cloud generation model id, or ``None``
             to leave unchanged.
         cloud_embedding_model: New cloud embedding model id, or ``None``
@@ -460,6 +467,8 @@ def update_llm_config(
         updated["provider_mode"] = provider_mode
     if local_generation_model is not None:
         updated["local_generation_model"] = local_generation_model
+    if local_embedding_model is not None:
+        updated["local_embedding_model"] = local_embedding_model
     if cloud_generation_model is not None:
         updated["cloud_generation_model"] = cloud_generation_model
     if cloud_embedding_model is not None:

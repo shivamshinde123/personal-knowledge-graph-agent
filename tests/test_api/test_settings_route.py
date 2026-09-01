@@ -15,6 +15,7 @@ from types import SimpleNamespace
 def fake_settings(
     provider_mode="fully_local",
     local_generation_model="llama3:8b",
+    local_embedding_model="nomic-embed-text",
     cloud_generation_model="x",
     cloud_embedding_model="openai/text-embedding-3-small",
 ):
@@ -23,6 +24,7 @@ def fake_settings(
             llm=SimpleNamespace(
                 provider_mode=provider_mode,
                 local_generation_model=local_generation_model,
+                local_embedding_model=local_embedding_model,
                 cloud_generation_model=cloud_generation_model,
                 cloud_embedding_model=cloud_embedding_model,
             )
@@ -37,6 +39,7 @@ class TestGetSettings:
             lambda: fake_settings(
                 provider_mode="fully_local",
                 local_generation_model="llama3:8b",
+                local_embedding_model="nomic-embed-text",
                 cloud_generation_model="anthropic/claude-sonnet-4",
                 cloud_embedding_model="openai/text-embedding-3-small",
             ),
@@ -48,6 +51,7 @@ class TestGetSettings:
         assert response.json() == {
             "provider_mode": "fully_local",
             "local_generation_model": "llama3:8b",
+            "local_embedding_model": "nomic-embed-text",
             "cloud_generation_model": "anthropic/claude-sonnet-4",
             "cloud_embedding_model": "openai/text-embedding-3-small",
         }
@@ -61,16 +65,19 @@ class TestPutSettings:
             *,
             provider_mode=None,
             local_generation_model=None,
+            local_embedding_model=None,
             cloud_generation_model=None,
             cloud_embedding_model=None,
         ):
             captured["provider_mode"] = provider_mode
             captured["cloud_generation_model"] = cloud_generation_model
             captured["cloud_embedding_model"] = cloud_embedding_model
+            captured["local_embedding_model"] = local_embedding_model
             return SimpleNamespace(
                 llm=SimpleNamespace(
                     provider_mode=provider_mode or "fully_local",
                     local_generation_model=local_generation_model or "llama3:8b",
+                    local_embedding_model=local_embedding_model or "nomic-embed-text",
                     cloud_generation_model=cloud_generation_model
                     or "anthropic/claude-sonnet-4",
                     cloud_embedding_model=cloud_embedding_model
@@ -98,6 +105,32 @@ class TestPutSettings:
         assert captured["provider_mode"] == "fully_cloud"
         assert captured["cloud_generation_model"] == "openai/gpt-4o"
         assert captured["cloud_embedding_model"] == "openai/text-embedding-3-large"
+
+    def test_updates_the_local_embedding_model(self, client, monkeypatch):
+        captured = {}
+
+        def fake_update(*, local_embedding_model=None, **_kwargs):
+            captured["local_embedding_model"] = local_embedding_model
+            return SimpleNamespace(
+                llm=SimpleNamespace(
+                    provider_mode="fully_local",
+                    local_generation_model="llama3:8b",
+                    local_embedding_model=local_embedding_model or "nomic-embed-text",
+                    cloud_generation_model="anthropic/claude-sonnet-4",
+                    cloud_embedding_model="openai/text-embedding-3-small",
+                )
+            )
+
+        monkeypatch.setattr("api.routes.settings.update_llm_config", fake_update)
+
+        response = client.put(
+            "/api/settings",
+            json={"local_embedding_model": "mxbai-embed-large"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["local_embedding_model"] == "mxbai-embed-large"
+        assert captured["local_embedding_model"] == "mxbai-embed-large"
 
     def test_invalid_provider_mode_returns_422(self, client):
         response = client.put(

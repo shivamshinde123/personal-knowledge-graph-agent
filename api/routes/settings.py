@@ -35,6 +35,7 @@ def get_settings_route() -> SettingsResponse:
     return SettingsResponse(
         provider_mode=llm.provider_mode,
         local_generation_model=llm.local_generation_model,
+        local_embedding_model=llm.local_embedding_model,
         cloud_generation_model=llm.cloud_generation_model,
         cloud_embedding_model=llm.cloud_embedding_model,
     )
@@ -44,13 +45,16 @@ def get_settings_route() -> SettingsResponse:
 def put_settings_route(payload: SettingsUpdateRequest) -> SettingsUpdateResponse:
     """Update the LLM provider configuration; a ``ConfigError`` maps to 500.
 
-    A ``cloud_embedding_model`` change isn't specially handled here — the
-    frontend is responsible for confirming with the user and triggering a
-    reset + re-ingest afterward (see ``SettingsResponse``'s docstring).
+    Neither a ``provider_mode`` switch nor a ``cloud_embedding_model``/
+    ``local_embedding_model`` change is specially handled here — the
+    frontend is responsible for confirming with the user (double-confirm
+    for ``provider_mode``) and triggering the appropriate reset afterward
+    (see ``SettingsResponse``'s docstring).
     """
     config = update_llm_config(
         provider_mode=payload.provider_mode,
         local_generation_model=payload.local_generation_model,
+        local_embedding_model=payload.local_embedding_model,
         cloud_generation_model=payload.cloud_generation_model,
         cloud_embedding_model=payload.cloud_embedding_model,
     )
@@ -58,6 +62,7 @@ def put_settings_route(payload: SettingsUpdateRequest) -> SettingsUpdateResponse
         status="updated",
         provider_mode=config.llm.provider_mode,
         local_generation_model=config.llm.local_generation_model,
+        local_embedding_model=config.llm.local_embedding_model,
         cloud_generation_model=config.llm.cloud_generation_model,
         cloud_embedding_model=config.llm.cloud_embedding_model,
     )

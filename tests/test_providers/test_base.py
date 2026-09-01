@@ -386,12 +386,11 @@ class TestGetProvider:
         assert get_provider("answer") == "CLOUD"
         assert get_provider("relationship") == "CLOUD"
 
-    def test_embedding_always_routes_to_cloud_under_fully_local(self, monkeypatch):
-        """There is no local embedding path.
+    def test_embedding_routes_to_local_under_fully_local(self, monkeypatch):
+        """Embedding follows provider_mode like every other task.
 
-        "embedding" always resolves to OpenRouter, even under
-        fully_local (see providers/base.py::get_provider()'s own
-        docstring).
+        Local embedding was brought back via Ollama — see
+        providers/base.py::get_provider()'s own docstring, DECISIONS.md.
         """
         monkeypatch.setattr(
             "providers.base.get_settings",
@@ -407,9 +406,9 @@ class TestGetProvider:
             lambda: "CLOUD",
         )
 
-        assert get_provider("embedding") == "CLOUD"
+        assert get_provider("embedding") == "LOCAL"
 
-    def test_embedding_always_routes_to_cloud_under_fully_cloud(self, monkeypatch):
+    def test_embedding_routes_to_cloud_under_fully_cloud(self, monkeypatch):
         monkeypatch.setattr(
             "providers.base.get_settings",
             lambda: SimpleNamespace(
