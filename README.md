@@ -93,6 +93,38 @@ key is required either way. Changing the embedding model requires a full
 data reset and re-ingestion, since existing vectors won't match the new
 model's space.
 
+### A note on ingestion cost and time — local is preferred
+
+The **first ingestion run is the expensive one.** It has to work through
+everything a source has ever produced — every file, every email in range,
+every commit and issue a repository has ever had — and every one of those
+items also has to be checked against the rest of the knowledge base for
+relationships, which is its own LLM call per item on top of extracting and
+embedding it. That combination is what makes an initial backfill slow, and
+under Cloud Generation, the point where real dollar cost shows up: a lot of
+items, each needing its own round trip to a paid API.
+
+**After that first run, ingestion settles into something much lighter.**
+Each later run only has to look at what actually changed since the day
+before — a handful of new emails, a few new commits, a couple of edited
+Notion pages — so both the time and the cost drop dramatically once the
+backlog is cleared. It doesn't disappear, though: every day still brings
+some new content, and that content still needs the same
+extract-embed-relate treatment, so there's a real, ongoing cost baked into
+just keeping the knowledge base current. On top of that, actually *using*
+the assistant — asking it questions — has its own ongoing cost under Cloud
+Generation, since every answer is its own LLM call at the moment you ask
+it, separate from anything ingestion does.
+
+So the honest shape of it is: **high once, then low but never zero** — a
+steady background cost from daily upkeep, plus whatever chatting with it
+costs on top. **Local Generation is the preferred choice** for exactly this
+reason: it removes the per-call cost from both sides of that equation —
+the daily upkeep and the chatting — at the cost of depending on local
+hardware for speed instead. Cloud Generation is easiest to justify for the
+first, one-time backfill of a small or carefully scoped set of sources, not
+as the everyday running mode.
+
 ### How the relationship graph is created
 
 After a batch finishes storing items, each one is checked against the rest
