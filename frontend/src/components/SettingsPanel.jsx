@@ -106,7 +106,26 @@ function SettingsPanel({
   // firing a save — a ref, not state, since it's only ever read/written
   // around a save, never rendered directly.
   const lastSavedRef = useRef(null);
+  // Serializes every auto-save call (saveLlmField/saveScopeTextarea/
+  // saveDateField/saveEmbeddingModel) so two blur/change events firing
+  // close together (e.g. tabbing quickly through fields, or a field's
+  // save still in flight when another fires) can never send overlapping
+  // PUT /settings or PUT /settings/sources requests. Both endpoints do a
+  // read-the-whole-file, mutate, write-the-whole-file-back update on
+  // config.yaml/.env — a second request reading before the first's write
+  // lands would silently clobber it (a lost update). Queuing them through
+  // one shared "tail" promise means the second request only starts
+  // building its own payload once the first has actually completed. See
+  // DECISIONS.md.
+  const saveQueueRef = useRef(Promise.resolve());
   const [confirm, confirmDialog] = useConfirm();
+
+  /** Runs `work` only after every previously enqueued save has settled. */
+  function enqueueSave(work) {
+    const run = saveQueueRef.current.then(work, work);
+    saveQueueRef.current = run;
+    return run;
+  }
 
   useEffect(() => {
     Promise.all([
@@ -247,20 +266,22 @@ function SettingsPanel({
   }
 
   /** Save one LLM-settings field the moment it's committed (radio pick, or blur). */
-  async function saveLlmField(apiKey, value) {
-    if (lastSavedRef.current[apiKey] === value) return; // no real change
-    setIsSaving(true);
-    setSaveStatus(null);
-    try {
-      const result = await putSettings({ [apiKey]: value });
-      setSettings(result);
-      lastSavedRef.current = { ...lastSavedRef.current, ...result };
-      setSaveStatus({ ok: true, text: "Saved." });
-    } catch (error) {
-      setSaveStatus({ ok: false, text: error.message });
-    } finally {
-      setIsSaving(false);
-    }
+  function saveLlmField(apiKey, value) {
+    return enqueueSave(async () => {
+      if (lastSavedRef.current[apiKey] === value) return; // no real change
+      setIsSaving(true);
+      setSaveStatus(null);
+      try {
+        const result = await putSettings({ [apiKey]: value });
+        setSettings(result);
+        lastSavedRef.current = { ...lastSavedRef.current, ...result };
+        setSaveStatus({ ok: true, text: "Saved." });
+      } catch (error) {
+        setSaveStatus({ ok: false, text: error.message });
+      } finally {
+        setIsSaving(false);
+      }
+    });
   }
 
   /**
@@ -271,97 +292,103 @@ function SettingsPanel({
    * its last-saved value rather than leaving an unsaved edit sitting in
    * the input with no "Save" button left to abandon it via.
    */
-  async function saveEmbeddingModel(value) {
-    if (lastSavedRef.current.cloud_embedding_model === value) return;
-    const confirmed = await confirm({
-      title: "Change embedding model?",
-      body: (
-        <p className="confirm-dialog-warning">
-          Changing the embedding model requires a full data reset and
-          re-ingestion — your existing embeddings won't match the new model.
-          Confirming will save this change, then automatically reset all data
-          and start a fresh ingestion run.
-        </p>
-      ),
-      danger: true,
-      confirmLabel: "Save and reset",
-    });
-    if (!confirmed) {
-      setSettings((prev) => ({
-        ...prev,
-        cloud_embedding_model: lastSavedRef.current.cloud_embedding_model,
-      }));
-      return;
-    }
-
-    setIsSaving(true);
-    setSaveStatus({ ok: true, text: "Saving…" });
-    try {
-      const result = await putSettings({ cloud_embedding_model: value });
-      setSettings(result);
-      lastSavedRef.current = { ...lastSavedRef.current, ...result };
-      setSaveStatus({
-        ok: true,
-        text: "Saved. Resetting data and re-ingesting…",
+  function saveEmbeddingModel(value) {
+    return enqueueSave(async () => {
+      if (lastSavedRef.current.cloud_embedding_model === value) return;
+      const confirmed = await confirm({
+        title: "Change embedding model?",
+        body: (
+          <p className="confirm-dialog-warning">
+            Changing the embedding model requires a full data reset and
+            re-ingestion — your existing embeddings won't match the new model.
+            Confirming will save this change, then automatically reset all data
+            and start a fresh ingestion run.
+          </p>
+        ),
+        danger: true,
+        confirmLabel: "Save and reset",
       });
-      await onResetAll();
-      await onTriggerIngestion();
-      const [sourcesResult, connectionsResult] = await Promise.all([
-        getSourcesStatus(),
-        getSourceConnections(),
-      ]);
-      setSources(sourcesResult);
-      setConnections(connectionsResult);
-      setSaveStatus({ ok: true, text: "Saved. Re-ingestion started." });
-    } catch (error) {
-      setSaveStatus({ ok: false, text: error.message });
-    } finally {
-      setIsSaving(false);
-    }
+      if (!confirmed) {
+        setSettings((prev) => ({
+          ...prev,
+          cloud_embedding_model: lastSavedRef.current.cloud_embedding_model,
+        }));
+        return;
+      }
+
+      setIsSaving(true);
+      setSaveStatus({ ok: true, text: "Saving…" });
+      try {
+        const result = await putSettings({ cloud_embedding_model: value });
+        setSettings(result);
+        lastSavedRef.current = { ...lastSavedRef.current, ...result };
+        setSaveStatus({
+          ok: true,
+          text: "Saved. Resetting data and re-ingesting…",
+        });
+        await onResetAll();
+        await onTriggerIngestion();
+        const [sourcesResult, connectionsResult] = await Promise.all([
+          getSourcesStatus(),
+          getSourceConnections(),
+        ]);
+        setSources(sourcesResult);
+        setConnections(connectionsResult);
+        setSaveStatus({ ok: true, text: "Saved. Re-ingestion started." });
+      } catch (error) {
+        setSaveStatus({ ok: false, text: error.message });
+      } finally {
+        setIsSaving(false);
+      }
+    });
   }
 
   /** Save one of the three source-scope textareas (watch dirs, Notion, GitHub). */
-  async function saveScopeTextarea(
+  function saveScopeTextarea(
     apiKey,
     lastSavedKey,
     setText,
     text,
     listOverride,
   ) {
-    if (lastSavedRef.current[lastSavedKey] === text) return;
-    setIsSaving(true);
-    setSaveStatus(null);
-    try {
-      const result = await putSourceConfig({
-        [apiKey]: listOverride ?? linesToList(text),
-      });
-      const joined = result[apiKey].join("\n");
-      setText(joined);
-      lastSavedRef.current[lastSavedKey] = joined;
-      setSaveStatus({ ok: true, text: "Saved." });
-    } catch (error) {
-      setSaveStatus({ ok: false, text: error.message });
-    } finally {
-      setIsSaving(false);
-    }
+    return enqueueSave(async () => {
+      if (lastSavedRef.current[lastSavedKey] === text) return;
+      setIsSaving(true);
+      setSaveStatus(null);
+      try {
+        const result = await putSourceConfig({
+          [apiKey]: listOverride ?? linesToList(text),
+        });
+        const joined = result[apiKey].join("\n");
+        setText(joined);
+        lastSavedRef.current[lastSavedKey] = joined;
+        setSaveStatus({ ok: true, text: "Saved." });
+      } catch (error) {
+        setSaveStatus({ ok: false, text: error.message });
+      } finally {
+        setIsSaving(false);
+      }
+    });
   }
 
-  /** Save one of the four Gmail/GitHub date-range fields. */
-  async function saveDateField(apiKey, lastSavedKey, setValue, value) {
-    if (lastSavedRef.current[lastSavedKey] === value) return;
-    setIsSaving(true);
-    setSaveStatus(null);
-    try {
-      const result = await putSourceConfig({ [apiKey]: value });
-      const newValue = result[apiKey] ?? "";
-      setValue(newValue);
-      lastSavedRef.current[lastSavedKey] = newValue;
-      setSaveStatus({ ok: true, text: "Saved." });
-    } catch (error) {
-      setSaveStatus({ ok: false, text: error.message });
-    } finally {
-      setIsSaving(false);
-    }
+  /** Save one of the six Gmail/GitHub/Calendar date-range fields. */
+  function saveDateField(apiKey, lastSavedKey, setValue, value) {
+    return enqueueSave(async () => {
+      if (lastSavedRef.current[lastSavedKey] === value) return;
+      setIsSaving(true);
+      setSaveStatus(null);
+      try {
+        const result = await putSourceConfig({ [apiKey]: value });
+        const newValue = result[apiKey] ?? "";
+        setValue(newValue);
+        lastSavedRef.current[lastSavedKey] = newValue;
+        setSaveStatus({ ok: true, text: "Saved." });
+      } catch (error) {
+        setSaveStatus({ ok: false, text: error.message });
+      } finally {
+        setIsSaving(false);
+      }
+    });
   }
 
   if (loadError) {

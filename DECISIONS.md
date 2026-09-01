@@ -8,6 +8,20 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-09-01 — Serialized Settings auto-save to prevent lost updates
+
+**Context**: GitHub Copilot's review of PR #81 flagged a real race in the per-field auto-save added earlier the same day: `PUT /api/settings` and `PUT /api/settings/sources` both implement a read-the-whole-file, mutate-the-one-field, write-the-whole-file-back update (`update_llm_config()`/`update_source_config()`). Two `onBlur`/`onChange` saves firing close together — tabbing quickly through several fields, or a slow save still in flight when the next field blurs — could send overlapping requests; whichever request's write lands second would have read the file *before* the first request's write, silently discarding it (a lost update), and out-of-order responses could briefly show stale values in the UI.
+
+**Decision**: `SettingsPanel.jsx` gains a single shared "tail" promise (`saveQueueRef`) and an `enqueueSave(work)` helper that chains `work` onto it. Every save path (`saveLlmField`, `saveEmbeddingModel`, `saveScopeTextarea`, `saveDateField`) now runs its entire body through `enqueueSave()` — including `saveEmbeddingModel`'s confirm-dialog wait, since the modal already blocks interaction with every other field anyway, so serializing across the wait adds no real delay. This guarantees at most one `PUT` is in flight at a time, in the order the user actually triggered them, without needing any server-side locking (single-user, single browser tab — a client-side queue is sufficient).
+
+**Alternatives considered**: server-side optimistic concurrency (an ETag/version check on `config.yaml`/`.env`) — rejected as overkill for a local, single-user system with no other writer; a client-side ordering guarantee is enough to eliminate the actual race without adding server complexity that would only matter for genuinely concurrent multi-client access, which this app doesn't have.
+
+**Verified**: `npm run lint`/`npm run build` clean. Not separately unit-tested (no existing frontend test suite in this project — see `Coding_Conventions.docx`); manually verified in the running app that rapidly tabbing through several fields no longer drops any of them.
+
+**Affects**: `frontend/src/components/SettingsPanel.jsx`.
+
+---
+
 ## 2026-09-01 — Graph filter moved into a toolbar panel; Gmail/Calendar default date ranges
 
 **Context**: Two follow-up requests. (1) The graph's per-source filter previously lived only as small color-swatch chips in a legend row below the canvas — functional, but easy to miss and not obviously interactive; asked for a more visible, dedicated filter control. (2) Gmail and Calendar's date-range scope defaulted to fully unbounded when unset (all-time mailbox / all-time calendar) — asked to default Gmail to the last 15 days and Calendar to today through the next 30 days instead, so a fresh install doesn't pull someone's entire history by default.
