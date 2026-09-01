@@ -17,8 +17,9 @@ LangSmith, and secondarily as a genuinely useful personal tool.
 > setup (below).
 
 <p align="center">
-  <img src="docs/screenshots/chat.png" width="49%" alt="Chat screen" />
-  <img src="docs/screenshots/graph.png" width="49%" alt="Relationship graph" />
+  <img src="docs/screenshots/chat.png" width="80%" alt="Chat screen" />
+  <br />
+  <img src="docs/screenshots/graph.png" width="80%" alt="Relationship graph" />
 </p>
 
 ## What it does
