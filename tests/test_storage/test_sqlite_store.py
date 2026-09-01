@@ -12,6 +12,7 @@ from storage.sqlite_store import (
     connect,
     delete_item,
     get_chunks_for_item,
+    get_ingestion_run,
     get_item,
     get_last_ingestion_run,
     get_last_run_timestamp,
@@ -417,6 +418,33 @@ class TestGetLastIngestionRun:
         assert run.run_started_at is not None
         assert run.run_completed_at is not None
         assert run.error_log is None
+
+
+class TestStartIngestionRunPid:
+    def test_records_this_process_own_pid(self, conn):
+        import os
+
+        run_id = start_ingestion_run(conn)
+
+        run = get_last_ingestion_run(conn)
+        assert run.pid == os.getpid()
+        assert get_ingestion_run(conn, run_id).pid == os.getpid()
+
+
+class TestGetIngestionRun:
+    def test_none_for_an_unknown_id(self, conn):
+        assert get_ingestion_run(conn, "no-such-run") is None
+
+    def test_returns_the_specific_run_by_id_not_the_most_recent(self, conn):
+        first = start_ingestion_run(conn)
+        complete_ingestion_run(conn, first, status="success", items_processed=1)
+        second = start_ingestion_run(conn)
+        complete_ingestion_run(conn, second, status="failed", items_processed=0)
+
+        run = get_ingestion_run(conn, first)
+
+        assert run.id == first
+        assert run.status == "success"
 
 
 class TestRecordConversationTurn:

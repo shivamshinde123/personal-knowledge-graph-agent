@@ -1,6 +1,10 @@
 """Tests for POST /api/ingest/trigger and POST /api/ingest/cancel."""
 
-from storage.sqlite_store import is_cancellation_requested, start_ingestion_run
+from storage.sqlite_store import (
+    get_ingestion_run,
+    is_cancellation_requested,
+    start_ingestion_run,
+)
 
 
 class TestTriggerIngestion:
@@ -32,7 +36,14 @@ class TestTriggerIngestion:
 
 
 class TestCancelIngestion:
-    def test_sets_the_cancellation_flag_on_the_given_run(self, client, conn):
+    # start_ingestion_run() records this test process's own pid (there's no
+    # real subprocess spawned here), so os.kill must always be faked below
+    # — the real one would send SIGTERM to the test runner itself.
+
+    def test_sets_the_cancellation_flag_on_the_given_run(
+        self, client, conn, monkeypatch
+    ):
+        monkeypatch.setattr("agent.ingest_trigger.os.kill", lambda pid, sig: None)
         run_id = start_ingestion_run(conn)
 
         response = client.post("/api/ingest/cancel", json={"run_id": run_id})
@@ -40,6 +51,20 @@ class TestCancelIngestion:
         assert response.status_code == 200
         assert response.json() == {"status": "cancel_requested"}
         assert is_cancellation_requested(conn, run_id) is True
+
+    def test_force_kills_and_finalizes_the_run(self, client, conn, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            "agent.ingest_trigger.os.kill",
+            lambda pid, sig: calls.append((pid, sig)),
+        )
+        run_id = start_ingestion_run(conn)
+
+        client.post("/api/ingest/cancel", json={"run_id": run_id})
+
+        assert len(calls) == 1
+        run = get_ingestion_run(conn, run_id)
+        assert run.status == "cancelled"
 
     def test_an_unknown_run_id_still_acknowledges(self, client):
         response = client.post("/api/ingest/cancel", json={"run_id": "no-such-run"})
