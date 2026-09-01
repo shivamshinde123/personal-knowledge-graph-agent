@@ -8,6 +8,24 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-09-01 — Local embedding via Ollama restored (frontend): double-confirm + auto-reset on a provider_mode switch
+
+**Context**: Follow-up to the backend half of issue #88 (see the entry directly below). With both embedding fields now freely editable and `provider_mode` switching which one is active, a mode switch silently invalidates every existing embedding — the same dimension-mismatch risk an earlier iteration solved by *freezing* both embedding fields, which this issue explicitly asked not to do. Instead, the switch itself needed to become deliberately hard to trigger by accident and destructive-by-design: warn clearly, confirm twice, then wipe the database automatically (no separate manual "Reset all data" click needed) — but stop short of auto-triggering re-ingestion, unlike the existing `cloud_embedding_model`-change flow.
+
+**Decision**:
+1. `ConfirmDialog.jsx` gains a `critical` prop, layered on top of (not replacing) the existing `danger` prop — `.confirm-dialog.critical`/`.confirm-backdrop.critical` in `index.css` render the *entire* dialog (not just the confirm button) on a solid red background with a white confirm button, a visibly more alarming treatment than `danger`'s red-accented button alone. `useConfirm()` passes `critical` through unchanged, same as every other option.
+2. `SettingsPanel.jsx`'s Models section now shows only the generation + embedding pair matching the active `provider_mode` (`isLocal` → local pair, `isCloud` → cloud pair), not all four fields with the inactive ones merely disabled as before — both fields of the inactive pair are still round-tripped through `GET`/`PUT /api/settings` untouched, so switching back doesn't lose an edited value.
+3. `saveEmbeddingModel()` (previously hardcoded to `cloud_embedding_model`) is generalized to take the field name as a parameter, so both `local_embedding_model` and `cloud_embedding_model` share the same confirm-then-reset-then-reingest flow — changing either embedding model in place, without switching modes, still needs a reset since it's still a vector-space change.
+4. New `saveProviderMode(value)`: awaits two consecutive `confirm({critical: true, ...})` calls (a shared `ProviderModeSwitchWarning` body, since neither prompt is meant to feel like "the real one" — the second exists purely as friction), reverting the radio to its last-saved value if either is declined. Only after both confirms does it call `putSettings({provider_mode})` then `onResetAll()` — explicitly not followed by `onTriggerIngestion()`, unlike `saveEmbeddingModel()`'s flow, per the issue's explicit requirement that a mode switch never auto-starts ingestion.
+
+**Alternatives considered**: reusing the existing `danger` prop for the mode-switch dialog instead of adding `critical` — rejected because the issue explicitly asked for something visually more severe than the app's existing danger styling, and reusing the same look would make the mode switch feel no more consequential than "Reset all data," when it's strictly worse (irreversible data loss *plus* no auto-recovery path via re-ingestion).
+
+**Verified**: `npm run lint`/`npm run build` clean. Not separately unit-tested (no existing frontend test suite in this project — see `Coding_Conventions.docx`); not yet manually verified against a live Ollama instance (no local embedding model pulled on this machine as of this commit) — the confirm-dialog flow, field visibility, and build were checked, but a real `fully_local` embedding call has not been exercised end-to-end yet.
+
+**Affects**: `frontend/src/components/ConfirmDialog.jsx`, `frontend/src/hooks/useConfirm.jsx`, `frontend/src/components/SettingsPanel.jsx`, `frontend/src/index.css`.
+
+---
+
 ## 2026-09-01 — Local embedding via Ollama restored (backend); `fully_local` genuinely zero-cost again
 
 **Context**: A real ingestion run under `fully_cloud` cost roughly $20-25 and took ~3 hours (see the README's cost/time note), almost entirely on cloud LLM calls. `provider_mode` had drifted to only controlling *generation* — embedding always went through OpenRouter regardless of mode (see the multi-step history in this file's earlier `cloud_embedding_model`/local-embedding-removal entries), meaning `fully_local` still required `OPENROUTER_API_KEY` and still incurred embedding cost on every ingested item. Issue #88 asked to bring back a genuine "fully local" mode: both generation and embedding local, no cloud dependency at all, using Ollama only (explicitly not `sentence-transformers`, the original local-embedding path, to avoid juggling two different local inference backends) — while keeping both embedding fields (local and cloud) freely editable rather than re-freezing them as a previous iteration did.

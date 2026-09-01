@@ -32,24 +32,43 @@ const CONNECTION_LABELS = {
 const PROVIDER_MODES = [
   {
     value: "fully_local",
-    label: "Local Generation",
+    label: "Local",
     description:
-      "Answers, metadata, and relationship judging run through Ollama — no cost. This only affects generation: embedding always uses the cloud model below regardless, so an OpenRouter API key is still required.",
+      "Answers, metadata, relationship judging, and embedding all run through Ollama — no cost, no network calls at all.",
   },
   {
     value: "fully_cloud",
-    label: "Cloud Generation",
+    label: "Cloud",
     description:
-      "Answers, metadata, and relationship judging route through OpenRouter — highest quality, per-call cost.",
+      "Answers, metadata, relationship judging, and embedding all route through OpenRouter — highest quality, per-call cost.",
   },
 ];
 
 /**
- * The Settings screen: generation provider, the two generation model
- * fields (gated by provider), the one embedding model field (always
- * cloud, editable but changing it triggers a confirm + auto reset +
- * re-ingest), and connected data source status. Per
- * docs/UIUX_Wireframes.docx section 3.
+ * Shared warning shown by the double-confirm before a provider_mode switch
+ * — both prompts use the same body text since neither confirm alone is
+ * meant to feel like "the real one"; the second exists purely to make the
+ * switch hard to trigger by accident. See DECISIONS.md.
+ */
+function ProviderModeSwitchWarning() {
+  return (
+    <p className="confirm-dialog-warning">
+      Local and Cloud use different embedding models, so switching between
+      them makes every existing embedding unusable. Confirming this switch{" "}
+      <strong>immediately and permanently deletes all ingested data</strong>{" "}
+      — SQLite, Chroma, and Neo4j are all wiped, the same as "Reset all
+      data." Re-ingestion will <strong>not</strong> start automatically — run
+      it yourself from Data Ingestion below once you're ready.
+    </p>
+  );
+}
+
+/**
+ * The Settings screen: provider mode, the generation + embedding model
+ * pair for whichever mode is active (editable; changing the embedding
+ * model triggers a confirm + auto reset + re-ingest, switching the mode
+ * itself triggers a double confirm + auto reset with no re-ingest), and
+ * connected data source status. Per docs/UIUX_Wireframes.docx section 3.
  *
  * Every field saves itself the moment it's committed (a radio pick, or a
  * text/textarea/date field losing focus after an actual change) — there
@@ -285,16 +304,16 @@ function SettingsPanel({
   }
 
   /**
-   * The embedding model is the one field that can't just auto-save
+   * Either embedding model field (local or cloud) can't just auto-save
    * silently — changing it strands every existing embedding (a different
    * model means a different vector space), so it still needs a confirm
    * plus an automatic reset + re-ingest. Declining reverts the field to
    * its last-saved value rather than leaving an unsaved edit sitting in
    * the input with no "Save" button left to abandon it via.
    */
-  function saveEmbeddingModel(value) {
+  function saveEmbeddingModel(apiKey, value) {
     return enqueueSave(async () => {
-      if (lastSavedRef.current.cloud_embedding_model === value) return;
+      if (lastSavedRef.current[apiKey] === value) return;
       const confirmed = await confirm({
         title: "Change embedding model?",
         body: (
@@ -311,7 +330,7 @@ function SettingsPanel({
       if (!confirmed) {
         setSettings((prev) => ({
           ...prev,
-          cloud_embedding_model: lastSavedRef.current.cloud_embedding_model,
+          [apiKey]: lastSavedRef.current[apiKey],
         }));
         return;
       }
@@ -319,7 +338,7 @@ function SettingsPanel({
       setIsSaving(true);
       setSaveStatus({ ok: true, text: "Saving…" });
       try {
-        const result = await putSettings({ cloud_embedding_model: value });
+        const result = await putSettings({ [apiKey]: value });
         setSettings(result);
         lastSavedRef.current = { ...lastSavedRef.current, ...result };
         setSaveStatus({
@@ -335,6 +354,79 @@ function SettingsPanel({
         setSources(sourcesResult);
         setConnections(connectionsResult);
         setSaveStatus({ ok: true, text: "Saved. Re-ingestion started." });
+      } catch (error) {
+        setSaveStatus({ ok: false, text: error.message });
+      } finally {
+        setIsSaving(false);
+      }
+    });
+  }
+
+  /**
+   * Switching provider_mode (Local <-> Cloud) is the single most
+   * consequential action in Settings short of a manual reset — it changes
+   * which embedding model is active, and the two modes' embedding models
+   * are never compatible with each other. Unlike every other confirm in
+   * this file, this requires **two** consecutive confirms (declining
+   * either one aborts and reverts the radio pick), both rendered with the
+   * `critical` visual treatment — the most alarming dialog in the app,
+   * deliberately more friction than a single "danger" confirm.
+   *
+   * Confirming both times immediately saves the new mode, then triggers
+   * the same full reset "Reset all data" does — but, unlike
+   * `saveEmbeddingModel()` above, does NOT auto-trigger re-ingestion
+   * afterward. The user decides when to run ingestion again themselves,
+   * same as after a manual reset. See DECISIONS.md.
+   */
+  function saveProviderMode(value) {
+    return enqueueSave(async () => {
+      if (lastSavedRef.current.provider_mode === value) return;
+      const revert = () =>
+        setSettings((prev) => ({
+          ...prev,
+          provider_mode: lastSavedRef.current.provider_mode,
+        }));
+
+      const firstConfirmed = await confirm({
+        title: "Switch provider mode?",
+        body: <ProviderModeSwitchWarning />,
+        critical: true,
+        confirmLabel: "Continue",
+      });
+      if (!firstConfirmed) {
+        revert();
+        return;
+      }
+
+      const secondConfirmed = await confirm({
+        title: "Are you absolutely sure?",
+        body: <ProviderModeSwitchWarning />,
+        critical: true,
+        confirmLabel: "Yes, switch and delete everything",
+      });
+      if (!secondConfirmed) {
+        revert();
+        return;
+      }
+
+      setIsSaving(true);
+      setSaveStatus({ ok: true, text: "Saving…" });
+      try {
+        const result = await putSettings({ provider_mode: value });
+        setSettings(result);
+        lastSavedRef.current = { ...lastSavedRef.current, ...result };
+        setSaveStatus({ ok: true, text: "Saved. Resetting data…" });
+        await onResetAll();
+        const [sourcesResult, connectionsResult] = await Promise.all([
+          getSourcesStatus(),
+          getSourceConnections(),
+        ]);
+        setSources(sourcesResult);
+        setConnections(connectionsResult);
+        setSaveStatus({
+          ok: true,
+          text: "Saved. All data reset — run ingestion when you're ready.",
+        });
       } catch (error) {
         setSaveStatus({ ok: false, text: error.message });
       } finally {
@@ -457,10 +549,12 @@ function SettingsPanel({
       <div className="settings-columns">
         <div className="settings-column">
           <section className="settings-section">
-            <h2>Generation Provider</h2>
+            <h2>Provider Mode</h2>
             <p className="settings-field-hint">
-              Select where processing occurs. Cloud offers higher quality, local
-              ensures privacy.
+              Selects both the generation and embedding model used everywhere
+              — Cloud offers higher quality, Local has no cost and no network
+              dependency. Switching requires confirming twice, since it wipes
+              all ingested data (see the Models section below).
             </p>
             {PROVIDER_MODES.map((mode) => {
               const selected = settings.provider_mode === mode.value;
@@ -479,7 +573,7 @@ function SettingsPanel({
                         ...prev,
                         provider_mode: mode.value,
                       }));
-                      saveLlmField("provider_mode", mode.value);
+                      saveProviderMode(mode.value);
                     }}
                   />
                   <span className="radio-option-dot">
@@ -499,83 +593,122 @@ function SettingsPanel({
           <section className="settings-section">
             <h2>Models</h2>
             <p className="settings-field-hint">
-              Generation: only the model matching the provider above is actually
-              used — both are kept here so switching doesn't lose the other
-              side's value. Embedding is separate and always cloud, regardless
-              of which generation provider is selected — there's no local
-              embedding option, so an OpenRouter API key is required either way.
-              Changing the embedding model needs a full data reset and
-              re-ingestion, since existing embeddings won't match the new model
-              — leaving this field after a change will ask you to confirm that
-              first.
+              Only the pair for the active provider mode is shown — the other
+              pair's values are kept, unused, so switching back doesn't lose
+              them. Both fields stay editable. Changing the generation model
+              saves immediately; changing the embedding model needs a full
+              data reset and re-ingestion, since existing embeddings won't
+              match a new model — leaving this field after a change will ask
+              you to confirm that first.
             </p>
 
-            <div className="model-field">
-              <label htmlFor="local-generation-model">
-                Local generation model
-              </label>
-              <input
-                id="local-generation-model"
-                className="model-select"
-                type="text"
-                disabled={!isLocal}
-                value={settings.local_generation_model}
-                onChange={(event) =>
-                  setSettings((prev) => ({
-                    ...prev,
-                    local_generation_model: event.target.value,
-                  }))
-                }
-                onBlur={(event) =>
-                  saveLlmField("local_generation_model", event.target.value)
-                }
-                placeholder="e.g. llama3:8b"
-              />
-            </div>
+            {isLocal && (
+              <>
+                <div className="model-field">
+                  <label htmlFor="local-generation-model">
+                    Local generation model
+                  </label>
+                  <input
+                    id="local-generation-model"
+                    className="model-select"
+                    type="text"
+                    value={settings.local_generation_model}
+                    onChange={(event) =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        local_generation_model: event.target.value,
+                      }))
+                    }
+                    onBlur={(event) =>
+                      saveLlmField(
+                        "local_generation_model",
+                        event.target.value,
+                      )
+                    }
+                    placeholder="e.g. llama3:8b"
+                  />
+                </div>
 
-            <div className="model-field">
-              <label htmlFor="cloud-generation-model">
-                Cloud generation model
-              </label>
-              <input
-                id="cloud-generation-model"
-                className="model-select"
-                type="text"
-                disabled={!isCloud}
-                value={settings.cloud_generation_model}
-                onChange={(event) =>
-                  setSettings((prev) => ({
-                    ...prev,
-                    cloud_generation_model: event.target.value,
-                  }))
-                }
-                onBlur={(event) =>
-                  saveLlmField("cloud_generation_model", event.target.value)
-                }
-                placeholder="e.g. anthropic/claude-sonnet-4"
-              />
-            </div>
+                <div className="model-field">
+                  <label htmlFor="local-embedding-model">
+                    Local embedding model
+                  </label>
+                  <input
+                    id="local-embedding-model"
+                    className="model-select"
+                    type="text"
+                    value={settings.local_embedding_model}
+                    onChange={(event) =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        local_embedding_model: event.target.value,
+                      }))
+                    }
+                    onBlur={(event) =>
+                      saveEmbeddingModel(
+                        "local_embedding_model",
+                        event.target.value,
+                      )
+                    }
+                    placeholder="e.g. nomic-embed-text"
+                  />
+                </div>
+              </>
+            )}
 
-            <div className="model-field">
-              <div className="model-field-label-row">
-                <label htmlFor="cloud-embedding-model">Embedding model</label>
-                <span className="model-field-fixed">Always cloud</span>
-              </div>
-              <input
-                id="cloud-embedding-model"
-                className="model-select"
-                type="text"
-                value={settings.cloud_embedding_model}
-                onChange={(event) =>
-                  setSettings((prev) => ({
-                    ...prev,
-                    cloud_embedding_model: event.target.value,
-                  }))
-                }
-                onBlur={(event) => saveEmbeddingModel(event.target.value)}
-                placeholder="e.g. openai/text-embedding-3-small"
-              />
-            </div>
+            {isCloud && (
+              <>
+                <div className="model-field">
+                  <label htmlFor="cloud-generation-model">
+                    Cloud generation model
+                  </label>
+                  <input
+                    id="cloud-generation-model"
+                    className="model-select"
+                    type="text"
+                    value={settings.cloud_generation_model}
+                    onChange={(event) =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        cloud_generation_model: event.target.value,
+                      }))
+                    }
+                    onBlur={(event) =>
+                      saveLlmField(
+                        "cloud_generation_model",
+                        event.target.value,
+                      )
+                    }
+                    placeholder="e.g. anthropic/claude-sonnet-4"
+                  />
+                </div>
+
+                <div className="model-field">
+                  <label htmlFor="cloud-embedding-model">
+                    Cloud embedding model
+                  </label>
+                  <input
+                    id="cloud-embedding-model"
+                    className="model-select"
+                    type="text"
+                    value={settings.cloud_embedding_model}
+                    onChange={(event) =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        cloud_embedding_model: event.target.value,
+                      }))
+                    }
+                    onBlur={(event) =>
+                      saveEmbeddingModel(
+                        "cloud_embedding_model",
+                        event.target.value,
+                      )
+                    }
+                    placeholder="e.g. openai/text-embedding-3-small"
+                  />
+                </div>
+              </>
+            )}
           </section>
 
           <section className="settings-section danger-zone">

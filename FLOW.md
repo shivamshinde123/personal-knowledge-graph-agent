@@ -1271,31 +1271,53 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    in parallel, snapshotting the loaded values into `lastSavedRef` — the
    baseline every later field compares its own value against before
    deciding to save. There is no "Save Changes" step: every field saves
-   itself the moment it's committed — see DECISIONS.md, 2026-09-01. A
-   `provider_mode` radio calls `saveLlmField("provider_mode", value)`
-   directly from its own `onChange`; the two generation-model text inputs
-   and the four source-scope textareas/date fields call their respective
-   save helper (`saveLlmField()`/`saveScopeTextarea()`/`saveDateField()`)
-   from `onBlur`, each first checking `lastSavedRef.current[key] !==
-   value` so an unchanged blur (click in, click away) is a no-op. Every
-   save helper follows the same shape: `putSettings()`/`putSourceConfig()`
-   with just the one changed field (both endpoints are partial-update),
-   then syncs `lastSavedRef` from the response so it always reflects the
-   server's own truth rather than the client's assumption. The one
-   exception is `cloud_embedding_model`'s `onBlur`, which calls
-   `saveEmbeddingModel()` instead of the generic `saveLlmField()` — it
-   still can't be silent, since changing it strands every existing
-   embedding, so it opens the same `useConfirm()` (`hooks/useConfirm.jsx`,
-   rendering `ConfirmDialog.jsx` — this project's own centered modal, not
-   the native `window.confirm()`) dialog as before with a danger-styled
-   warning; declining reverts the input to `lastSavedRef.current`'s value
-   (there's no Save button left to abandon an edit via otherwise). Only on
-   confirm does it call `putSettings({cloud_embedding_model})`, then
-   `onResetAll()` followed by `onTriggerIngestion()` (the same
-   `App.jsx`-owned flows the Danger Zone button and "Run ingestion now"
-   button call directly elsewhere) and re-fetches
-   `getSourcesStatus()`/`getSourceConnections()` — see DECISIONS.md,
-   2026-08-30 (the un-freeze/confirm-dialog entry) and 2026-09-01. Each
+   itself the moment it's committed — see DECISIONS.md, 2026-09-01. The
+   Models section renders only the generation + embedding pair matching
+   `settings.provider_mode` (`isLocal ? local_* : cloud_*`) — not all four
+   fields at once — but both fields of the inactive pair are still kept in
+   `settings` (round-tripped through every `GET`/`PUT /api/settings` call)
+   so switching modes and back doesn't lose an edited-but-inactive value.
+   See DECISIONS.md, 2026-09-01, "Local embedding via Ollama restored
+   (frontend)". The two generation-model text inputs and the four
+   source-scope textareas/date fields call their respective save helper
+   (`saveLlmField()`/`saveScopeTextarea()`/`saveDateField()`) from
+   `onBlur`, each first checking `lastSavedRef.current[key] !== value` so
+   an unchanged blur (click in, click away) is a no-op. Every save helper
+   follows the same shape: `putSettings()`/`putSourceConfig()` with just
+   the one changed field (both endpoints are partial-update), then syncs
+   `lastSavedRef` from the response so it always reflects the server's own
+   truth rather than the client's assumption. Either embedding model
+   field's `onBlur` calls `saveEmbeddingModel(apiKey, value)` instead of
+   the generic `saveLlmField()` — it still can't be silent, since changing
+   it strands every existing embedding, so it opens the same
+   `useConfirm()` (`hooks/useConfirm.jsx`, rendering `ConfirmDialog.jsx` —
+   this project's own centered modal, not the native `window.confirm()`)
+   dialog as before with a danger-styled warning; declining reverts the
+   input to `lastSavedRef.current`'s value (there's no Save button left to
+   abandon an edit via otherwise). Only on confirm does it call
+   `putSettings({[apiKey]: value})`, then `onResetAll()` followed by
+   `onTriggerIngestion()` (the same `App.jsx`-owned flows the Danger Zone
+   button and "Run ingestion now" button call directly elsewhere) and
+   re-fetches `getSourcesStatus()`/`getSourceConnections()` — see
+   DECISIONS.md, 2026-08-30 (the un-freeze/confirm-dialog entry) and
+   2026-09-01.
+
+   The `provider_mode` radio's own `onChange` calls `saveProviderMode(value)`
+   instead — a switch between Local and Cloud is treated as the single
+   most consequential action in Settings, since it changes which embedding
+   model is active and the two modes' embedding spaces are never
+   compatible. `saveProviderMode()` awaits **two** consecutive
+   `useConfirm()` prompts in sequence (declining either aborts and reverts
+   the radio pick), both passed `critical: true` — a new dialog variant
+   (`ConfirmDialog.jsx`'s `critical` prop, `.confirm-dialog.critical` /
+   `.confirm-backdrop.critical` in `index.css`) that renders the entire
+   dialog on a solid red background, more alarming than the plain
+   `danger`-styled button variant every other confirm in this file uses.
+   Only after both confirms does it call `putSettings({provider_mode})`,
+   then `onResetAll()` — but, unlike the embedding-model flow above,
+   deliberately stops there: no `onTriggerIngestion()` call, so a mode
+   switch never starts a run on its own. See DECISIONS.md, 2026-09-01,
+   "Local embedding via Ollama restored (frontend)". Each
    connected-source card shows the live connection status
    (`getSourceConnections()`'s cache-or-fresh result) rather than the
    batch-run status alone; "Reverify" calls `verifySourceConnections()`

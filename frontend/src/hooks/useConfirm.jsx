@@ -11,7 +11,7 @@ import ConfirmDialog from "../components/ConfirmDialog.jsx";
  * handler exactly where `window.confirm(message)` used to be called.
  *
  * @returns {[
- *   (options: {title?: string, body: import("react").ReactNode, danger?: boolean, confirmLabel?: string, cancelLabel?: string}) => Promise<boolean>,
+ *   (options: {title?: string, body: import("react").ReactNode, danger?: boolean, critical?: boolean, confirmLabel?: string, cancelLabel?: string}) => Promise<boolean>,
  *   import("react").ReactNode,
  * ]}
  */
@@ -39,6 +39,7 @@ export function useConfirm() {
       title={pending.title}
       body={pending.body}
       danger={pending.danger}
+      critical={pending.critical}
       confirmLabel={pending.confirmLabel}
       cancelLabel={pending.cancelLabel}
       onConfirm={handleConfirm}
