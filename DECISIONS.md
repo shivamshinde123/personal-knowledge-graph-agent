@@ -8,6 +8,20 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-09-02 — Removed the unused `sentence-transformers` dependency; added `croniter`
+
+**Context**: Starting Docker packaging (issue #52) meant building a real container image for the first time, which made an existing problem concrete: `sentence-transformers` (and the `torch`/`transformers`/`scikit-learn` stack it pulls in — over a dozen packages, hundreds of MB) has been listed in `pyproject.toml` since local embedding was first removed a few iterations ago (see the multi-step provider-mode/embedding history earlier in this file), but nothing in the codebase actually imports it any more — confirmed directly via a project-wide search: every remaining mention was a docstring/comment reference (`providers/base.py`, `providers/local_provider.py`, `storage/chroma_store.py`, `pipeline/chunking.py`), not a real `import`. It was dead weight in every `uv sync`, and would have meant baking an unnecessarily huge Docker image (a CPU-only PyTorch install alone is roughly 800MB-1GB) for a dependency doing nothing.
+
+**Decision**: removed via `uv remove sentence-transformers`; the docstrings/comments referencing it were updated to either name what's actually used now (`OllamaEmbeddings`/`OpenAIEmbeddings`) or drop the specific-library claim in favor of a general one. Separately, the Docker scheduler sidecar (see the Docker packaging entry below) needs to run `scheduler/daily_batch.py` on `config.yaml`'s `ingestion.schedule` cron expression from inside a container — added `croniter` (pure Python, no native dependencies, a well-established library for exactly "compute the next fire time for a cron string") rather than shelling out to a real `cron` daemon inside the container, which needs extra care around PID-1 signal handling and stdout logging in containers that a plain Python loop avoids entirely.
+
+**Alternatives considered**: a cron daemon (or `supercronic`, a container-oriented cron replacement) for the scheduler sidecar — rejected in favor of `croniter` + a plain Python loop, since the project is already Python/`uv`-based throughout and a pure-Python loop is directly unit-testable the same way every other module in this codebase is, where a cron daemon's behavior would only be verifiable by actually running a container.
+
+**Verified**: `uv run pytest` — full suite passes (622 tests), confirming nothing actually depended on `sentence-transformers`. `black`/`ruff` clean.
+
+**Affects**: `pyproject.toml`, `uv.lock`, `providers/base.py`, `providers/local_provider.py`, `storage/chroma_store.py` (docstrings only).
+
+---
+
 ## 2026-09-01 — Local embedding via Ollama restored (frontend): double-confirm + auto-reset on a provider_mode switch
 
 **Context**: Follow-up to the backend half of issue #88 (see the entry directly below). With both embedding fields now freely editable and `provider_mode` switching which one is active, a mode switch silently invalidates every existing embedding — the same dimension-mismatch risk an earlier iteration solved by *freezing* both embedding fields, which this issue explicitly asked not to do. Instead, the switch itself needed to become deliberately hard to trigger by accident and destructive-by-design: warn clearly, confirm twice, then wipe the database automatically (no separate manual "Reset all data" click needed) — but stop short of auto-triggering re-ingestion, unlike the existing `cloud_embedding_model`-change flow.

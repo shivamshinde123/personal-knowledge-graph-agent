@@ -2,9 +2,11 @@
 
 Used when ``provider_mode: fully_local``, for *both* generation and
 embedding — Ollama only, never any other local backend (e.g. not
-``sentence-transformers``, even though it remains a project dependency
-elsewhere). This is a deliberate re-reversal of an earlier decision to make
-embedding always go through OpenRouter regardless of ``provider_mode``; see
+``sentence-transformers``, which was the original local-embedding path
+historically but has since been dropped from the project entirely — see
+DECISIONS.md). This is a deliberate re-reversal of an earlier decision to
+make embedding always go through OpenRouter regardless of
+``provider_mode``; see
 ``providers/base.py::get_provider()`` and ``DECISIONS.md`` for the full
 history and the cost-driven reasoning behind bringing local embedding back.
 See ``providers/base.py`` for the shared contract and implementation.
