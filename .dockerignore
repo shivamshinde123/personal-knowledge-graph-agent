@@ -1,0 +1,63 @@
+# Applies to every `docker build` in this repo (backend and frontend
+# images alike, per each's own build context — see docker-compose.yml).
+# Mirrors .gitignore's secret/data exclusions, but is enforced separately:
+# Docker's build context is not git-aware, so an untracked-but-present
+# local file (e.g. a downloaded OAuth client secret sitting in config/)
+# would otherwise get copied into an image layer even though git itself
+# never tracked it. See DECISIONS.md (issue #52).
+#
+# Unlike .gitignore, a bare `pattern*.json` here only matches at the
+# context ROOT, not at any depth — verified directly (a first pass without
+# `**/` prefixes let config/client_secret_*.json leak into a real built
+# image). Every pattern below is explicitly `**/`-prefixed because of this.
+
+# --- Secrets -- never let these into an image layer -----------------------
+**/config/.env
+**/.env
+**/*.pem
+**/*credentials*.json
+**/*token*.json
+**/client_secret*.json
+
+# --- Local data stores -----------------------------------------------------
+**/data/
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+**/chroma/
+**/.chroma/
+
+# --- Python ------------------------------------------------------------
+**/.venv/
+**/.venv-test/
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+**/htmlcov/
+**/.coverage
+**/.coverage.*
+
+# --- Node / frontend -----------------------------------------------------
+**/node_modules/
+**/build/
+**/dist/
+**/npm-debug.log*
+
+# --- Editors / OS --------------------------------------------------------
+**/.vscode/
+**/.idea/
+**/.DS_Store
+**/Thumbs.db
+
+# --- Docs / VCS / misc -- not needed inside any image ---------------------
+# README.md is kept -- pyproject.toml's `readme = "README.md"` is read
+# during `uv sync`'s own project-metadata step.
+**/.git/
+**/.github/
+docs/
+CLAUDE.md
+DECISIONS.md
+FLOW.md

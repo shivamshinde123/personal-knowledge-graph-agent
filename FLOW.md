@@ -907,6 +907,13 @@ and registers every route module from `api/routes/`; the module-level
    `import.meta.env.VITE_API_BASE_URL`, which `client.js`'s `API_BASE_URL`
    reads, so the two processes can never drift out of sync on which port
    the backend actually ended up on. See DECISIONS.md, 2026-08-31.
+   `_select_bind_host()` picks the interface `uvicorn.run()` binds:
+   `"127.0.0.1"` on bare metal (this backend's normal "local-only,
+   single-user" posture), or `"0.0.0.0"` when `settings.env.running_in_docker`
+   is set — `127.0.0.1` inside a container is invisible to Docker's own
+   port-forwarding, which connects to the container's *external* interface,
+   not its loopback; verified directly against a real running stack (see
+   DECISIONS.md, 2026-09-02, issue #52)
 
 1. On startup, the `lifespan` context manager first calls
    `agent/tracing.py::enable_tracing()` (a no-op if no `LANGSMITH_API_KEY`
@@ -945,6 +952,48 @@ DECISIONS.md, 2026-08-25.
 `127.0.0.1` origin on any port — needed for `frontend/`'s Vite dev server
 (a different port/origin) to call this API at all. See DECISIONS.md,
 2026-08-25.
+
+---
+
+## Entry point: `docker compose up -d --build` (issue #52)
+
+Not a code entry point itself — a deployment topology wrapping the real
+entry points above/below it. See DECISIONS.md, 2026-09-02.
+
+1. `neo4j` starts first; `backend`/`scheduler` both `depends_on:
+   condition: service_healthy` on it, so neither starts until Neo4j's own
+   healthcheck (`wget` against its HTTP port) passes
+2. `backend` and `scheduler` are the **same built image**
+   (`docker/backend.Dockerfile`) with different `command`s —
+   `python -m api.main` vs. `python -m scheduler.loop` — sharing one
+   `app_data` named volume (`/app/data`, holding both the SQLite db and
+   Chroma's persist dir) so either process's writes are visible to the
+   other, the same "share the filesystem" relationship a manual dev
+   setup's foreground backend process and spawned `daily_batch`
+   subprocess already have
+3. Both mount the real `config/.env` read-only via `env_file:` unchanged —
+   every credential works exactly as it does outside Docker — while a
+   compose-level `environment:` block overrides only
+   `SQLITE_DB_PATH`/`CHROMA_PERSIST_DIR`/`NEO4J_URI`/`OLLAMA_HOST`/
+   `LOCAL_FILES_WATCH_DIRS`/`RUNNING_IN_DOCKER`, since those must point
+   in-container/in-network rather than at the host; real env vars set
+   this way win over the mounted file's own values
+4. `ollama` only starts when the `local-llm` Compose profile is active
+   (`--profile local-llm`, or `COMPOSE_PROFILES=local-llm` in the
+   root-level `.env`) — irrelevant, and skipped, under
+   `provider_mode: fully_cloud`
+5. `frontend` (`docker/frontend.Dockerfile`, multi-stage: `npm run build`
+   → served by bare `nginx`) is built with `VITE_API_BASE_URL` baked in
+   at image-build time from `HOST_BACKEND_PORT` — the *published* host
+   port, since the browser making requests runs on the host, not inside
+   the Docker network (see `frontend/vite.config.js`'s own comment,
+   `api/main.py`'s `_select_bind_host()` above)
+6. Two separate `.env` files are in play, deliberately: the root-level one
+   (`.env.docker.example` → `.env`) is read only by `docker compose`
+   itself to fill in `${VARS}` in `docker-compose.yml` (`NEO4J_PASSWORD`,
+   `HOST_WATCH_DIR`, `HOST_DATA_DIR`, published ports); `config/.env` is
+   the application's own configuration, identical in shape to a manual
+   dev setup's
 
 ---
 
