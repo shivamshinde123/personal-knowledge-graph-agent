@@ -30,12 +30,21 @@ option either) — see that module's docstring for the full reasoning. The
 two sources use separate credentials/token files
 (``GOOGLE_CALENDAR_CREDENTIALS_PATH`` / ``data/calendar_token.json``),
 not shared ones, matching their already-separate ``.env`` variables.
+
+Every run is also scoped to a window on each event's own start/end time
+(Google Calendar API's ``timeMin``/``timeMax``) — defaulting to today
+through 30 days out when ``CALENDAR_DATE_RANGE_START``/``_END`` are unset
+(see ``config/settings.py::EnvSettings.effective_calendar_date_range_start``/
+``_end``). This is a different axis than ``since``/``updatedMin`` below —
+"changed recently" vs. "happening in this window" — and Google's API ANDs
+the two together, same as how Gmail's own configured date range and
+incremental cursor combine. See ``DECISIONS.md``.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time, timedelta
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -66,7 +75,11 @@ def extract_new_items(
     Args:
         since: Only include events created/updated after this time.
             ``None`` (the first-ever run) includes every event on the
-            calendar surviving noise filtering.
+            calendar surviving noise filtering. Combined with (ANDed
+            against) ``config/.env``'s ``CALENDAR_DATE_RANGE_START``/
+            ``CALENDAR_DATE_RANGE_END`` — a window on each event's own
+            start/end time, defaulting to today through 30 days out when
+            unset — see the module docstring.
         on_progress: Accepted for a uniform call shape with the other
             extractors in ``scheduler/daily_batch.py``'s ``_EXTRACTORS``
             list, but unused here — see ``extractors/base.py``. Tracked
@@ -90,7 +103,12 @@ def extract_new_items(
 
     service = _build_service(_get_credentials())
     filters = settings.config.filters.calendar
-    events = _list_events(service, since)
+    events = _list_events(
+        service,
+        since,
+        settings.env.effective_calendar_date_range_start,
+        settings.env.effective_calendar_date_range_end,
+    )
 
     logger.info(
         "Calendar extraction starting (since=%s): %d event(s) fetched",
@@ -174,7 +192,12 @@ def setup_auth() -> None:
     logger.info("Google Calendar authorization saved to %s", token_path)
 
 
-def _list_events(service, since: datetime | None) -> list[dict]:
+def _list_events(
+    service,
+    since: datetime | None,
+    range_start: date,
+    range_end: date,
+) -> list[dict]:
     try:
         params: dict = {
             "calendarId": _CALENDAR_ID,
@@ -183,6 +206,15 @@ def _list_events(service, since: datetime | None) -> list[dict]:
             # occurrence — see the module docstring.
             "singleEvents": False,
             "showDeleted": False,
+            # Window on each event's own start/end time — an independent
+            # filter from updatedMin below, ANDed together by the API. The
+            # day after range_end (midnight) makes the configured end date
+            # inclusive, same convention as extractors/gmail.py's own
+            # date-range handling.
+            "timeMin": _to_rfc3339(datetime.combine(range_start, time.min)),
+            "timeMax": _to_rfc3339(
+                datetime.combine(range_end + timedelta(days=1), time.min)
+            ),
         }
         if since is not None:
             params["updatedMin"] = _to_rfc3339(since)

@@ -91,6 +91,8 @@ function SettingsPanel({
   const [gmailDateRangeEnd, setGmailDateRangeEnd] = useState("");
   const [githubDateRangeStart, setGithubDateRangeStart] = useState("");
   const [githubDateRangeEnd, setGithubDateRangeEnd] = useState("");
+  const [calendarDateRangeStart, setCalendarDateRangeStart] = useState("");
+  const [calendarDateRangeEnd, setCalendarDateRangeEnd] = useState("");
   const [loadError, setLoadError] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null);
@@ -122,6 +124,8 @@ function SettingsPanel({
           const gmailEnd = sourceConfig.gmail_date_range_end ?? "";
           const githubStart = sourceConfig.github_date_range_start ?? "";
           const githubEnd = sourceConfig.github_date_range_end ?? "";
+          const calendarStart = sourceConfig.calendar_date_range_start ?? "";
+          const calendarEnd = sourceConfig.calendar_date_range_end ?? "";
           setSettings(settingsResult);
           setSources(sourcesResult);
           setConnections(connectionsResult);
@@ -132,6 +136,8 @@ function SettingsPanel({
           setGmailDateRangeEnd(gmailEnd);
           setGithubDateRangeStart(githubStart);
           setGithubDateRangeEnd(githubEnd);
+          setCalendarDateRangeStart(calendarStart);
+          setCalendarDateRangeEnd(calendarEnd);
           lastSavedRef.current = {
             ...settingsResult,
             watchDirsText: watchDirs,
@@ -141,6 +147,8 @@ function SettingsPanel({
             gmailDateRangeEnd: gmailEnd,
             githubDateRangeStart: githubStart,
             githubDateRangeEnd: githubEnd,
+            calendarDateRangeStart: calendarStart,
+            calendarDateRangeEnd: calendarEnd,
           };
         },
       )
@@ -648,8 +656,8 @@ function SettingsPanel({
           <section className="settings-section">
             <h2>Gmail date range</h2>
             <p className="settings-field-hint">
-              Only ingest messages within this range. Leave either side empty
-              for no floor/ceiling.
+              Only ingest messages within this range — defaults to the last 15
+              days when left empty, not unbounded.
             </p>
             <div className="date-range-fields">
               <label>
@@ -727,6 +735,53 @@ function SettingsPanel({
                       "github_date_range_end",
                       "githubDateRangeEnd",
                       setGithubDateRangeEnd,
+                      event.target.value,
+                    )
+                  }
+                />
+              </label>
+            </div>
+          </section>
+
+          <section className="settings-section">
+            <h2>Calendar date range</h2>
+            <p className="settings-field-hint">
+              Only ingest events whose own start time falls in this range —
+              defaults to today through 30 days out (upcoming events), unlike
+              the ranges above.
+            </p>
+            <div className="date-range-fields">
+              <label>
+                From
+                <input
+                  type="date"
+                  value={calendarDateRangeStart}
+                  onChange={(event) =>
+                    setCalendarDateRangeStart(event.target.value)
+                  }
+                  onBlur={(event) =>
+                    saveDateField(
+                      "calendar_date_range_start",
+                      "calendarDateRangeStart",
+                      setCalendarDateRangeStart,
+                      event.target.value,
+                    )
+                  }
+                />
+              </label>
+              <label>
+                To
+                <input
+                  type="date"
+                  value={calendarDateRangeEnd}
+                  onChange={(event) =>
+                    setCalendarDateRangeEnd(event.target.value)
+                  }
+                  onBlur={(event) =>
+                    saveDateField(
+                      "calendar_date_range_end",
+                      "calendarDateRangeEnd",
+                      setCalendarDateRangeEnd,
                       event.target.value,
                     )
                   }

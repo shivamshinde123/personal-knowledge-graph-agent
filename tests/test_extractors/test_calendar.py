@@ -8,6 +8,7 @@ JSON responses. Credentials are faked too (``_get_credentials``/
 ``tests/test_extractors/test_gmail.py``.
 """
 
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -60,19 +61,23 @@ class FakeExecutor:
 
 
 class FakeEvents:
-    def __init__(self, events):
+    def __init__(self, events, calls=None):
         self._events = events
+        self._calls = calls
 
     def list(self, **kwargs):
+        if self._calls is not None:
+            self._calls.append(kwargs)
         return FakeExecutor({"items": self._events, "nextPageToken": None})
 
 
 class FakeService:
-    def __init__(self, events):
+    def __init__(self, events, calls=None):
         self._events = events
+        self._calls = calls
 
     def events(self):
-        return FakeEvents(self._events)
+        return FakeEvents(self._events, self._calls)
 
 
 def install_fake_calendar(
@@ -81,12 +86,18 @@ def install_fake_calendar(
     *,
     google_calendar_credentials_path="/fake/creds.json",
     skip_recurring_without_description=True,
+    range_start=None,
+    range_end=None,
+    calls=None,
 ):
     monkeypatch.setattr(
         "extractors.calendar.get_settings",
         lambda: SimpleNamespace(
             env=SimpleNamespace(
-                google_calendar_credentials_path=google_calendar_credentials_path
+                google_calendar_credentials_path=google_calendar_credentials_path,
+                effective_calendar_date_range_start=range_start or date.today(),
+                effective_calendar_date_range_end=range_end
+                or (date.today() + timedelta(days=30)),
             ),
             config=SimpleNamespace(
                 filters=SimpleNamespace(
@@ -99,7 +110,8 @@ def install_fake_calendar(
     )
     monkeypatch.setattr("extractors.calendar._get_credentials", lambda: object())
     monkeypatch.setattr(
-        "extractors.calendar._build_service", lambda creds: FakeService(events)
+        "extractors.calendar._build_service",
+        lambda creds: FakeService(events, calls),
     )
 
 
@@ -243,3 +255,52 @@ class TestRecurringEventFiltering:
         items = extract_new_items()
 
         assert len(items) == 1
+
+
+class TestDateRangeFiltering:
+    """timeMin/timeMax scope each run to a window on events' own start/end.
+
+    A different axis than updatedMin (`since`), ANDed together by the
+    real API. See the module docstring, DECISIONS.md.
+    """
+
+    def test_defaults_to_today_through_30_days_out_when_unset(self, monkeypatch):
+        calls = []
+        install_fake_calendar(monkeypatch, [event("e1")], calls=calls)
+
+        extract_new_items()
+
+        assert len(calls) == 1
+        time_min = date.fromisoformat(calls[0]["timeMin"][:10])
+        time_max = date.fromisoformat(calls[0]["timeMax"][:10])
+        assert time_min == date.today()
+        # The day *after* the configured end date, so the end date itself
+        # is inclusive — same convention as extractors/gmail.py.
+        assert time_max == date.today() + timedelta(days=31)
+
+    def test_a_configured_range_is_passed_through(self, monkeypatch):
+        calls = []
+        start = date(2026, 1, 1)
+        end = date(2026, 1, 31)
+        install_fake_calendar(
+            monkeypatch,
+            [event("e1")],
+            range_start=start,
+            range_end=end,
+            calls=calls,
+        )
+
+        extract_new_items()
+
+        assert calls[0]["timeMin"].startswith("2026-01-01")
+        assert calls[0]["timeMax"].startswith("2026-02-01")
+
+    def test_is_combined_with_updated_min_when_since_is_given(self, monkeypatch):
+        calls = []
+        install_fake_calendar(monkeypatch, [event("e1")], calls=calls)
+
+        extract_new_items(since=datetime(2026, 6, 1, tzinfo=UTC))
+
+        assert calls[0]["updatedMin"].startswith("2026-06-01")
+        assert "timeMin" in calls[0]
+        assert "timeMax" in calls[0]
