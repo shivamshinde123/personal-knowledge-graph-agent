@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -85,7 +86,17 @@ class SearchResult:
 
 @dataclass(slots=True)
 class IngestionRun:
-    """One daily batch execution, used for reliability tracking."""
+    """One daily batch execution, used for reliability tracking.
+
+    ``pid`` is the OS process id of whichever ``scheduler.daily_batch``
+    process is (or was) running this batch — set by that process itself
+    via ``os.getpid()`` inside :func:`start_ingestion_run`, so there's no
+    coordination gap between spawning it and it creating its own row.
+    Used by ``agent/ingest_trigger.py::cancel_ingestion()`` to force-kill
+    the process directly, independent of whether the API process that
+    spawned it is still the one handling the cancel request. See
+    ``DECISIONS.md``.
+    """
 
     id: str
     run_started_at: datetime
@@ -95,6 +106,7 @@ class IngestionRun:
     error_log: str | None = None
     current_item: str | None = None
     cancel_requested: bool = False
+    pid: int | None = None
 
 
 @dataclass(slots=True)
@@ -177,7 +189,8 @@ CREATE TABLE IF NOT EXISTS ingestion_runs (
   items_processed    INTEGER DEFAULT 0,
   error_log          TEXT,
   current_item       TEXT,
-  cancel_requested   INTEGER DEFAULT 0
+  cancel_requested   INTEGER DEFAULT 0,
+  pid                INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -262,6 +275,7 @@ def _ingestion_run_from_row(row: sqlite3.Row) -> IngestionRun:
         error_log=row["error_log"],
         current_item=row["current_item"],
         cancel_requested=bool(row["cancel_requested"]),
+        pid=row["pid"],
     )
 
 
@@ -326,6 +340,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE ingestion_runs ADD COLUMN cancel_requested INTEGER DEFAULT 0"
         )
+        conn.commit()
+    if "pid" not in columns:
+        conn.execute("ALTER TABLE ingestion_runs ADD COLUMN pid INTEGER")
         conn.commit()
 
 
@@ -569,6 +586,14 @@ def keyword_search(
 def start_ingestion_run(conn: sqlite3.Connection) -> str:
     """Record the start of a daily batch run.
 
+    Records ``os.getpid()`` as this run's ``pid`` at creation time — the
+    process starting the run is always the one running it, so there's no
+    coordination gap between a caller spawning ``scheduler.daily_batch``
+    and this row existing, unlike trying to pass the PID in from outside
+    (the spawning process doesn't know this run's id yet at spawn time;
+    this process doesn't know anyone else needs its PID). See
+    ``agent/ingest_trigger.py::cancel_ingestion()``, ``DECISIONS.md``.
+
     Args:
         conn: An open connection from :func:`connect`.
 
@@ -582,8 +607,8 @@ def start_ingestion_run(conn: sqlite3.Connection) -> str:
     try:
         conn.execute(
             "INSERT INTO ingestion_runs (id, run_started_at, status, "
-            "items_processed) VALUES (?, ?, 'running', 0)",
-            (run_id, _to_iso(datetime.now(UTC))),
+            "items_processed, pid) VALUES (?, ?, 'running', 0, ?)",
+            (run_id, _to_iso(datetime.now(UTC)), os.getpid()),
         )
         conn.commit()
     except sqlite3.Error as exc:
@@ -766,6 +791,28 @@ def get_last_run_timestamp(conn: sqlite3.Connection) -> datetime | None:
         "WHERE status = 'success'"
     ).fetchone()
     return _from_iso(row["ts"])
+
+
+def get_ingestion_run(conn: sqlite3.Connection, run_id: str) -> IngestionRun | None:
+    """Return one specific batch run by id, regardless of status.
+
+    Unlike :func:`get_last_ingestion_run` (always the most recent row),
+    this looks up the exact run a caller already has an id for — e.g.
+    ``agent/ingest_trigger.py::cancel_ingestion()`` needs the *targeted*
+    run's current ``items_processed``/``status`` before force-killing its
+    process, not whatever happens to be most recent.
+
+    Args:
+        conn: An open connection from :func:`connect`.
+        run_id: The run's id, from :func:`start_ingestion_run`.
+
+    Returns:
+        That run, or ``None`` if no run with this id exists.
+    """
+    row = conn.execute(
+        "SELECT * FROM ingestion_runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    return None if row is None else _ingestion_run_from_row(row)
 
 
 def get_last_ingestion_run(conn: sqlite3.Connection) -> IngestionRun | None:

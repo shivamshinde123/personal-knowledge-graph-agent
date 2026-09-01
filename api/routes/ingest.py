@@ -33,14 +33,14 @@ def trigger_ingestion_route() -> IngestTriggerResponse:
 def cancel_ingestion_route(
     payload: IngestCancelRequest, request: Request
 ) -> IngestCancelResponse:
-    """Ask a running batch to stop at its next check point.
+    """Force-stop a running batch immediately.
 
     ``run_id`` is the ``ingestion_runs.id`` from
     ``GET /api/sources/status``'s ``last_run.run_id`` — not the display
     label ``POST /api/ingest/trigger`` returns (see ``agent/ingest_trigger.py``).
-    Acknowledges the request only; the run may take a moment to actually
-    stop, and stops with whatever it had already processed kept, not rolled
-    back.
+    Kills the process outright (see ``agent/ingest_trigger.py::cancel_ingestion()``
+    for why a purely cooperative flag isn't enough on its own) — whatever
+    was already processed and committed is kept, not rolled back.
     """
     cancel_ingestion(request.app.state.conn, payload.run_id)
     return IngestCancelResponse(status="cancel_requested")

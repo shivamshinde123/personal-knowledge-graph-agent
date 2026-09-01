@@ -614,7 +614,10 @@ driver)` — the actual orchestration, kept separate so tests can pass in
 test doubles/temp resources instead.
 
 1. `_run()` reads the watermark via `get_last_run_timestamp(conn)` and
-   starts a run record via `start_ingestion_run(conn)`
+   starts a run record via `start_ingestion_run(conn)` — which also
+   records `os.getpid()` on the new row, so `POST /api/ingest/cancel` can
+   force-kill this exact process later regardless of which process
+   spawned it (see that entry point, DECISIONS.md, 2026-09-01)
 2. For each registered extractor in `_EXTRACTORS` (currently
    `local_file`, `notion`, `gmail`, `github`, `calendar`, and
    `browser_history` — adding a source means adding one entry here, per
@@ -1172,24 +1175,50 @@ development/testing, outside the daily schedule.
 ## Entry point: `POST /api/ingest/cancel` (`api/routes/ingest.py`)
 
 Extension beyond `docs/API_Specification.docx` — see DECISIONS.md,
-2026-08-31 (issues #72, #73).
+2026-08-31 (issues #72, #73) and 2026-09-01 (the force-kill entry — the
+cooperative-flag-only design below turned out to have a real gap once a
+source's extraction phase finishes; see that entry for why).
 
 1. Request body `{"run_id": <ingestion_runs.id>}` — the real UUID from
    `GET /api/sources/status`'s `last_run.run_id`, **not**
    `POST /api/ingest/trigger`'s display-label return value; the two are
    different strings for the same run
-2. `agent/ingest_trigger.py::cancel_ingestion(request.app.state.conn,
-   run_id)` — a thin wrapper around
-   `storage/sqlite_store.py::request_ingestion_cancellation()`, which sets
-   `ingestion_runs.cancel_requested = 1` on that row. An unknown `run_id`
-   updates zero rows and does not raise — the endpoint still acknowledges
-   normally
-3. Returns `200 {"status": "cancel_requested"}` immediately — this only
-   flips the flag; the spawned `scheduler.daily_batch` subprocess (a
-   separate OS process, sharing only the SQLite file) picks it up at its
-   next check point (see the `scheduler/daily_batch.py` entry point above)
-   and actually stops, landing the run on `status: "cancelled"`, observed
-   afterward via `GET /api/sources/status`, same as any other outcome
+2. `agent/ingest_trigger.py::cancel_ingestion(request.app.state.conn, run_id)`:
+   a. Still sets `ingestion_runs.cancel_requested = 1`
+      (`storage/sqlite_store.py::request_ingestion_cancellation()`) — cheap,
+      harmless to keep, and still useful if the process happens to hit a
+      check point first
+   b. `storage/sqlite_store.py::get_ingestion_run(conn, run_id)` — reads the
+      run's recorded `pid` (set by the batch process itself, via
+      `start_ingestion_run()`, at row-creation time — see that entry
+      point's step 1 below). If the run isn't found, or isn't
+      `status == "running"` anymore, stops here — nothing to kill,
+      nothing to finalize
+   b'. If `pid` is `None` (a legacy run predating that column), stops here
+      too — with no way to confirm the process has actually stopped,
+      finalizing as `"cancelled"` would misrepresent reality; only the
+      cooperative flag from step 2a is left in place. See DECISIONS.md,
+      2026-09-01 ("cancel_ingestion() no longer finalizes... on an
+      unconfirmed kill")
+   c. `os.kill(pid, signal.SIGTERM)` — on Windows this maps to
+      `TerminateProcess()`, an immediate forceful kill, not a catchable
+      signal. A `ProcessLookupError` (already exited) is caught and
+      treated as a confirmed stop; any other `OSError` is caught, logged,
+      and treated as an *unconfirmed* kill — stops here without
+      finalizing, same reasoning as step b'
+   d. Only on a confirmed kill: re-reads the run, and only if it's
+      *still* `"running"` (guards a race against the batch legitimately
+      finishing in the gap between b and c) calls
+      `complete_ingestion_run(status="cancelled", ...)` directly — a
+      force-killed process can never call this itself on its way out
+3. Returns `200 {"status": "cancel_requested"}` regardless of whether the
+   kill was confirmed — by the time this response is sent, a confirmed
+   kill has already finalized the row (steps 2b-2d all happen
+   synchronously before the response) but an unconfirmed one has not, and
+   the caller finds out which by polling `GET /api/sources/status`
+   afterward, unlike the earlier purely-cooperative design where this
+   response meant "the flag is set, actual stopping happens whenever the
+   process gets around to checking it"
 
 ---
 

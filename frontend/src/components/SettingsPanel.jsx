@@ -711,28 +711,6 @@ function SettingsPanel({
             )}
           </section>
 
-          <section className="settings-section danger-zone">
-            <h2>
-              <img src={dangerIcon} alt="" aria-hidden="true" />
-              Danger Zone
-            </h2>
-            <p className="settings-field-hint">
-              Permanently deletes every ingested item, embedding, and
-              relationship. Use this to recover from a bad ingestion run or to
-              restart from a clean slate — there is no undo.
-            </p>
-            <button
-              type="button"
-              className="danger-button"
-              onClick={handleResetAll}
-              disabled={isResetting}
-            >
-              {isResetting ? "Resetting…" : "Reset all data"}
-            </button>
-          </section>
-        </div>
-
-        <div className="settings-column">
           <section className="settings-section">
             <div className="settings-section-header">
               <h2>Local folders to watch</h2>
@@ -813,6 +791,28 @@ function SettingsPanel({
             />
           </section>
 
+          <section className="settings-section danger-zone">
+            <h2>
+              <img src={dangerIcon} alt="" aria-hidden="true" />
+              Danger Zone
+            </h2>
+            <p className="settings-field-hint">
+              Permanently deletes every ingested item, embedding, and
+              relationship. Use this to recover from a bad ingestion run or to
+              restart from a clean slate — there is no undo.
+            </p>
+            <button
+              type="button"
+              className="danger-button"
+              onClick={handleResetAll}
+              disabled={isResetting}
+            >
+              {isResetting ? "Resetting…" : "Reset all data"}
+            </button>
+          </section>
+        </div>
+
+        <div className="settings-column">
           <section className="settings-section">
             <h2>Gmail date range</h2>
             <p className="settings-field-hint">

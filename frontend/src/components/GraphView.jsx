@@ -6,23 +6,7 @@ import {
   forceSimulation,
 } from "d3-force";
 import { getGraph } from "../api/client.js";
-
-const SOURCE_TYPE_COLORS = {
-  local_file: "#6b4fd6",
-  notion: "#c0392b",
-  gmail: "#1f9d55",
-  // Was "#16151a", an almost-black GitHub-brand color, barely visible
-  // against this dark theme's background — see DECISIONS.md.
-  github: "#3b82f6",
-  // Matches extractors/calendar.py's SOURCE_TYPE = "calendar" — was
-  // "google_calendar" here, which never matched any real node's
-  // source_type, so calendar nodes silently fell back to the generic
-  // gray color and the legend entry never highlighted a filter that did
-  // anything. Fixed while wiring up per-source filtering, which depends
-  // on this key actually matching. See DECISIONS.md.
-  calendar: "#e0a800",
-  browser_history: "#8b8896",
-};
+import { SOURCE_TYPE_COLORS } from "../constants/sourceColors.js";
 
 // browser_history is excluded everywhere below (filter chips, legend) —
 // it's excluded from relationship detection entirely (see

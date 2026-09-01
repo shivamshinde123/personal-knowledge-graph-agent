@@ -133,7 +133,12 @@ class TestEffectiveDateRanges:
     default. See DECISIONS.md.
     """
 
-    def test_gmail_defaults_to_the_last_15_days_when_unset(self):
+    def test_gmail_defaults_to_the_last_15_days_when_unset(self, monkeypatch):
+        # Explicitly blanked rather than relying on the real config/.env
+        # happening to leave these unset — see
+        # test_github_still_has_no_default_when_unset's docstring.
+        monkeypatch.setenv("GMAIL_DATE_RANGE_START", "")
+        monkeypatch.setenv("GMAIL_DATE_RANGE_END", "")
         env = EnvSettings()
 
         assert env.effective_gmail_date_range_start == date.today() - timedelta(days=15)
@@ -147,7 +152,11 @@ class TestEffectiveDateRanges:
         assert env.effective_gmail_date_range_start == date(2026, 1, 1)
         assert env.effective_gmail_date_range_end == date(2026, 1, 31)
 
-    def test_calendar_defaults_to_today_through_30_days_out_when_unset(self):
+    def test_calendar_defaults_to_today_through_30_days_out_when_unset(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("CALENDAR_DATE_RANGE_START", "")
+        monkeypatch.setenv("CALENDAR_DATE_RANGE_END", "")
         env = EnvSettings()
 
         assert env.effective_calendar_date_range_start == date.today()
@@ -164,11 +173,17 @@ class TestEffectiveDateRanges:
         assert env.effective_calendar_date_range_start == date(2026, 3, 1)
         assert env.effective_calendar_date_range_end == date(2026, 3, 15)
 
-    def test_github_still_has_no_default_when_unset(self):
+    def test_github_still_has_no_default_when_unset(self, monkeypatch):
         """Confirm this change is scoped to Gmail/Calendar only.
 
-        GitHub's own date range was never asked to default.
+        GitHub's own date range was never asked to default. Explicitly
+        blanks the two env vars rather than relying on ``EnvSettings()``'s
+        bare default — the real ``config/.env`` may genuinely have a
+        GitHub range configured (e.g. from manual testing), which would
+        otherwise make this test's result depend on local machine state.
         """
+        monkeypatch.setenv("GITHUB_DATE_RANGE_START", "")
+        monkeypatch.setenv("GITHUB_DATE_RANGE_END", "")
         env = EnvSettings()
 
         assert env.github_date_range_start is None

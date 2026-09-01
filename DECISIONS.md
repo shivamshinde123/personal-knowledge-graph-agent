@@ -46,6 +46,58 @@ Unlike the earlier "freeze both embedding fields" iteration (forcing both to the
 
 ---
 
+## 2026-09-01 — cancel_ingestion() no longer finalizes "cancelled" on an unconfirmed kill
+
+**Context**: GitHub Copilot's review of this PR flagged a real gap in the force-kill cancel logic added the same day: `cancel_ingestion()` only guarded the *kill attempt* on `run.pid is not None`, but unconditionally finalized the row to `status="cancelled"` afterward regardless of whether the kill actually happened. Two real cases fell through: a run with no recorded `pid` (e.g. a legacy row from before that column existed) skipped the kill entirely but still got marked cancelled, and an `OSError` other than `ProcessLookupError` (e.g. a permissions failure) left the process possibly still running while the DB claimed otherwise. Either way, the batch process could still be alive and writing to storage while `ingestion_runs` said the run was over — a real state mismatch that could let a second run start concurrently with the "cancelled" one.
+
+**Decision**: `cancel_ingestion()` now only finalizes `status="cancelled"` when the kill is actually confirmed — the signal was delivered successfully, or the process was already gone (`ProcessLookupError`). A missing `pid` returns immediately after setting the cooperative `cancel_requested` flag, without touching `status`; a kill that raises any other `OSError` logs the same warning as before but also returns without finalizing. In both cases the row is left `"running"` for the batch to finalize itself once it reaches its own next check point (or for a human to investigate if it's genuinely wedged) — never a guess dressed up as a confirmed outcome.
+
+**Alternatives considered**: none — this is a straightforward correctness fix following the reviewer's own suggested shape (only set the cooperative flag, don't touch status, when the kill can't be confirmed).
+
+**Verified**: `uv run pytest` — `tests/test_agent/test_ingest_trigger.py::TestCancelIngestion::test_a_missing_pid_does_not_finalize_the_run` rewritten to assert `status == "running"` instead of `"cancelled"`; new `test_a_failed_kill_does_not_finalize_the_run` covers the `OSError` path. Full suite passes; `black`/`ruff` clean.
+
+**Affects**: `agent/ingest_trigger.py`, `tests/test_agent/test_ingest_trigger.py`.
+
+---
+
+## 2026-09-01 — Settings sections rebalanced across the two columns
+
+**Context**: Adding the "Calendar date range" section pushed the right column (source scope + date ranges + Data Ingestion/Connected Sources) considerably taller than the left (Generation Provider/Models/Danger Zone) — asked to balance the two visually. A single centered column (no side-by-side split at all) was tried first, directly per a request, then reverted per a follow-up one, in favor of keeping the two-column layout but rebalancing which sections go in which column.
+
+**Decision**: moved the three source-scope textareas ("Local folders to watch," "Notion page scope," "GitHub repository scope") from the right column into the left, inserted between "Models" and "Danger Zone". Left column is now Generation Provider/Models/the three scope textareas/Danger Zone; right column is the three date-range sections plus Data Ingestion + Connected Data Sources — much closer in height than before, without touching the sections' own content or logic.
+
+**Affects**: `frontend/src/components/SettingsPanel.jsx`.
+
+---
+
+## 2026-09-01 — Consolidated two drifted copies of the source-type color map
+
+**Context**: Asked directly whether the chat screen's "Data Source Indicators" pills used the same colors as the graph's nodes — they didn't. Two separate `SOURCE_TYPE_COLORS` definitions existed: `GraphView.jsx` had its own local copy (already correctly fixed for the GitHub-color and calendar-key issues from 2026-08-31), while `ChatWindow.jsx` imported from a *different* file, `frontend/src/constants/sourceColors.js`, whose own docstring claimed it was "shared between GraphView.jsx and ChatWindow.jsx" — but `GraphView.jsx` had stopped actually using it at some point without updating it, so its notion/gmail/github colors were stale and wrong, and its calendar entry was still keyed `google_calendar` (never matching any real `source_type`, so the calendar pill rendered with no color at all — confirmed directly from a screenshot).
+
+**Decision**: `constants/sourceColors.js` is now genuinely the one place these colors are defined — updated to the correct values (matching what `GraphView.jsx`'s local copy already had), with the key fixed to `calendar`. `GraphView.jsx`'s local copy is deleted; it now imports `SOURCE_TYPE_COLORS` from the shared file like `ChatWindow.jsx` already did. Both call sites can no longer drift apart, since there's only one definition left to edit.
+
+**Verified**: `npm run lint`/`npm run build` clean. No frontend test suite exists in this project to add a regression test to (see `Coding_Conventions.docx`); manually verified in the running app that the chat pills and graph nodes/filter panel now show identical colors per source, including a now-visible calendar dot.
+
+**Affects**: `frontend/src/constants/sourceColors.js`, `frontend/src/components/GraphView.jsx`.
+
+---
+
+## 2026-09-01 — Ingestion cancel now force-kills the process, not just a cooperative flag
+
+**Context**: Verified directly this session — clicking "Stop" on a real, large local-files run (thousands of matched files from an overly broad watch folder) had no visible effect for a long time. The existing cancellation design (`request_ingestion_cancellation()`'s flag, checked inside an extractor's `on_progress` callback or once between sources) only ever gets checked during a source's *extraction* phase. Once extraction for a source finishes, `scheduler/daily_batch.py::_run()` moves into noise-filtering, batched metadata generation, and a per-item chunk/embed/store loop for every filtered item from that source — none of which check the flag at all. For a source with thousands of matched items, that phase alone (especially with `provider_mode: fully_cloud`, one LLM call per item for metadata) can run far longer than any reasonable expectation of "Stop" actually stopping something.
+
+**Decision**: `POST /api/ingest/cancel` (`agent/ingest_trigger.py::cancel_ingestion()`) now force-kills the batch process outright, rather than only setting the cooperative flag (which is still set too, in case the process happens to hit a check point first — cheap and harmless to keep). This requires knowing the process's OS pid, which is recorded by the process *itself*: `storage/sqlite_store.py::start_ingestion_run()` now writes `os.getpid()` into its own `ingestion_runs` row at creation time — the process creating the row always is the process that will run the batch, so there's no coordination gap the way there would be trying to pass the pid in from whichever process spawned it (that process doesn't yet know the row's id at spawn time; the batch process itself doesn't know if/who needs its pid). `cancel_ingestion()` reads the target run's row, calls `os.kill(pid, signal.SIGTERM)` (which `os.kill` maps to `TerminateProcess()` — immediate and forceful, not a catchable signal — on Windows, this project's primary target platform), and then finalizes the row to `status="cancelled"` itself, since a killed process can never call `complete_ingestion_run()` on its own way out. Guarded against a race (the batch legitimately finishing in the instant between reading its status and the kill signal landing) by re-reading the row immediately before writing "cancelled," only doing so if it's still `"running"` — never clobbering a real completed status. A missing pid, an already-exited pid (`ProcessLookupError`), or an unknown/already-finished run are all handled as no-ops on the kill itself, without preventing the row finalization where appropriate.
+
+Because the pid lives on the run's own row rather than in an in-process variable held by whichever API process happened to spawn it, this also transparently covers a batch started by the scheduled cron/Task Scheduler invocation, or a batch whose originating API process has since restarted — the same "cross-process signal via the shared SQLite file" reasoning `cancel_requested`/`current_item` already used, just for one more piece of state.
+
+**Alternatives considered**: keeping the module-level `subprocess.Popen` handle in `agent/ingest_trigger.py` and calling `.terminate()`/`.kill()` on it directly — rejected because it only works for a batch this exact, still-running API process instance spawned, not a scheduled or orphaned one, and provides no advantage over the pid-on-the-row approach for the one case it does cover.
+
+**Verified**: `uv run pytest` — new tests in `tests/test_storage/test_sqlite_store.py` (`TestStartIngestionRunPid`, `TestGetIngestionRun`) and a rewritten `tests/test_agent/test_ingest_trigger.py::TestCancelIngestion` (force-kills the recorded pid with the right signal, finalizes to `"cancelled"`, a missing/already-exited pid doesn't raise, a run that already completed on its own is left alone rather than clobbered, an unknown run id is a no-op) — every one of these mocks `os.kill`, since `start_ingestion_run()` in a test records the *test runner's own pid* (no real subprocess spawned in a unit test), and the real `os.kill` would otherwise send `SIGTERM` to pytest itself. `tests/test_api/test_ingest_route.py` updated the same way. Full suite passes (605 tests); `black`/`ruff` clean. Manually verified against the real app: triggered a real large local-files run, confirmed it was previously unkillable via Stop for a long time, then confirmed the fixed version's Stop button ends the OS process immediately.
+
+**Affects**: `storage/sqlite_store.py`, `agent/ingest_trigger.py`, `api/routes/ingest.py`, and the corresponding test files.
+
+---
+
 ## 2026-09-01 — Serialized Settings auto-save to prevent lost updates
 
 **Context**: GitHub Copilot's review of PR #81 flagged a real race in the per-field auto-save added earlier the same day: `PUT /api/settings` and `PUT /api/settings/sources` both implement a read-the-whole-file, mutate-the-one-field, write-the-whole-file-back update (`update_llm_config()`/`update_source_config()`). Two `onBlur`/`onChange` saves firing close together — tabbing quickly through several fields, or a slow save still in flight when the next field blurs — could send overlapping requests; whichever request's write lands second would have read the file *before* the first request's write, silently discarding it (a lost update), and out-of-order responses could briefly show stale values in the UI.

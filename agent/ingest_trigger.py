@@ -28,13 +28,22 @@ current working directory instead) does not. See ``DECISIONS.md``.
 
 from __future__ import annotations
 
+import logging
+import os
+import signal
 import sqlite3
 import subprocess
 import sys
 from datetime import UTC, datetime
 
 from config.settings import PROJECT_ROOT
-from storage.sqlite_store import request_ingestion_cancellation
+from storage.sqlite_store import (
+    complete_ingestion_run,
+    get_ingestion_run,
+    request_ingestion_cancellation,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def trigger_ingestion() -> str:
@@ -66,15 +75,46 @@ def trigger_ingestion() -> str:
 
 
 def cancel_ingestion(conn: sqlite3.Connection, run_id: str) -> None:
-    """Ask a running batch to stop at its next check point.
+    """Force-stop a running batch immediately.
 
-    Thin wrapper around ``storage/sqlite_store.py::request_ingestion_cancellation()``
-    — the API layer never reaches into ``storage`` directly (see module
-    docstring). The spawned ``scheduler.daily_batch`` subprocess and the API
-    process only share the SQLite file, not memory, so this cross-process
-    signal (a flag on the run's own row) is the only way to reach it — same
-    reasoning as why live progress already round-trips through the DB rather
-    than an in-process variable. See ``DECISIONS.md``.
+    Originally a purely cooperative signal (``request_ingestion_cancellation()``
+    sets a flag the batch only notices at its own next check point — between
+    sources, or inside an extractor's ``on_progress`` callback). That left a
+    real gap: once a source's extraction phase finishes, there is no check
+    again until every one of its (possibly thousands of) filtered items has
+    been chunked, embedded, and stored — a single large local-files scan
+    could make "Stop" appear to do nothing for a very long time. Verified
+    directly this session. See ``DECISIONS.md``.
+
+    Now force-kills the process directly, by the PID
+    ``storage/sqlite_store.py::start_ingestion_run()`` recorded on the run's
+    own row (set by that process itself, so there's no coordination gap
+    between spawning it and it existing) — via ``os.kill(pid, SIGTERM)``,
+    which ``os.kill`` maps to ``TerminateProcess()`` (an immediate, forceful
+    kill, not a catchable signal) on Windows. This works regardless of
+    whether *this* API process is the one that originally spawned it, or
+    whether the batch was started by ``trigger_ingestion()`` vs. the
+    scheduled cron/Task Scheduler invocation. The cooperative flag is still
+    set too, in case the process happens to hit a check point first.
+
+    Since a force-killed process can never call
+    ``complete_ingestion_run()`` on its own way out, this also finalizes
+    the row to ``status="cancelled"`` directly — but only once the kill is
+    actually confirmed (the signal was delivered, or the process was
+    already gone). If ``pid`` was never recorded (e.g. a legacy run
+    started before that column existed) or the kill attempt itself fails
+    with something other than "already exited," nothing here can say
+    whether the process actually stopped — finalizing as "cancelled"
+    anyway would misrepresent reality and could let a second run start
+    while the first is still alive. In that case only the cooperative
+    flag above is set, and the row is left ``"running"`` for the batch to
+    finalize itself once it reaches its own next check point (or for a
+    human to investigate, if it's actually wedged). See DECISIONS.md.
+
+    The final write is also guarded on the row still being ``"running"``
+    at that moment, so a genuine race (the batch finishing on its own in
+    the instant before the kill signal lands) can't clobber a real
+    completed status with a fake "cancelled" one.
 
     Args:
         conn: An open SQLite connection.
@@ -82,6 +122,43 @@ def cancel_ingestion(conn: sqlite3.Connection, run_id: str) -> None:
             ``GET /api/sources/status``'s ``last_run.run_id``.
 
     Raises:
-        StorageError: If the flag could not be written.
+        StorageError: If the flag or the final status could not be written.
     """
     request_ingestion_cancellation(conn, run_id)
+
+    run = get_ingestion_run(conn, run_id)
+    if run is None or run.status != "running":
+        return
+
+    if run.pid is None:
+        # Nothing to force-kill, and no way to confirm the process has
+        # actually stopped -- don't claim it has. The cooperative flag
+        # set above is the only signal available; the batch finalizes its
+        # own row once it reaches a check point, if it's still checking.
+        return
+
+    try:
+        os.kill(run.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass  # Already exited on its own — nothing left to kill.
+    except OSError as exc:
+        logger.warning(
+            "Could not force-kill ingestion run %r (pid %r): %s",
+            run_id,
+            run.pid,
+            exc,
+        )
+        return  # Kill unconfirmed — don't claim the run actually stopped.
+
+    # Re-check right before writing "cancelled" — the process could have
+    # legitimately finished (and called complete_ingestion_run() itself)
+    # in the window between the read above and the kill signal landing.
+    current = get_ingestion_run(conn, run_id)
+    if current is not None and current.status == "running":
+        complete_ingestion_run(
+            conn,
+            run_id,
+            status="cancelled",
+            items_processed=current.items_processed,
+            error_log="Force-stopped by user",
+        )
