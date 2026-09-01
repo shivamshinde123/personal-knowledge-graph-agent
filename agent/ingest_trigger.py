@@ -99,10 +99,22 @@ def cancel_ingestion(conn: sqlite3.Connection, run_id: str) -> None:
 
     Since a force-killed process can never call
     ``complete_ingestion_run()`` on its own way out, this also finalizes
-    the row to ``status="cancelled"`` directly — guarded on the row still
-    being ``"running"`` at that moment, so a genuine race (the batch
-    finishing on its own in the instant before the kill signal lands)
-    can't clobber a real completed status with a fake "cancelled" one.
+    the row to ``status="cancelled"`` directly — but only once the kill is
+    actually confirmed (the signal was delivered, or the process was
+    already gone). If ``pid`` was never recorded (e.g. a legacy run
+    started before that column existed) or the kill attempt itself fails
+    with something other than "already exited," nothing here can say
+    whether the process actually stopped — finalizing as "cancelled"
+    anyway would misrepresent reality and could let a second run start
+    while the first is still alive. In that case only the cooperative
+    flag above is set, and the row is left ``"running"`` for the batch to
+    finalize itself once it reaches its own next check point (or for a
+    human to investigate, if it's actually wedged). See DECISIONS.md.
+
+    The final write is also guarded on the row still being ``"running"``
+    at that moment, so a genuine race (the batch finishing on its own in
+    the instant before the kill signal lands) can't clobber a real
+    completed status with a fake "cancelled" one.
 
     Args:
         conn: An open SQLite connection.
@@ -118,18 +130,25 @@ def cancel_ingestion(conn: sqlite3.Connection, run_id: str) -> None:
     if run is None or run.status != "running":
         return
 
-    if run.pid is not None:
-        try:
-            os.kill(run.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass  # Already exited on its own — nothing left to kill.
-        except OSError as exc:
-            logger.warning(
-                "Could not force-kill ingestion run %r (pid %r): %s",
-                run_id,
-                run.pid,
-                exc,
-            )
+    if run.pid is None:
+        # Nothing to force-kill, and no way to confirm the process has
+        # actually stopped -- don't claim it has. The cooperative flag
+        # set above is the only signal available; the batch finalizes its
+        # own row once it reaches a check point, if it's still checking.
+        return
+
+    try:
+        os.kill(run.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass  # Already exited on its own — nothing left to kill.
+    except OSError as exc:
+        logger.warning(
+            "Could not force-kill ingestion run %r (pid %r): %s",
+            run_id,
+            run.pid,
+            exc,
+        )
+        return  # Kill unconfirmed — don't claim the run actually stopped.
 
     # Re-check right before writing "cancelled" — the process could have
     # legitimately finished (and called complete_ingestion_run() itself)
