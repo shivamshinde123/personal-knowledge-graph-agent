@@ -41,8 +41,9 @@ view lets you visually explore every confirmed relationship between items.
   routed automatically per question.
 - Relationships between items are detected automatically and confirmed by an
   LLM before being stored.
-- Choice of a fully local LLM (Ollama) or a fully cloud one (OpenRouter, any
-  supported model), switchable from Settings.
+- Choice of a fully local setup (Ollama, generation and embedding both) or a
+  fully cloud one (OpenRouter, any supported model, both as well),
+  switchable from Settings.
 - A chat interface, a settings screen for configuring every source, and an
   interactive graph view of the whole knowledge base.
 
@@ -79,19 +80,24 @@ Chroma for retrieval, Neo4j for relationship lookups.
 
 ### Models: local vs. cloud
 
-The **Generation Provider** setting is a single toggle between two models,
-used for every *generation* task — metadata extraction, relationship
-judging, and answer synthesis:
+The **Provider Mode** setting is a single toggle that selects both the
+*generation* model (metadata extraction, relationship judging, answer
+synthesis) and the *embedding* model used for every stored vector:
 
-- **Local Generation** — runs through Ollama, no per-call cost.
-- **Cloud Generation** — runs through OpenRouter, any supported model,
-  highest quality, per-call cost.
+- **Local** — both generation and embedding run through Ollama, no
+  per-call cost and no network dependency at all.
+- **Cloud** — both run through OpenRouter, any supported model, highest
+  quality, per-call cost.
 
-**Embedding is separate and always cloud**, regardless of which generation
-provider is selected — there is no local embedding path, so an OpenRouter API
-key is required either way. Changing the embedding model requires a full
-data reset and re-ingestion, since existing vectors won't match the new
-model's space.
+Switching between Local and Cloud is treated as destructive, not a quiet
+setting change — the two modes' embedding models are never compatible with
+each other, so a switch requires confirming twice through a deliberately
+alarming prompt, then automatically wipes all ingested data (equivalent to
+"Reset all data"). It does **not** auto-trigger re-ingestion afterward — run
+that yourself once you're ready. Changing either embedding model in place,
+without switching modes, still needs the same full reset (and, for the
+cloud embedding model specifically, an automatic re-ingest), since existing
+vectors won't match a new model's space.
 
 ### How the relationship graph is created
 
@@ -121,10 +127,11 @@ immediately — no separate save step.
 
 | Setting | Default |
 |---|---|
-| Generation provider | Cloud |
+| Provider mode | Cloud |
 | Local generation model | `llama3:8b` |
+| Local embedding model | `nomic-embed-text` |
 | Cloud generation model | `anthropic/claude-sonnet-4` |
-| Embedding model (always cloud) | `openai/text-embedding-3-small` |
+| Cloud embedding model | `openai/text-embedding-3-small` |
 | Local folders to watch | none |
 | Notion page scope | unscoped — every page the integration can see |
 | GitHub repository scope | unscoped — every accessible repo |
