@@ -1250,10 +1250,12 @@ reverse full-database wipe. See DECISIONS.md, 2026-08-30.
 ## Entry point: `/api/setup/*` (`api/routes/setup.py`)
 
 Extension beyond `docs/API_Specification.docx` — the guided first-run
-setup wizard, issue #92. Google OAuth (phase 1) and credential
-validate/save (phase 2) are both backend-complete; the frontend wizard
-shell itself, and local files/browser history, are not built yet. See
-DECISIONS.md, 2026-09-02 (both entries).
+setup wizard, issue #92. All four phases are complete: Google OAuth
+(phase 1), credential validate/save (phase 2), local files/browser
+history (phase 3), and the frontend wizard shell itself
+(`frontend/src/components/SetupWizard.jsx`, phase 4, see the
+`frontend/` entry point below). See DECISIONS.md, 2026-09-02 (all three
+entries).
 
 1. `POST /setup/google/oauth/start` — request body validated against
    `api/schemas.py::GoogleOAuthStartRequest` (`client_id`, `client_secret`).
@@ -1672,7 +1674,44 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    "Saving…" / "Saved." / an error) sits in `.settings-header`, top-right
    next to the page title, in place of the "Save Changes" button removed
    2026-09-01 — the same spot the button used to occupy.
-5. `Toasts.jsx` — a pure display component: renders whichever
+5. `SetupWizard.jsx` (issue #92, phase 4) — a modal, launched by
+   `SettingsPanel.jsx`'s "Guided setup" button setting `App.jsx`'s
+   `showWizard` state, not shown automatically (see DECISIONS.md,
+   2026-09-02, "Guided setup wizard"). On mount, loads
+   `getSettings()`/`getSourceConfig()`/`getGoogleOAuthStatus()` in
+   parallel to pre-fill every step from whatever's already configured.
+   Steps: Welcome → Provider Mode → OpenRouter (only when Cloud mode is
+   picked) → Google (Gmail + Calendar) → Notion → GitHub → Local Files →
+   Browser History → Done. `visibleSteps(providerMode)` computes the
+   actual step list each render (filtering out the OpenRouter step
+   outside Cloud mode); navigation tracks the current step by id, not
+   index, so switching provider mode mid-wizard can't leave the "current
+   step" pointing at the wrong position.
+   - The provider-mode step calls `putSettings({provider_mode})` and,
+     only if the value actually changed, confirms once (reusing the same
+     "wipes all data" warning `SettingsPanel.jsx` shows, but a single
+     confirm rather than Settings' own double-confirm — see DECISIONS.md)
+     before calling the same `onResetAll()` prop `App.jsx` passes
+     `SettingsPanel.jsx`.
+   - The OpenRouter/Notion/GitHub steps share one `renderCredentialStep()`
+     path: `postSetupValidate(source, value)` first, `postSetupCredentials()`
+     only on a confirmed `"ok"`, mirroring `api/routes/setup.py`'s own
+     "validate before save" contract exactly.
+   - The Google step calls `postGoogleOAuthStart()`, opens the returned
+     `authorization_url` in a real popup (`window.open`), then polls
+     `getGoogleOAuthStatus()` every 2s (60 attempts max) until it reports
+     connected or the popup is closed — the actual token exchange lands
+     in the popup's own navigation to `GET /setup/google/oauth/callback`,
+     never a response this tab receives directly.
+   - The local-files and browser-history steps reuse
+     `SettingsPanel.jsx`'s own Docker-vs-not branching
+     (`sourceConfig.running_in_docker`, `available_watch_directories`,
+     `GET /setup/host-data-files`) rather than a separate implementation.
+   - The final step's "Run ingestion now" calls the same
+     `onTriggerIngestion` prop `App.jsx` gives `SettingsPanel.jsx`, so the
+     resulting toast/progress display behaves identically to triggering
+     it from Settings directly.
+6. `Toasts.jsx` — a pure display component: renders whichever
    `{id, kind, text}` entries are in `App.jsx`'s `toasts` state as a
    fixed top-right stack, each auto-removed after 7 seconds
    (`setTimeout` in `App.jsx::addToast()`) or dismissed early by its own
@@ -1681,7 +1720,7 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    `SettingsPanel.jsx`'s own error paths via the `onError` prop) toasts
    immediately, since those results are already known synchronously. See
    DECISIONS.md, 2026-08-30
-6. `GraphView.jsx` — on mount, calls `api/client.js::getGraph()`; an empty
+7. `GraphView.jsx` — on mount, calls `api/client.js::getGraph()`; an empty
    result (no confirmed relationships yet) renders an explanatory message
    rather than a blank canvas. A non-empty result drives a **live**
    `d3-force` simulation (`forceSimulation`/`forceLink`/`forceManyBody`/
@@ -1741,7 +1780,7 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    automatically when the simulation's `"end"` event fires (layout
    settled), again whenever the filter set changes, and on demand via a
    "Fit view" button. See DECISIONS.md, 2026-08-31.
-7. `api/client.js` is the only module making network calls (per
+8. `api/client.js` is the only module making network calls (per
    `docs/Coding_Conventions.docx` section 3) — every function maps
    directly to one `docs/API_Specification.docx` endpoint, talking to
    `http://127.0.0.1:8080/api` (not `localhost` — see DECISIONS.md,

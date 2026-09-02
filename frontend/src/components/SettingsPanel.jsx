@@ -92,6 +92,10 @@ function ProviderModeSwitchWarning() {
  *   the most recently triggered run's live progress, owned by App.jsx so
  *   it survives navigating away and back; null before anything's been
  *   triggered this session.
+ * @param {() => void} props.onOpenWizard - launches the guided setup
+ *   wizard (SetupWizard.jsx, issue #92 phase 4); owned by App.jsx since
+ *   the wizard needs the same onTriggerIngestion/onResetAll handlers this
+ *   panel receives.
  */
 function SettingsPanel({
   onTriggerIngestion,
@@ -99,6 +103,7 @@ function SettingsPanel({
   onResetAll,
   onError,
   ingestionStatus,
+  onOpenWizard,
 }) {
   const [settings, setSettings] = useState(null);
   const [sources, setSources] = useState(null);
@@ -548,6 +553,13 @@ function SettingsPanel({
           </p>
         </div>
         <div className="save-action">
+          <button
+            type="button"
+            className="settings-ghost-button"
+            onClick={onOpenWizard}
+          >
+            Guided setup
+          </button>
           {isSaving && <span className="save-status">Saving…</span>}
           {!isSaving && saveStatus && (
             <span className={`save-status ${saveStatus.ok ? "" : "error"}`}>

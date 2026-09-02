@@ -9,6 +9,7 @@ import {
 import ChatWindow from "./components/ChatWindow.jsx";
 import GraphView from "./components/GraphView.jsx";
 import SettingsPanel from "./components/SettingsPanel.jsx";
+import SetupWizard from "./components/SetupWizard.jsx";
 import Sidebar from "./components/Sidebar.jsx";
 import Toasts from "./components/Toasts.jsx";
 
@@ -58,6 +59,13 @@ function App() {
   // its actual id, not the display label. See DECISIONS.md.
   const [ingestionStatus, setIngestionStatus] = useState(null);
   const ingestPollTimeout = useRef(null);
+  // Guided setup wizard (issue #92, phase 4) — a modal launched from a
+  // button in Settings, not shown automatically (no "first run" signal
+  // exists on the backend to key that off). Owned here, not by
+  // SettingsPanel, since it needs the same onTriggerIngestion/onResetAll
+  // handlers SettingsPanel itself uses, for its own "Run ingestion now"
+  // button and its provider-mode-switch step. See DECISIONS.md.
+  const [showWizard, setShowWizard] = useState(false);
 
   const refreshSessions = useCallback(() => {
     getSessions()
@@ -235,9 +243,18 @@ function App() {
           onResetAll={handleResetAll}
           onError={(text) => addToast("error", text)}
           ingestionStatus={ingestionStatus}
+          onOpenWizard={() => setShowWizard(true)}
         />
       )}
       {view === "graph" && <GraphView />}
+      {showWizard && (
+        <SetupWizard
+          onClose={() => setShowWizard(false)}
+          onTriggerIngestion={handleTriggerIngestion}
+          onResetAll={handleResetAll}
+          onError={(text) => addToast("error", text)}
+        />
+      )}
     </div>
   );
 }
