@@ -181,11 +181,13 @@ everything" option for starting over.
 The "Guided setup" button walks through connecting everything in one linear
 flow instead of hunting through individual Settings fields: provider mode,
 Gmail + Calendar OAuth (paste a Client ID/Secret, sign in via a popup — no
-downloaded JSON file), Notion/GitHub/OpenRouter credentials (checked
-against the real API before saving), local files, and browser history.
-Every step past provider mode is optional — skip anything you don't use.
-It also pre-fills from whatever's already configured, so revisiting it
-later doubles as a way to review your setup, not just a one-time flow.
+downloaded JSON file, plus their date ranges), Notion/GitHub/OpenRouter
+credentials (checked against the real API before saving, plus Notion's page
+scope and GitHub's repo scope/date range), local files, and browser
+history. Every step past provider mode is optional — skip anything you
+don't use. It also pre-fills from whatever's already configured, so
+revisiting it later doubles as a way to review your setup, not just a
+one-time flow.
 
 ## Architecture
 
@@ -289,6 +291,15 @@ yourself if you want those gone too).
 stop everything without deleting data; `docker compose up -d --build` again
 after pulling code changes.
 
+**Why GitHub only, no Docker Hub**: this is primarily a portfolio project —
+the audience is someone reading the repo, not blind-pulling a prebuilt
+image — and `docker compose up -d --build` from a clone already delivers a
+genuine one-command start with no gap to fill. For a tool that ingests this
+much personal data (Gmail, browser history, private repos), being able to
+read/build the source yourself is also a better trust posture than an
+opaque image from a registry. Publishing prebuilt images isn't ruled out
+later, but isn't planned.
+
 ## Setup (developer / manual)
 
 **Prerequisites**: [uv](https://docs.astral.sh/uv/), Node.js + npm, a running
@@ -339,10 +350,16 @@ changes — read those first, and treat `docs/` as historical context.
 
 ## Roadmap
 
-- End-to-end testing of the Gmail and Calendar extractors against real data ([issue #68](https://github.com/shivamshinde123/personal-knowledge-graph-agent/issues/68)), including the guided OAuth flow against a real Google Cloud OAuth client.
+- Full end-to-end test of a wizard-driven setup through to a working ingestion → graph → chat result ([issue #97](https://github.com/shivamshinde123/personal-knowledge-graph-agent/issues/97)) — the wizard's own mechanics (credential validation, Google OAuth, source scope) and the ingestion → graph → chat pipeline have each been verified independently, but not yet as one combined run.
+- End-to-end testing of the Gmail and Calendar extractors against real data ([issue #68](https://github.com/shivamshinde123/personal-knowledge-graph-agent/issues/68)) — the guided OAuth *connection* itself is now live-verified; real extraction against real accounts isn't yet.
 
 ## Status
 
 Core system built and working end-to-end — all six extractors, the agent, the
-API, and the full frontend are implemented and under active, real-data
-testing. Docker Compose packaging ([issue #52](https://github.com/shivamshinde123/personal-knowledge-graph-agent/issues/52)) and the guided first-run setup wizard ([issue #92](https://github.com/shivamshinde123/personal-knowledge-graph-agent/issues/92)) are both done — see [Docker](#docker) — making this a true "download and run it" install.
+API, and the full frontend are implemented. Docker Compose packaging
+([issue #52](https://github.com/shivamshinde123/personal-knowledge-graph-agent/issues/52))
+and the guided first-run setup wizard
+([issue #92](https://github.com/shivamshinde123/personal-knowledge-graph-agent/issues/92),
+closed) are both done and live-verified against a real `docker compose up`
+stack — not just unit tests — making this a genuine "clone and run it"
+install. See [Roadmap](#roadmap) for what's still open.
