@@ -89,6 +89,9 @@ def get_source_config_route() -> SourceConfigResponse:
         github_date_range_end=_isoformat(env.github_date_range_end),
         calendar_date_range_start=_isoformat(env.effective_calendar_date_range_start),
         calendar_date_range_end=_isoformat(env.effective_calendar_date_range_end),
+        browser_history_path=(
+            str(env.browser_history_path) if env.browser_history_path else None
+        ),
         running_in_docker=env.running_in_docker,
     )
 
@@ -156,6 +159,7 @@ def put_source_config_route(payload: SourceConfigUpdateRequest):
         github_date_range_end=payload.github_date_range_end,
         calendar_date_range_start=payload.calendar_date_range_start,
         calendar_date_range_end=payload.calendar_date_range_end,
+        browser_history_path=payload.browser_history_path,
     )
     return SourceConfigResponse(
         local_files_watch_dirs=[str(d) for d in env.watch_dirs],
@@ -167,6 +171,9 @@ def put_source_config_route(payload: SourceConfigUpdateRequest):
         github_date_range_end=_isoformat(env.github_date_range_end),
         calendar_date_range_start=_isoformat(env.effective_calendar_date_range_start),
         calendar_date_range_end=_isoformat(env.effective_calendar_date_range_end),
+        browser_history_path=(
+            str(env.browser_history_path) if env.browser_history_path else None
+        ),
         running_in_docker=env.running_in_docker,
     )
 

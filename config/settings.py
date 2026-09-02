@@ -533,6 +533,7 @@ def update_source_config(
     github_date_range_end: str | None = None,
     calendar_date_range_start: str | None = None,
     calendar_date_range_end: str | None = None,
+    browser_history_path: str | None = None,
     path: Path = DEFAULT_ENV_PATH,
 ) -> EnvSettings:
     """Update ``config/.env``'s source-scope variables on disk, in place.
@@ -569,6 +570,11 @@ def update_source_config(
             falling back to :attr:`EnvSettings.effective_calendar_date_range_start`
             when cleared.
         calendar_date_range_end: Same, but the ceiling.
+        browser_history_path: New absolute path to the browser's History
+            file, ``""`` to clear it, or ``None`` to leave unchanged.
+            Before this parameter existed, this field had no update
+            endpoint at all — only settable by hand in ``config/.env``,
+            unlike every other source. See DECISIONS.md, issue #92.
         path: Path to the ``.env`` file. Defaults to the real one; passing
             a different path (tests) writes there instead and leaves the
             process-wide ``get_settings()`` cache untouched.
@@ -583,6 +589,10 @@ def update_source_config(
     from dotenv import set_key
 
     try:
+        if browser_history_path is not None:
+            _retry_on_transient_permission_error(
+                lambda: set_key(path, "BROWSER_HISTORY_PATH", browser_history_path)
+            )
         if local_files_watch_dirs is not None:
             # A path ending in a trailing "\" (very easy to end up with on
             # Windows — e.g. a folder picker returning a drive/project

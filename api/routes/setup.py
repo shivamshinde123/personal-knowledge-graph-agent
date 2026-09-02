@@ -9,8 +9,12 @@ expose — except that, before this module, there was no way to *save*
 source-scope fields had an update endpoint), and no way to validate a
 credential against the real API *before* saving it, which issue #92
 explicitly asks for. ``POST /setup/validate`` and ``POST /setup/credentials``
-below fill both gaps. Local files and browser history are still
-untouched — tracked separately, same issue.
+below fill both gaps. ``GET /setup/host-data-files`` fills a similar gap
+for browser history under Docker — a real pick list of what's actually
+reachable, instead of typing an in-container path blind. Local files
+watching itself needs no new endpoint at all — it's read-only under Docker
+(see ``api/routes/settings.py``) and already fully editable via the
+existing ``Browse…``/textarea flow otherwise.
 """
 
 from __future__ import annotations
@@ -25,10 +29,12 @@ from agent.connection_check import (
 )
 from agent.google_oauth import GoogleOAuthError, complete_authorization, is_connected
 from agent.google_oauth import start_authorization as start_google_authorization
+from agent.mounted_files import list_host_data_files
 from api.schemas import (
     GoogleOAuthStartRequest,
     GoogleOAuthStartResponse,
     GoogleOAuthStatusResponse,
+    MountedFilesResponse,
     SetupCredentialsRequest,
     SetupCredentialsResponse,
     SetupValidateRequest,
@@ -169,3 +175,17 @@ def save_credentials_route(
         openrouter_api_key=payload.openrouter_api_key,
     )
     return SetupCredentialsResponse(status="updated")
+
+
+@router.get("/setup/host-data-files", response_model=MountedFilesResponse)
+def list_host_data_files_route() -> MountedFilesResponse:
+    """List files under the Docker ``/host-data`` mount, for a real pick list.
+
+    Used by the wizard's browser-history step (and, in principle, any
+    future step needing a file under a mounted host directory) so the
+    user picks from what's actually reachable instead of typing an
+    in-container path blind. Always ``{"files": []}`` outside Docker,
+    where ``/host-data`` doesn't exist — the wizard falls back to a plain
+    text input for the real host path in that case.
+    """
+    return MountedFilesResponse(files=list_host_data_files())

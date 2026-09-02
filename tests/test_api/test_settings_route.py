@@ -164,6 +164,7 @@ def fake_env_settings(
     github_date_range_end=None,
     calendar_date_range_start=None,
     calendar_date_range_end=None,
+    browser_history_path=None,
     running_in_docker=False,
 ):
     return SimpleNamespace(
@@ -181,6 +182,7 @@ def fake_env_settings(
             github_date_range_end=github_date_range_end,
             effective_calendar_date_range_start=calendar_date_range_start,
             effective_calendar_date_range_end=calendar_date_range_end,
+            browser_history_path=browser_history_path,
             running_in_docker=running_in_docker,
         )
     )
@@ -198,6 +200,7 @@ class TestGetSourceConfig:
                 gmail_date_range_end=date(2026, 6, 30),
                 calendar_date_range_start=date(2026, 7, 1),
                 calendar_date_range_end=date(2026, 7, 31),
+                browser_history_path="/a/History",
             ),
         )
 
@@ -214,6 +217,7 @@ class TestGetSourceConfig:
             "github_date_range_end": None,
             "calendar_date_range_start": "2026-07-01",
             "calendar_date_range_end": "2026-07-31",
+            "browser_history_path": "/a/History",
             "running_in_docker": False,
         }
 
@@ -243,6 +247,7 @@ class TestPutSourceConfig:
             github_date_range_end=None,
             calendar_date_range_start=None,
             calendar_date_range_end=None,
+            browser_history_path=None,
         ):
             captured["local_files_watch_dirs"] = local_files_watch_dirs
             captured["notion_page_ids"] = notion_page_ids
@@ -274,6 +279,7 @@ class TestPutSourceConfig:
                     if calendar_date_range_end
                     else date(2026, 1, 1)
                 ),
+                browser_history_path=None,
                 running_in_docker=False,
             )
 
@@ -317,6 +323,7 @@ class TestPutSourceConfig:
                     calendar_date_range_start
                 ),
                 effective_calendar_date_range_end=date(2026, 8, 1),
+                browser_history_path=None,
                 running_in_docker=False,
             )
 
@@ -389,6 +396,7 @@ class TestPutSourceConfig:
                 github_date_range_end=None,
                 effective_calendar_date_range_start=date(2026, 1, 1),
                 effective_calendar_date_range_end=date(2026, 1, 1),
+                browser_history_path=None,
                 running_in_docker=True,
             )
 
@@ -400,6 +408,35 @@ class TestPutSourceConfig:
 
         assert response.status_code == 200
         assert response.json()["notion_page_ids"] == ["page-1"]
+
+    def test_saves_browser_history_path(self, client, monkeypatch):
+        captured = {}
+
+        def fake_update(*, browser_history_path=None, **_kwargs):
+            captured["browser_history_path"] = browser_history_path
+            return SimpleNamespace(
+                watch_dirs=[],
+                notion_page_ids_list=[],
+                github_repos_list=[],
+                effective_gmail_date_range_start=date(2026, 1, 1),
+                effective_gmail_date_range_end=date(2026, 1, 1),
+                github_date_range_start=None,
+                github_date_range_end=None,
+                effective_calendar_date_range_start=date(2026, 1, 1),
+                effective_calendar_date_range_end=date(2026, 1, 1),
+                browser_history_path=browser_history_path,
+                running_in_docker=False,
+            )
+
+        monkeypatch.setattr("api.routes.settings.update_source_config", fake_update)
+
+        response = client.put(
+            "/api/settings/sources", json={"browser_history_path": "/a/History"}
+        )
+
+        assert response.status_code == 200
+        assert response.json()["browser_history_path"] == "/a/History"
+        assert captured["browser_history_path"] == "/a/History"
 
 
 class TestBrowseFolder:

@@ -180,6 +180,10 @@ class SourceConfigResponse(BaseModel):
     textarea): the running app cannot mount a new host folder into itself,
     only ``docker-compose.yml`` can, at container-start. See
     ``DECISIONS.md``.
+
+    ``browser_history_path`` had no update endpoint at all before the
+    guided setup wizard (issue #92) — settable now via
+    ``PUT /api/settings/sources``, same as every other field here.
     """
 
     local_files_watch_dirs: list[str]
@@ -191,6 +195,7 @@ class SourceConfigResponse(BaseModel):
     github_date_range_end: str | None
     calendar_date_range_start: str | None
     calendar_date_range_end: str | None
+    browser_history_path: str | None
     running_in_docker: bool
 
 
@@ -206,6 +211,7 @@ class SourceConfigUpdateRequest(BaseModel):
     github_date_range_end: str | None = None
     calendar_date_range_start: str | None = None
     calendar_date_range_end: str | None = None
+    browser_history_path: str | None = None
 
 
 class BrowseFolderResponse(BaseModel):
@@ -386,3 +392,15 @@ class SetupCredentialsResponse(BaseModel):
     """``POST /api/setup/credentials`` response body."""
 
     status: Literal["updated"]
+
+
+class MountedFilesResponse(BaseModel):
+    """``GET /api/setup/host-data-files`` response body.
+
+    Lets the guided setup wizard show a real pick list for
+    ``BROWSER_HISTORY_PATH`` (and similar) under Docker, instead of asking
+    the user to type an in-container path blind. Always empty outside
+    Docker — the wizard falls back to a plain text input in that case.
+    """
+
+    files: list[str]

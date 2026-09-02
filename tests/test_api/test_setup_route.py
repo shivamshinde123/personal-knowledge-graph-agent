@@ -217,3 +217,23 @@ class TestSaveCredentials:
 
         assert response.status_code == 500
         assert response.json()["error"] == "config_error"
+
+
+class TestListHostDataFiles:
+    def test_returns_the_files_from_agent_layer(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "api.routes.setup.list_host_data_files",
+            lambda: ["History", "creds/gmail.json"],
+        )
+
+        response = client.get("/api/setup/host-data-files")
+
+        assert response.status_code == 200
+        assert response.json() == {"files": ["History", "creds/gmail.json"]}
+
+    def test_empty_outside_docker(self, client, monkeypatch):
+        monkeypatch.setattr("api.routes.setup.list_host_data_files", lambda: [])
+
+        response = client.get("/api/setup/host-data-files")
+
+        assert response.json() == {"files": []}

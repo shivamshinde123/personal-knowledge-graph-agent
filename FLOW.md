@@ -1171,17 +1171,20 @@ provider config. See DECISIONS.md, 2026-08-30.
    field in the same payload is unaffected by this check. Otherwise:
    `config/settings.py::update_source_config()` — writes
    `LOCAL_FILES_WATCH_DIRS`/`NOTION_PAGE_IDS`/
-   `CALENDAR_DATE_RANGE_START`/`_END`/etc. to `config/.env` via
-   `python-dotenv`'s `set_key()` (rewrites just those lines in place,
-   leaving every other line/comment untouched), only the given fields (a
-   partial update); a `ConfigError` (file I/O failure) maps to 500 via the
-   shared handler
+   `CALENDAR_DATE_RANGE_START`/`_END`/`BROWSER_HISTORY_PATH`/etc. to
+   `config/.env` via `python-dotenv`'s `set_key()` (rewrites just those
+   lines in place, leaving every other line/comment untouched), only the
+   given fields (a partial update); a `ConfigError` (file I/O failure)
+   maps to 500 via the shared handler. `browser_history_path` had no
+   update path at all before issue #92's guided setup wizard — previously
+   only settable by hand in `config/.env`, unlike every other field here
+   (see DECISIONS.md, 2026-09-02)
 3. Both return `{"local_files_watch_dirs": [...], "notion_page_ids": [...],
    "github_repos": [...], "gmail_date_range_start"/"_end",
    "github_date_range_start"/"_end", "calendar_date_range_start"/"_end",
-   "running_in_docker": bool}` — the last field tells the frontend which
-   Local Files UI to render (editable + Browse vs. read-only list, see
-   `SettingsPanel.jsx` below)
+   "browser_history_path": str | null, "running_in_docker": bool}` — the
+   last field tells the frontend which Local Files UI to render (editable
+   + Browse vs. read-only list, see `SettingsPanel.jsx` below)
 4. `extractors/notion.py::extract_new_items()` reads
    `notion_page_ids_list` on its next run: non-empty means fetch exactly
    those pages by id (`client.pages.retrieve()`) instead of the
@@ -1308,6 +1311,26 @@ DECISIONS.md, 2026-09-02 (both entries).
    wizard always calls step 5 first and only reaches this on a confirmed
    `"ok"` result. Returns `{"status": "updated"}`; a `ConfigError` maps to
    `500` via the shared handler.
+
+7. `GET /setup/host-data-files` → `agent/mounted_files.py::list_host_data_files()`
+   — lists every file under the fixed `/host-data` mount (matching
+   `docker-compose.yml`'s own `HOST_DATA_DIR` bind mount exactly, not
+   derived from settings), `/host-data`-relative POSIX-style paths,
+   capped at 500. Always `[]` outside Docker, where `/host-data` doesn't
+   exist. Returns `{"files": [...]}` — lets the wizard's browser-history
+   step show a real pick list under Docker instead of asking the user to
+   type an in-container path blind; outside Docker, an empty list means
+   the wizard falls back to a plain text input for the real host path.
+   See DECISIONS.md, 2026-09-02 ("Browser history gets an update
+   endpoint; local files stays fixed under Docker").
+
+   **Note on local files under Docker**: unlike browser history, the
+   wizard's local-files step gets **no** new endpoint at all — it stays
+   exactly as `api/routes/settings.py` already built it (`GET
+   /api/settings/sources` for the current, fixed value; a `422` from
+   `PUT` if anything tries to change `local_files_watch_dirs` while
+   `running_in_docker`). See the same DECISIONS.md entry for why this
+   round deliberately didn't reopen that already-shipped restriction.
 
 ---
 

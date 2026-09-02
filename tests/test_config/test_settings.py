@@ -642,6 +642,27 @@ class TestUpdateSourceConfig:
         assert calls["count"] == 2
         assert [str(p) for p in result.watch_dirs] == [str(anchor_path(Path("/a/b")))]
 
+    def test_updates_browser_history_path(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+        history_file = tmp_path / "History"
+        history_file.write_text("fake", encoding="utf-8")
+
+        result = update_source_config(
+            browser_history_path=str(history_file), path=env_path
+        )
+
+        assert result.browser_history_path == anchor_path(history_file)
+
+    def test_clearing_browser_history_path(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+        update_source_config(browser_history_path="/a/History", path=env_path)
+
+        result = update_source_config(browser_history_path="", path=env_path)
+
+        assert result.browser_history_path is None
+
 
 class TestUpdateGoogleOAuthConfig:
     def test_writes_both_fields(self, tmp_path):
