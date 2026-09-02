@@ -175,11 +175,19 @@ class SourceConfigResponse(BaseModel):
     See ``DECISIONS.md``.
 
     ``running_in_docker`` mirrors ``EnvSettings.running_in_docker`` — when
-    true, ``local_files_watch_dirs`` is a fixed, Docker-volume-backed path
-    the frontend must render read-only (no "Browse…" button, no editable
-    textarea): the running app cannot mount a new host folder into itself,
-    only ``docker-compose.yml`` can, at container-start. See
-    ``DECISIONS.md``.
+    true, ``local_files_watch_dirs`` can only be narrowed to a subset of
+    ``available_watch_directories`` (below), never set to an arbitrary
+    host path: the running app cannot mount a *new* host folder into
+    itself, only ``docker-compose.yml`` can, at container-start. The
+    frontend renders a checkbox picker over ``available_watch_directories``
+    in that case instead of a free-text textarea + native "Browse…"
+    button. See ``DECISIONS.md``, issue #92.
+
+    ``available_watch_directories`` lists the immediate subdirectories
+    actually reachable under the Docker volume mount
+    (``agent/mounted_files.py::list_watched_directories()``) — always
+    empty outside Docker, where the native "Browse…" dialog covers this
+    need instead.
 
     ``browser_history_path`` had no update endpoint at all before the
     guided setup wizard (issue #92) — settable now via
@@ -187,6 +195,7 @@ class SourceConfigResponse(BaseModel):
     """
 
     local_files_watch_dirs: list[str]
+    available_watch_directories: list[str]
     notion_page_ids: list[str]
     github_repos: list[str]
     gmail_date_range_start: str | None

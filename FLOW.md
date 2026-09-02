@@ -971,13 +971,21 @@ entry points above/below it. See DECISIONS.md, 2026-09-02.
    other, the same "share the filesystem" relationship a manual dev
    setup's foreground backend process and spawned `daily_batch`
    subprocess already have
-3. Both mount the real `config/.env` read-only via `env_file:` unchanged —
-   every credential works exactly as it does outside Docker — while a
-   compose-level `environment:` block overrides only
-   `SQLITE_DB_PATH`/`CHROMA_PERSIST_DIR`/`NEO4J_URI`/`OLLAMA_HOST`/
-   `LOCAL_FILES_WATCH_DIRS`/`RUNNING_IN_DOCKER`, since those must point
-   in-container/in-network rather than at the host; real env vars set
-   this way win over the mounted file's own values
+3. Both bind-mount the real `./config` directory (`- ./config:/app/config`),
+   not `env_file:` — verified directly that `env_file:` breaks every
+   runtime settings write silently (it injects each key as a frozen OS
+   env var at container-start, which always wins over anything later
+   written to `config/.env` on disk), and that mounting only the single
+   `.env` file rather than its whole parent directory breaks the write
+   itself (`python-dotenv`'s atomic rename needs its temp file and the
+   target on the same mount point). See DECISIONS.md, 2026-09-02 ("`config/.env`
+   had to become a real bind mount"). A compose-level `environment:`
+   block overrides only `SQLITE_DB_PATH`/`CHROMA_PERSIST_DIR`/`NEO4J_URI`/
+   `OLLAMA_HOST`/`RUNNING_IN_DOCKER`/`FASTAPI_PORT`, since those must
+   point in-container/in-network rather than at the host; everything
+   else in `config/.env` (credentials, `LOCAL_FILES_WATCH_DIRS`,
+   `BROWSER_HISTORY_PATH`, ...) stays live-writable through the normal
+   `PUT`/`POST` endpoints, with writes landing on the real host file
 4. `ollama` only starts when the `local-llm` Compose profile is active
    (`--profile local-llm`, or `COMPOSE_PROFILES=local-llm` in the
    root-level `.env`) — irrelevant, and skipped, under
@@ -1155,7 +1163,13 @@ provider config. See DECISIONS.md, 2026-08-30.
 1. `GET /settings/sources` → `config/settings.py::get_settings().env`'s
    `watch_dirs`/`notion_page_ids_list` computed properties, read directly
    (same "config isn't storage/providers" reasoning as `GET /settings`
-   above). Gmail's/Calendar's date-range fields come from
+   above). `watch_dirs` itself defaults to `["/data/watched"]` (the whole
+   Docker volume mount) when `LOCAL_FILES_WATCH_DIRS` is unset **and**
+   `running_in_docker` — see DECISIONS.md, 2026-09-02 ("Local files gets
+   a real picker..."). Also returns `available_watch_directories` —
+   `agent/mounted_files.py::list_watched_directories()` (immediate
+   subdirectories under `/data/watched`) when `running_in_docker`, else
+   always `[]`. Gmail's/Calendar's date-range fields come from
    `effective_gmail_date_range_start`/`_end` and
    `effective_calendar_date_range_start`/`_end` — always a real window,
    defaulted when unset (see DECISIONS.md, 2026-09-01) — while GitHub's
@@ -1163,11 +1177,17 @@ provider config. See DECISIONS.md, 2026-08-30.
    `None`-able)
 2. `PUT /settings/sources` — **branch point**: if the payload includes
    `local_files_watch_dirs` (non-`None`) while
-   `settings.env.running_in_docker` is set, returns `422
-   {"error": "not_available_in_docker", ...}` immediately, without calling
-   `update_source_config()` at all — that field is a fixed,
-   volume-mount-backed container path in Docker, not something the running
-   app can change on its own (see DECISIONS.md, 2026-09-02). Every other
+   `settings.env.running_in_docker` is set, each given entry is checked
+   with `agent/mounted_files.py::is_within_watched_root()` — any entry
+   that isn't `/data/watched` itself or a descendant of it returns `422
+   {"error": "not_available_in_docker", ...}` immediately, without
+   calling `update_source_config()` at all; a value *within* the mount
+   is accepted and proceeds normally — the running app still can't mount
+   a *new* host folder into itself, only Docker Compose can, at
+   container-start, but a subset of what's already mounted is genuinely
+   pickable (reversed from the original "fully fixed" design the same
+   day, once testing showed the blanket rejection was stricter than the
+   real constraint required — see DECISIONS.md, 2026-09-02). Every other
    field in the same payload is unaffected by this check. Otherwise:
    `config/settings.py::update_source_config()` — writes
    `LOCAL_FILES_WATCH_DIRS`/`NOTION_PAGE_IDS`/
@@ -1179,12 +1199,14 @@ provider config. See DECISIONS.md, 2026-08-30.
    update path at all before issue #92's guided setup wizard — previously
    only settable by hand in `config/.env`, unlike every other field here
    (see DECISIONS.md, 2026-09-02)
-3. Both return `{"local_files_watch_dirs": [...], "notion_page_ids": [...],
+3. Both return `{"local_files_watch_dirs": [...],
+   "available_watch_directories": [...], "notion_page_ids": [...],
    "github_repos": [...], "gmail_date_range_start"/"_end",
    "github_date_range_start"/"_end", "calendar_date_range_start"/"_end",
    "browser_history_path": str | null, "running_in_docker": bool}` — the
-   last field tells the frontend which Local Files UI to render (editable
-   + Browse vs. read-only list, see `SettingsPanel.jsx` below)
+   last two fields tell the frontend which Local Files UI to render
+   (editable + Browse vs. a checkbox picker over
+   `available_watch_directories`, see `SettingsPanel.jsx` below)
 4. `extractors/notion.py::extract_new_items()` reads
    `notion_page_ids_list` on its next run: non-empty means fetch exactly
    those pages by id (`client.pages.retrieve()`) instead of the
@@ -1324,13 +1346,14 @@ DECISIONS.md, 2026-09-02 (both entries).
    See DECISIONS.md, 2026-09-02 ("Browser history gets an update
    endpoint; local files stays fixed under Docker").
 
-   **Note on local files under Docker**: unlike browser history, the
-   wizard's local-files step gets **no** new endpoint at all — it stays
-   exactly as `api/routes/settings.py` already built it (`GET
-   /api/settings/sources` for the current, fixed value; a `422` from
-   `PUT` if anything tries to change `local_files_watch_dirs` while
-   `running_in_docker`). See the same DECISIONS.md entry for why this
-   round deliberately didn't reopen that already-shipped restriction.
+   **Note on local files under Docker**: this was originally left fully
+   read-only (no new endpoint at all), then reversed the same day once
+   testing showed the real constraint only forbids mounting a *new* host
+   folder at runtime, not narrowing to a subset of what's already
+   mounted — see `GET`/`PUT /api/settings/sources` above
+   (`available_watch_directories`, `is_within_watched_root()`) and
+   DECISIONS.md, 2026-09-02 ("Local files gets a real picker under
+   Docker after all").
 
 ---
 
@@ -1587,13 +1610,32 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    with manually pasted paths rather than replacing them, then calls
    `saveScopeTextarea()` explicitly — a path picked this way never fires
    the textarea's own `onBlur`, since the user never focused it — see
-   DECISIONS.md, 2026-08-30 and 2026-09-01. **Branch point**: when
-   `sources.running_in_docker` is true (see `GET /api/settings/sources`
-   above), "Local folders to watch" renders read-only instead — a plain
-   list built from the same `watchDirsText` state, no "Browse…" button, no
-   editable textarea, with a hint pointing at `HOST_WATCH_DIR` + restarting
-   the stack as the way to actually change it (see DECISIONS.md,
-   2026-09-02). The "Data Ingestion" section also renders the
+   DECISIONS.md, 2026-08-30 and 2026-09-01.
+
+   `getSourceConfig()`'s own result is kept in a dedicated `sourceConfig`
+   state (populated once on mount, alongside `sources`/`settings`/
+   `connections`) — this state didn't exist before 2026-09-02: the
+   Docker-mode branch below had been reading `sources.running_in_docker`/
+   `sources.available_watch_directories` instead, but `sources` actually
+   holds `getSourcesStatus()`'s result (the last ingestion run's
+   outcome), not `getSourceConfig()`'s — both fields were always
+   `undefined` there, a real, shipped bug caught only by testing against
+   a live Docker container, not by reading the code (see DECISIONS.md,
+   2026-09-02, "`config/.env` had to become a real bind mount").
+
+   **Branch point**: when `sourceConfig.running_in_docker` is true, "Local
+   folders to watch" renders a checkbox picker instead of the Browse
+   button + free-text textarea — one checkbox per
+   `sourceConfig.available_watch_directories` entry, checked against
+   `linesToList(watchDirsText)`; toggling one calls the same
+   `saveScopeTextarea()` used elsewhere, with an explicit `listOverride`
+   (the newly-toggled list) so the write goes out immediately rather than
+   waiting for a textarea's `onBlur` that no longer exists in this mode.
+   The backend accepts any subset of what's mounted and rejects anything
+   outside it (see `PUT /api/settings/sources` above) — this was
+   originally fully read-only with no picker at all, reversed the same
+   day (see DECISIONS.md, 2026-09-02, "Local files gets a real picker
+   under Docker after all"). The "Data Ingestion" section also renders the
    `ingestionStatus` prop (from `App.jsx`, see above), when non-null, as a
    "Started at HH:MM:SS" line plus a progress bar — an indeterminate
    sliding-segment animation while `status === "running"` (no known total

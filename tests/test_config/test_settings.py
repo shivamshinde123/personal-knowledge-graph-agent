@@ -101,6 +101,19 @@ class TestEnvSettings:
     def test_watch_dirs_is_empty_when_unset(self):
         assert EnvSettings(local_files_watch_dirs="").watch_dirs == []
 
+    def test_watch_dirs_defaults_to_the_whole_mount_when_unset_under_docker(self):
+        env = EnvSettings(local_files_watch_dirs="", running_in_docker=True)
+
+        assert env.watch_dirs == [Path("/data/watched")]
+
+    def test_watch_dirs_configured_value_wins_over_the_docker_default(self):
+        env = EnvSettings(
+            local_files_watch_dirs="/data/watched/project-a",
+            running_in_docker=True,
+        )
+
+        assert env.watch_dirs == [anchor_path(Path("/data/watched/project-a"))]
+
     def test_watch_dirs_ignores_empty_segments(self):
         env = EnvSettings(local_files_watch_dirs="C:/notes,,  ,")
 

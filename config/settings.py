@@ -325,12 +325,29 @@ class EnvSettings(BaseSettings):
             unset — an empty list means "no folders configured," which
             ``extractors/local_files.py`` treats as "watch nothing" until
             the user explicitly configures one. See ``DECISIONS.md``.
+
+            **Exception**: under Docker (``running_in_docker``), an unset
+            value defaults to ``["/data/watched"]`` — the whole mounted
+            volume (``docker-compose.yml``'s ``HOST_WATCH_DIR``) — rather
+            than "watch nothing." This field is deliberately *not*
+            overridden by ``docker-compose.yml`` itself (unlike
+            ``RUNNING_IN_DOCKER``/``NEO4J_URI``/etc.), specifically so a
+            narrower selection written here through
+            ``PUT /api/settings/sources`` (the Settings/wizard picker,
+            see ``agent/mounted_files.py``) actually takes effect instead
+            of being silently overridden by a hardcoded container env var
+            every time — this default is what keeps the *unconfigured*,
+            out-of-the-box behavior the same as before that field became
+            independently writable. See DECISIONS.md, issue #92.
         """
-        return [
+        dirs = [
             anchor_path(Path(part.strip()))
             for part in self.local_files_watch_dirs.split(",")
             if part.strip()
         ]
+        if not dirs and self.running_in_docker:
+            return [Path("/data/watched")]
+        return dirs
 
     @property
     def notion_page_ids_list(self) -> list[str]:

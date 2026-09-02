@@ -49,23 +49,60 @@ services:
     build:
       context: .
       dockerfile: docker/backend.Dockerfile
-    env_file:
-      - config/.env
     environment:
       # Overrides config/.env's own values for anything that must point
       # inside this container/network rather than at the host -- real
       # process env vars set here take priority over the mounted .env
       # file's values (pydantic-settings' own precedence order). See
       # DECISIONS.md.
+      #
+      # LOCAL_FILES_WATCH_DIRS, BROWSER_HISTORY_PATH, every credential,
+      # and everything else config/.env holds are deliberately NOT
+      # overridden here -- they need to stay writable through the normal
+      # config/.env path (PUT /api/settings/sources, POST
+      # /api/setup/credentials, etc.), so the Settings/wizard's writes
+      # actually take effect. config/settings.py defaults
+      # LOCAL_FILES_WATCH_DIRS to the whole /data/watched mount when unset
+      # under Docker, so the out-of-the-box behavior is unchanged.
       RUNNING_IN_DOCKER: "true"
       SQLITE_DB_PATH: /app/data/pkg_agent.db
       CHROMA_PERSIST_DIR: /app/data/chroma
       NEO4J_URI: bolt://neo4j:7687
       OLLAMA_HOST: http://ollama:11434
-      LOCAL_FILES_WATCH_DIRS: /data/watched
       FASTAPI_PORT: 8080
     volumes:
       - app_data:/app/data
+      # A real bind mount of the whole config/ directory, not `env_file:`
+      # and not a single-file mount of just .env -- both were tried and
+      # verified directly to fail:
+      #   - `env_file:` injects every key from config/.env as a real OS
+      #     environment variable, frozen at container-start, which then
+      #     *always* wins over anything later written to config/.env on
+      #     disk (pydantic-settings' env-var-over-dotenv-file precedence)
+      #     -- every runtime write this app makes to its own config
+      #     (local files, browser history, credentials, Google OAuth)
+      #     was silently ignored under Docker.
+      #   - Bind-mounting only `./config/.env:/app/config/.env` fixed
+      #     that, but broke the write itself: python-dotenv's set_key()
+      #     writes via a temp file in the same directory, then
+      #     `os.replace()` (an atomic rename) onto the target -- which
+      #     requires source and destination on the same mount point.
+      #     Mounting only the single file puts it on a different mount
+      #     than its own parent directory (the container's own image
+      #     layer), so the rename fails with "Device or resource busy".
+      #     Mounting the whole directory puts the temp file and the
+      #     target on the same mount, fixing this. config.yaml/settings.py/
+      #     __init__.py are also files in this directory and get
+      #     shadowed by the host's copies this way -- harmless, since
+      #     they're the exact files the image was just built from.
+      #     config/client_secret_*.json (if present, from the older
+      #     manual Gmail/Calendar OAuth setup) becomes reachable inside
+      #     the container too -- unlike baking a secret into a
+      #     distributed image layer (the .dockerignore fix elsewhere in
+      #     this file guards against that), a bind mount only exposes it
+      #     to this same local machine's own container, not to anyone
+      #     else. See DECISIONS.md.
+      - ./config:/app/config
       - ${HOST_WATCH_DIR:-./docker/empty}:/data/watched:ro
       - ${HOST_DATA_DIR:-./docker/empty}:/host-data:ro
     ports:
@@ -83,17 +120,18 @@ services:
       context: .
       dockerfile: docker/backend.Dockerfile
     command: ["python", "-m", "scheduler.loop"]
-    env_file:
-      - config/.env
     environment:
+      # See the backend service's own comment above -- everything except
+      # these explicit overrides stays live-writable via config/.env.
       RUNNING_IN_DOCKER: "true"
       SQLITE_DB_PATH: /app/data/pkg_agent.db
       CHROMA_PERSIST_DIR: /app/data/chroma
       NEO4J_URI: bolt://neo4j:7687
       OLLAMA_HOST: http://ollama:11434
-      LOCAL_FILES_WATCH_DIRS: /data/watched
     volumes:
       - app_data:/app/data
+      # Same real bind mount as backend's own -- see its comment above.
+      - ./config:/app/config
       - ${HOST_WATCH_DIR:-./docker/empty}:/data/watched:ro
       - ${HOST_DATA_DIR:-./docker/empty}:/host-data:ro
     depends_on:
