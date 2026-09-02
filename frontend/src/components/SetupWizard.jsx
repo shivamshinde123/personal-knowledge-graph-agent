@@ -851,17 +851,30 @@ function SetupWizard({ onClose, onTriggerIngestion, onResetAll, onError }) {
                 </p>
               ) : (
                 <div className="watch-dir-picker">
-                  {hostDataFiles.map((file) => (
-                    <label className="watch-dir-picker-option" key={file}>
-                      <input
-                        type="radio"
-                        name="wizard-browser-history-file"
-                        checked={browserHistoryPath === file}
-                        onChange={() => handleSaveBrowserHistoryPath(file)}
-                      />
-                      <span>{file}</span>
-                    </label>
-                  ))}
+                  {hostDataFiles.map((file) => {
+                    // list_host_data_files() returns paths *relative* to
+                    // /host-data (e.g. "History"), unlike
+                    // list_watched_directories()'s full, ready-to-use
+                    // paths -- reconstruct the real in-container path here
+                    // so both the saved value and the checked-state
+                    // comparison use the same thing. Found live: without
+                    // this, the radio never showed as selected (checked
+                    // compared the full saved path against a bare
+                    // filename) even though a click did silently save the
+                    // bare, unusable filename underneath.
+                    const fullPath = `/host-data/${file}`;
+                    return (
+                      <label className="watch-dir-picker-option" key={file}>
+                        <input
+                          type="radio"
+                          name="wizard-browser-history-file"
+                          checked={browserHistoryPath === fullPath}
+                          onChange={() => handleSaveBrowserHistoryPath(fullPath)}
+                        />
+                        <span>{file}</span>
+                      </label>
+                    );
+                  })}
                 </div>
               )}
             </div>

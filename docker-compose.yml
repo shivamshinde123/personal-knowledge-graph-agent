@@ -65,18 +65,30 @@ services:
       # file's values (pydantic-settings' own precedence order). See
       # DECISIONS.md.
       #
-      # LOCAL_FILES_WATCH_DIRS, BROWSER_HISTORY_PATH, every credential,
-      # and everything else config/.env holds are deliberately NOT
+      # LOCAL_FILES_WATCH_DIRS, BROWSER_HISTORY_PATH, and every source
+      # credential (Notion/GitHub/OpenRouter/Google) are deliberately NOT
       # overridden here -- they need to stay writable through the normal
       # config/.env path (PUT /api/settings/sources, POST
       # /api/setup/credentials, etc.), so the Settings/wizard's writes
-      # actually take effect. config/settings.py defaults
-      # LOCAL_FILES_WATCH_DIRS to the whole /data/watched mount when unset
+      # actually take effect. NEO4J_USER/NEO4J_PASSWORD below are the one
+      # exception to that rule -- see their own comment. config/settings.py
+      # defaults LOCAL_FILES_WATCH_DIRS to the whole /data/watched mount
+      # when unset
       # under Docker, so the out-of-the-box behavior is unchanged.
       RUNNING_IN_DOCKER: "true"
       SQLITE_DB_PATH: /app/data/pkg_agent.db
       CHROMA_PERSIST_DIR: /app/data/chroma
       NEO4J_URI: bolt://neo4j:7687
+      # Must always match the neo4j service's own NEO4J_AUTH below --
+      # found live: config/.env's own NEO4J_PASSWORD is whatever a manual
+      # dev setup (or an earlier Docker run) left it as, which silently
+      # drifts out of sync with whatever the neo4j container was actually
+      # initialized with, since Neo4j only applies NEO4J_AUTH on a
+      # volume's first-ever start. Overriding it here the same way
+      # NEO4J_URI already is removes the drift entirely -- both read from
+      # the exact same root-.env expression. See DECISIONS.md.
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-pkg-agent-local}
       OLLAMA_HOST: http://ollama:11434
       FASTAPI_PORT: 8080
     volumes:
@@ -147,6 +159,10 @@ services:
       SQLITE_DB_PATH: /app/data/pkg_agent.db
       CHROMA_PERSIST_DIR: /app/data/chroma
       NEO4J_URI: bolt://neo4j:7687
+      # Must match the neo4j service's own NEO4J_AUTH -- see backend's
+      # own comment above.
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-pkg-agent-local}
       OLLAMA_HOST: http://ollama:11434
     volumes:
       # Same real host-folder bind mount as backend's own -- see its

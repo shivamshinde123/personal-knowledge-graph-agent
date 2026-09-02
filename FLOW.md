@@ -986,12 +986,20 @@ entry points above/below it. See DECISIONS.md, 2026-09-02.
    itself (`python-dotenv`'s atomic rename needs its temp file and the
    target on the same mount point). See DECISIONS.md, 2026-09-02 ("`config/.env`
    had to become a real bind mount"). A compose-level `environment:`
-   block overrides only `SQLITE_DB_PATH`/`CHROMA_PERSIST_DIR`/`NEO4J_URI`/
-   `OLLAMA_HOST`/`RUNNING_IN_DOCKER`/`FASTAPI_PORT`, since those must
-   point in-container/in-network rather than at the host; everything
-   else in `config/.env` (credentials, `LOCAL_FILES_WATCH_DIRS`,
-   `BROWSER_HISTORY_PATH`, ...) stays live-writable through the normal
-   `PUT`/`POST` endpoints, with writes landing on the real host file
+   block overrides `SQLITE_DB_PATH`/`CHROMA_PERSIST_DIR`/`NEO4J_URI`/
+   `NEO4J_USER`/`NEO4J_PASSWORD`/`OLLAMA_HOST`/`RUNNING_IN_DOCKER`/
+   `FASTAPI_PORT`, since those must point in-container/in-network rather
+   than at the host — `NEO4J_USER`/`NEO4J_PASSWORD` specifically read from
+   the exact same `${NEO4J_PASSWORD:-pkg-agent-local}` expression the
+   `neo4j` service's own `NEO4J_AUTH` does, found necessary live: a stale
+   `config/.env`-only `NEO4J_PASSWORD` (left over from manual-dev testing)
+   silently stopped matching whatever the Neo4j container was actually
+   initialized with, since Neo4j only applies `NEO4J_AUTH` on a volume's
+   first-ever start (see DECISIONS.md, 2026-09-02, "Two bugs found running
+   the real Docker stack end-to-end"). Everything else in `config/.env`
+   (credentials, `LOCAL_FILES_WATCH_DIRS`, `BROWSER_HISTORY_PATH`, ...)
+   stays live-writable through the normal `PUT`/`POST` endpoints, with
+   writes landing on the real host file
 4. `ollama` only starts when the `local-llm` Compose profile is active
    (`--profile local-llm`, or `COMPOSE_PROFILES=local-llm` in the
    root-level `.env`) — irrelevant, and skipped, under
@@ -1727,6 +1735,15 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
      `SettingsPanel.jsx`'s own Docker-vs-not branching
      (`sourceConfig.running_in_docker`, `available_watch_directories`,
      `GET /setup/host-data-files`) rather than a separate implementation.
+     The browser-history radio picker reconstructs `/host-data/${file}`
+     itself before using it — `list_host_data_files()` returns paths
+     *relative* to `/host-data` (unlike `list_watched_directories()`'s
+     full, ready-to-use paths), a real bug found by clicking it live in
+     Docker: without the reconstruction, the radio never visibly selected
+     (comparing a full saved path against a bare filename) and a click
+     silently saved the bare, unusable filename underneath. See
+     DECISIONS.md, 2026-09-02 ("Two bugs found running the real Docker
+     stack end-to-end").
    - The final step's "Run ingestion now" calls the same
      `onTriggerIngestion` prop `App.jsx` gives `SettingsPanel.jsx`, so the
      resulting toast/progress display behaves identically to triggering

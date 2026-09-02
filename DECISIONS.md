@@ -8,6 +8,20 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-09-02 — Two bugs found running the real Docker stack end-to-end (not just the manual dev backend)
+
+**Context**: The wizard/picker work up to this point had only been verified against a manually-run `uv run python -m api.main` backend, never a real `docker compose up` stack. Running the actual stack surfaced two real bugs neither unit tests nor the manual-backend testing could have caught.
+
+**Bug 1 — Neo4j auth failure on first boot**: `config/.env`'s own `NEO4J_PASSWORD` (what the backend app uses to *connect* to Neo4j, via `env.neo4j_password`) and the root `.env`'s `NEO4J_PASSWORD` (what initializes the Neo4j *server* itself, via `NEO4J_AUTH`) are two separate files with the same variable name — nothing kept them in sync. A `config/.env` left over from earlier manual-dev testing had a stale password that didn't match what the Neo4j container was actually initialized with, so the backend failed to start with `Unauthorized`. **Fix**: `docker-compose.yml` now overrides `NEO4J_USER`/`NEO4J_PASSWORD` in the backend/scheduler containers' `environment:` block from the exact same `${NEO4J_PASSWORD:-pkg-agent-local}` expression the `neo4j` service itself uses — the same treatment `NEO4J_URI` already got, for the same reason (anything that must match container-to-container can't be left to `config/.env`, which is oriented around user-facing, wizard-writable settings).
+
+**Bug 2 — Browser-history radio button never showed as selected**: `agent/mounted_files.py::list_watched_directories()` (local files) returns full, ready-to-use container paths (`/data/watched/project-a`), but `list_host_data_files()` (browser history) returns paths *relative* to `/host-data` (`"History"`) — an inconsistency between the two functions' contracts that `SetupWizard.jsx` didn't account for. It compared the saved full path against the bare filename for the radio's `checked` state (always false) and saved the bare filename itself (an unusable, incomplete path) on click — found live by clicking it and seeing nothing visibly select. **Fix**: the wizard now reconstructs `/host-data/${file}` itself before using it for both the `checked` comparison and the saved value.
+
+**Also fixed**: `docker/storage/` (the new `HOST_STORAGE_DIR` default) drops files beyond just `pkg_agent.db`/`chroma/` (e.g. `backend_port.txt`) that weren't covered by the existing `*.db`/`chroma/` `.gitignore` patterns — added a `docker/storage/*` / `!docker/storage/.gitkeep` pair so the whole directory's generated contents are covered generically rather than relying on that pattern list staying exhaustive.
+
+**Affects**: `docker-compose.yml`, `frontend/src/components/SetupWizard.jsx`, `.gitignore`.
+
+---
+
 ## 2026-09-02 — Google OAuth needed `OAUTHLIB_INSECURE_TRANSPORT=1` for the guided flow to work at all
 
 **Context**: Found by actually walking through the wizard's Google step live — `POST /setup/google/oauth/callback`'s token exchange failed every time with `Google authorization failed: (insecure_transport) OAuth 2 MUST utilize https.` `oauthlib` (underneath `google-auth-oauthlib`'s `Flow`) refuses to exchange a code against any redirect/callback URL that isn't `https://`, unless `OAUTHLIB_INSECURE_TRANSPORT` is set — checked directly in `oauthlib.oauth2.rfc6749.utils.is_secure_transport()`, which has no built-in exception for `localhost`/`127.0.0.1` despite that being oauthlib's own most common real-world case. This app's callback (`GET /api/setup/google/oauth/callback`) is *always* plain `http://` — a manual dev setup's `127.0.0.1:PORT`, or whatever host:port Docker publishes — since nothing in this system ever terminates TLS anywhere.
