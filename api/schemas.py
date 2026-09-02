@@ -175,14 +175,27 @@ class SourceConfigResponse(BaseModel):
     See ``DECISIONS.md``.
 
     ``running_in_docker`` mirrors ``EnvSettings.running_in_docker`` — when
-    true, ``local_files_watch_dirs`` is a fixed, Docker-volume-backed path
-    the frontend must render read-only (no "Browse…" button, no editable
-    textarea): the running app cannot mount a new host folder into itself,
-    only ``docker-compose.yml`` can, at container-start. See
-    ``DECISIONS.md``.
+    true, ``local_files_watch_dirs`` can only be narrowed to a subset of
+    ``available_watch_directories`` (below), never set to an arbitrary
+    host path: the running app cannot mount a *new* host folder into
+    itself, only ``docker-compose.yml`` can, at container-start. The
+    frontend renders a checkbox picker over ``available_watch_directories``
+    in that case instead of a free-text textarea + native "Browse…"
+    button. See ``DECISIONS.md``, issue #92.
+
+    ``available_watch_directories`` lists the immediate subdirectories
+    actually reachable under the Docker volume mount
+    (``agent/mounted_files.py::list_watched_directories()``) — always
+    empty outside Docker, where the native "Browse…" dialog covers this
+    need instead.
+
+    ``browser_history_path`` had no update endpoint at all before the
+    guided setup wizard (issue #92) — settable now via
+    ``PUT /api/settings/sources``, same as every other field here.
     """
 
     local_files_watch_dirs: list[str]
+    available_watch_directories: list[str]
     notion_page_ids: list[str]
     github_repos: list[str]
     gmail_date_range_start: str | None
@@ -191,6 +204,7 @@ class SourceConfigResponse(BaseModel):
     github_date_range_end: str | None
     calendar_date_range_start: str | None
     calendar_date_range_end: str | None
+    browser_history_path: str | None
     running_in_docker: bool
 
 
@@ -206,6 +220,7 @@ class SourceConfigUpdateRequest(BaseModel):
     github_date_range_end: str | None = None
     calendar_date_range_start: str | None = None
     calendar_date_range_end: str | None = None
+    browser_history_path: str | None = None
 
 
 class BrowseFolderResponse(BaseModel):
@@ -317,3 +332,84 @@ class GraphResponse(BaseModel):
 
     nodes: list[GraphNodeResponse]
     edges: list[GraphEdgeResponse]
+
+
+class GoogleOAuthStartRequest(BaseModel):
+    """``POST /api/setup/google/oauth/start`` request body.
+
+    Extension beyond ``docs/API_Specification.docx`` — the guided setup
+    wizard (issue #92). Both fields are saved to ``config/.env`` before
+    the authorization URL is built, so a completed connection persists the
+    same way any other credential does.
+    """
+
+    client_id: str
+    client_secret: str
+
+
+class GoogleOAuthStartResponse(BaseModel):
+    """``POST /api/setup/google/oauth/start`` response body."""
+
+    authorization_url: str
+
+
+class GoogleOAuthStatusResponse(BaseModel):
+    """``GET /api/setup/google/oauth/status`` response body.
+
+    Polled by the wizard while its "Connect Google" popup is open, since
+    the actual callback lands in that separate popup/tab, not the
+    wizard's own — see ``frontend/src/components/SetupWizard.jsx``.
+    """
+
+    connected: bool
+
+
+class SetupValidateRequest(BaseModel):
+    """``POST /api/setup/validate`` request body.
+
+    Validates a *pasted, not-yet-saved* credential against the real API
+    before the wizard persists it — per issue #92, "validated... before
+    letting the user continue (not just saved blind)."
+    """
+
+    source: Literal["openrouter", "notion", "github"]
+    value: str
+
+
+class SetupValidateResponse(BaseModel):
+    """``POST /api/setup/validate`` response body."""
+
+    status: Literal["ok", "error"]
+    detail: str
+
+
+class SetupCredentialsRequest(BaseModel):
+    """``POST /api/setup/credentials`` request body — every field optional.
+
+    Only ever called by the wizard after the matching
+    ``POST /api/setup/validate`` call for that field returned
+    ``status: "ok"`` — this endpoint itself doesn't validate anything, it
+    only writes.
+    """
+
+    notion_api_key: str | None = None
+    github_token: str | None = None
+    openrouter_api_key: str | None = None
+
+
+class SetupCredentialsResponse(BaseModel):
+    """``POST /api/setup/credentials`` response body."""
+
+    status: Literal["updated"]
+
+
+class MountedFilesResponse(BaseModel):
+    """``GET /api/setup/host-data-files`` response body.
+
+    Lets the guided setup wizard show a real pick list for
+    ``BROWSER_HISTORY_PATH`` (and similar) under Docker, instead of asking
+    the user to type an in-container path blind. Always empty outside
+    Docker — the wizard falls back to a plain text input in that case.
+    """
+
+    files: list[str]

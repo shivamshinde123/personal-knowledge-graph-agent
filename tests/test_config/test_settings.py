@@ -16,6 +16,8 @@ from config.settings import (
     get_settings,
     load_config,
     reload_settings,
+    update_credentials_config,
+    update_google_oauth_config,
     update_llm_config,
     update_source_config,
 )
@@ -98,6 +100,19 @@ class TestEnvSettings:
 
     def test_watch_dirs_is_empty_when_unset(self):
         assert EnvSettings(local_files_watch_dirs="").watch_dirs == []
+
+    def test_watch_dirs_defaults_to_the_whole_mount_when_unset_under_docker(self):
+        env = EnvSettings(local_files_watch_dirs="", running_in_docker=True)
+
+        assert env.watch_dirs == [Path("/data/watched")]
+
+    def test_watch_dirs_configured_value_wins_over_the_docker_default(self):
+        env = EnvSettings(
+            local_files_watch_dirs="/data/watched/project-a",
+            running_in_docker=True,
+        )
+
+        assert env.watch_dirs == [anchor_path(Path("/data/watched/project-a"))]
 
     def test_watch_dirs_ignores_empty_segments(self):
         env = EnvSettings(local_files_watch_dirs="C:/notes,,  ,")
@@ -639,6 +654,101 @@ class TestUpdateSourceConfig:
 
         assert calls["count"] == 2
         assert [str(p) for p in result.watch_dirs] == [str(anchor_path(Path("/a/b")))]
+
+    def test_updates_browser_history_path(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+        history_file = tmp_path / "History"
+        history_file.write_text("fake", encoding="utf-8")
+
+        result = update_source_config(
+            browser_history_path=str(history_file), path=env_path
+        )
+
+        assert result.browser_history_path == anchor_path(history_file)
+
+    def test_clearing_browser_history_path(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+        update_source_config(browser_history_path="/a/History", path=env_path)
+
+        result = update_source_config(browser_history_path="", path=env_path)
+
+        assert result.browser_history_path is None
+
+
+class TestUpdateGoogleOAuthConfig:
+    def test_writes_both_fields(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+
+        result = update_google_oauth_config(
+            client_id="cid-123", client_secret="secret-456", path=env_path
+        )
+
+        assert result.google_oauth_client_id == "cid-123"
+        assert result.google_oauth_client_secret == "secret-456"
+
+    def test_leaves_other_lines_untouched(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+
+        update_google_oauth_config(client_id="cid", client_secret="cs", path=env_path)
+
+        assert "SOME_OTHER_KEY=unchanged" in env_path.read_text(encoding="utf-8")
+
+    def test_a_retry_on_write_updates_both_values(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+
+        update_google_oauth_config(
+            client_id="first", client_secret="first-s", path=env_path
+        )
+        result = update_google_oauth_config(
+            client_id="second", client_secret="second-s", path=env_path
+        )
+
+        assert result.google_oauth_client_id == "second"
+        assert result.google_oauth_client_secret == "second-s"
+
+
+class TestUpdateCredentialsConfig:
+    def test_updates_only_the_given_field(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+
+        result = update_credentials_config(notion_api_key="ntn-123", path=env_path)
+
+        assert result.notion_api_key == "ntn-123"
+        assert result.github_token is None
+        assert result.openrouter_api_key is None
+
+    def test_updates_multiple_fields_at_once(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+
+        result = update_credentials_config(
+            github_token="ghp-456", openrouter_api_key="sk-or-789", path=env_path
+        )
+
+        assert result.github_token == "ghp-456"
+        assert result.openrouter_api_key == "sk-or-789"
+
+    def test_leaves_other_lines_untouched(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+
+        update_credentials_config(notion_api_key="ntn-123", path=env_path)
+
+        assert "SOME_OTHER_KEY=unchanged" in env_path.read_text(encoding="utf-8")
+
+    def test_no_fields_given_changes_nothing(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("NOTION_API_KEY=original\n", encoding="utf-8")
+
+        result = update_credentials_config(path=env_path)
+
+        assert result.notion_api_key == "original"
 
 
 class TestGetSettings:

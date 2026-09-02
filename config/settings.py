@@ -239,6 +239,16 @@ class EnvSettings(BaseSettings):
     github_date_range_start: date | None = None
     github_date_range_end: date | None = None
     google_calendar_credentials_path: Path | None = None
+    # Set by the guided setup wizard (agent/google_oauth.py) as an
+    # alternative to gmail_credentials_path/google_calendar_credentials_path
+    # above — a single Client ID/Secret pair drives one combined
+    # Gmail+Calendar consent screen, with the resulting token shared by
+    # both extractors, rather than a separately downloaded/placed
+    # client_secret.json per service. Both paths are supported side by
+    # side: an existing manual setup using the file-based path keeps
+    # working unchanged. See DECISIONS.md, issue #92.
+    google_oauth_client_id: str | None = None
+    google_oauth_client_secret: str | None = None
     # A window on each event's own start time (Google Calendar API's
     # timeMin/timeMax), not the incremental `since`/`updatedMin` check
     # extract_new_items() already does — the two are independent, ANDed
@@ -315,12 +325,29 @@ class EnvSettings(BaseSettings):
             unset — an empty list means "no folders configured," which
             ``extractors/local_files.py`` treats as "watch nothing" until
             the user explicitly configures one. See ``DECISIONS.md``.
+
+            **Exception**: under Docker (``running_in_docker``), an unset
+            value defaults to ``["/data/watched"]`` — the whole mounted
+            volume (``docker-compose.yml``'s ``HOST_WATCH_DIR``) — rather
+            than "watch nothing." This field is deliberately *not*
+            overridden by ``docker-compose.yml`` itself (unlike
+            ``RUNNING_IN_DOCKER``/``NEO4J_URI``/etc.), specifically so a
+            narrower selection written here through
+            ``PUT /api/settings/sources`` (the Settings/wizard picker,
+            see ``agent/mounted_files.py``) actually takes effect instead
+            of being silently overridden by a hardcoded container env var
+            every time — this default is what keeps the *unconfigured*,
+            out-of-the-box behavior the same as before that field became
+            independently writable. See DECISIONS.md, issue #92.
         """
-        return [
+        dirs = [
             anchor_path(Path(part.strip()))
             for part in self.local_files_watch_dirs.split(",")
             if part.strip()
         ]
+        if not dirs and self.running_in_docker:
+            return [Path("/data/watched")]
+        return dirs
 
     @property
     def notion_page_ids_list(self) -> list[str]:
@@ -523,6 +550,7 @@ def update_source_config(
     github_date_range_end: str | None = None,
     calendar_date_range_start: str | None = None,
     calendar_date_range_end: str | None = None,
+    browser_history_path: str | None = None,
     path: Path = DEFAULT_ENV_PATH,
 ) -> EnvSettings:
     """Update ``config/.env``'s source-scope variables on disk, in place.
@@ -559,6 +587,11 @@ def update_source_config(
             falling back to :attr:`EnvSettings.effective_calendar_date_range_start`
             when cleared.
         calendar_date_range_end: Same, but the ceiling.
+        browser_history_path: New absolute path to the browser's History
+            file, ``""`` to clear it, or ``None`` to leave unchanged.
+            Before this parameter existed, this field had no update
+            endpoint at all — only settable by hand in ``config/.env``,
+            unlike every other source. See DECISIONS.md, issue #92.
         path: Path to the ``.env`` file. Defaults to the real one; passing
             a different path (tests) writes there instead and leaves the
             process-wide ``get_settings()`` cache untouched.
@@ -573,6 +606,10 @@ def update_source_config(
     from dotenv import set_key
 
     try:
+        if browser_history_path is not None:
+            _retry_on_transient_permission_error(
+                lambda: set_key(path, "BROWSER_HISTORY_PATH", browser_history_path)
+            )
         if local_files_watch_dirs is not None:
             # A path ending in a trailing "\" (very easy to end up with on
             # Windows — e.g. a folder picker returning a drive/project
@@ -620,6 +657,113 @@ def update_source_config(
 
     # Same reasoning as update_llm_config(): only the real default file's
     # write should invalidate the process-wide cache.
+    if path == DEFAULT_ENV_PATH:
+        return reload_settings().env
+    return EnvSettings(_env_file=path)
+
+
+def update_google_oauth_config(
+    *,
+    client_id: str,
+    client_secret: str,
+    path: Path = DEFAULT_ENV_PATH,
+) -> EnvSettings:
+    """Save the guided-setup Google OAuth Client ID/Secret to ``config/.env``.
+
+    Used by ``agent/google_oauth.py::start_authorization()`` — called once
+    per authorization attempt, so re-pasting the same values on a retry is
+    a harmless no-op write. Unlike ``update_source_config()``'s optional
+    fields, both are always required and always written together, since a
+    Client ID with no matching Secret (or vice versa) can never build a
+    valid authorization request.
+
+    Args:
+        client_id: The Desktop-app OAuth Client ID pasted into the wizard.
+        client_secret: The matching OAuth Client Secret.
+        path: Path to the ``.env`` file. Defaults to the real one; passing
+            a different path (tests) writes there instead and leaves the
+            process-wide ``get_settings()`` cache untouched.
+
+    Returns:
+        The freshly reloaded environment settings, read back from ``path``
+        itself rather than assumed from the in-memory update.
+
+    Raises:
+        ConfigError: If the file can't be written to.
+    """
+    from dotenv import set_key
+
+    try:
+        _retry_on_transient_permission_error(
+            lambda: set_key(path, "GOOGLE_OAUTH_CLIENT_ID", client_id)
+        )
+        _retry_on_transient_permission_error(
+            lambda: set_key(path, "GOOGLE_OAUTH_CLIENT_SECRET", client_secret)
+        )
+    except OSError as exc:
+        raise ConfigError(f"Could not write {path}: {exc}") from exc
+
+    if path == DEFAULT_ENV_PATH:
+        return reload_settings().env
+    return EnvSettings(_env_file=path)
+
+
+def update_credentials_config(
+    *,
+    notion_api_key: str | None = None,
+    github_token: str | None = None,
+    openrouter_api_key: str | None = None,
+    path: Path = DEFAULT_ENV_PATH,
+) -> EnvSettings:
+    """Save Notion/GitHub/OpenRouter credentials to ``config/.env``.
+
+    Before the guided setup wizard (issue #92), these three had no update
+    function at all — the only way to set them was editing ``config/.env``
+    by hand; only source-*scope* fields (``local_files_watch_dirs``,
+    ``notion_page_ids``, date ranges, ...) had one
+    (:func:`update_source_config`). Used by
+    ``POST /api/setup/credentials`` — the wizard validates each value with
+    ``agent/connection_check.py``'s ``notion_key_works()``/
+    ``github_token_works()``/``openrouter_key_works()`` *before* calling
+    this, so a bad credential is never persisted; this function itself
+    doesn't validate anything, it only writes.
+
+    Args:
+        notion_api_key: New Notion integration token, or ``None`` to leave
+            unchanged.
+        github_token: New GitHub personal access token, or ``None`` to
+            leave unchanged.
+        openrouter_api_key: New OpenRouter API key, or ``None`` to leave
+            unchanged.
+        path: Path to the ``.env`` file. Defaults to the real one; passing
+            a different path (tests) writes there instead and leaves the
+            process-wide ``get_settings()`` cache untouched.
+
+    Returns:
+        The freshly reloaded environment settings, read back from ``path``
+        itself rather than assumed from the in-memory update.
+
+    Raises:
+        ConfigError: If the file can't be written to.
+    """
+    from dotenv import set_key
+
+    try:
+        if notion_api_key is not None:
+            _retry_on_transient_permission_error(
+                lambda: set_key(path, "NOTION_API_KEY", notion_api_key)
+            )
+        if github_token is not None:
+            _retry_on_transient_permission_error(
+                lambda: set_key(path, "GITHUB_TOKEN", github_token)
+            )
+        if openrouter_api_key is not None:
+            _retry_on_transient_permission_error(
+                lambda: set_key(path, "OPENROUTER_API_KEY", openrouter_api_key)
+            )
+    except OSError as exc:
+        raise ConfigError(f"Could not write {path}: {exc}") from exc
+
     if path == DEFAULT_ENV_PATH:
         return reload_settings().env
     return EnvSettings(_env_file=path)

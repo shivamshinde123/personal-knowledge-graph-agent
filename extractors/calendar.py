@@ -143,15 +143,30 @@ def _build_service(creds):
 def _get_credentials():
     """Load the cached, authorized token, refreshing it if expired.
 
-    Never triggers the interactive consent flow itself — see
-    :func:`setup_auth` and the module docstring.
+    Tries the guided setup wizard's shared Gmail+Calendar token first
+    (``extractors/google_oauth.py::load_credentials()``) — if that flow
+    was never completed, falls back to this extractor's own older,
+    separate per-service token below, for an existing manual setup. Never
+    triggers the interactive consent flow itself — see :func:`setup_auth`
+    and the module docstring.
     """
+    from extractors.google_oauth import GoogleOAuthError
+    from extractors.google_oauth import load_credentials as load_shared_credentials
+
+    try:
+        shared_creds = load_shared_credentials()
+    except GoogleOAuthError as exc:
+        raise ExtractorError(str(exc)) from exc
+    if shared_creds is not None:
+        return shared_creds
+
     token_path = _token_path()
     if not token_path.is_file():
         raise ExtractorError(
-            "Google Calendar is not authorized yet. Run "
-            "`uv run python -m extractors.calendar --setup-auth` once to "
-            "complete the one-time browser consent, then re-run ingestion."
+            "Google Calendar is not authorized yet. Connect Google from "
+            "Settings, or run `uv run python -m extractors.calendar "
+            "--setup-auth` once to complete the one-time browser consent, "
+            "then re-run ingestion."
         )
     creds = Credentials.from_authorized_user_file(str(token_path), _SCOPES)
     if creds.expired and creds.refresh_token:

@@ -102,6 +102,16 @@ function SettingsPanel({
 }) {
   const [settings, setSettings] = useState(null);
   const [sources, setSources] = useState(null);
+  // Separate from `sources` (getSourcesStatus() -- the last ingestion
+  // run's outcome) despite the near-identical name -- this one holds
+  // getSourceConfig()'s own result (running_in_docker,
+  // available_watch_directories, and the raw scope lists), which nothing
+  // previously kept around after the initial fetch. Confirmed as a real,
+  // shipped bug: `running_in_docker`/`available_watch_directories` were
+  // being read off `sources` (always undefined there), so the Local
+  // Files section's Docker-mode branch could never actually trigger in
+  // the real running app. See DECISIONS.md, issue #92.
+  const [sourceConfig, setSourceConfig] = useState(null);
   const [connections, setConnections] = useState(null);
   const [watchDirsText, setWatchDirsText] = useState("");
   const [notionPageIdsText, setNotionPageIdsText] = useState("");
@@ -154,18 +164,19 @@ function SettingsPanel({
       getSourceConfig(),
     ])
       .then(
-        ([settingsResult, sourcesResult, connectionsResult, sourceConfig]) => {
-          const watchDirs = sourceConfig.local_files_watch_dirs.join("\n");
-          const notionPageIds = sourceConfig.notion_page_ids.join("\n");
-          const githubRepos = sourceConfig.github_repos.join("\n");
-          const gmailStart = sourceConfig.gmail_date_range_start ?? "";
-          const gmailEnd = sourceConfig.gmail_date_range_end ?? "";
-          const githubStart = sourceConfig.github_date_range_start ?? "";
-          const githubEnd = sourceConfig.github_date_range_end ?? "";
-          const calendarStart = sourceConfig.calendar_date_range_start ?? "";
-          const calendarEnd = sourceConfig.calendar_date_range_end ?? "";
+        ([settingsResult, sourcesResult, connectionsResult, sourceConfigResult]) => {
+          const watchDirs = sourceConfigResult.local_files_watch_dirs.join("\n");
+          const notionPageIds = sourceConfigResult.notion_page_ids.join("\n");
+          const githubRepos = sourceConfigResult.github_repos.join("\n");
+          const gmailStart = sourceConfigResult.gmail_date_range_start ?? "";
+          const gmailEnd = sourceConfigResult.gmail_date_range_end ?? "";
+          const githubStart = sourceConfigResult.github_date_range_start ?? "";
+          const githubEnd = sourceConfigResult.github_date_range_end ?? "";
+          const calendarStart = sourceConfigResult.calendar_date_range_start ?? "";
+          const calendarEnd = sourceConfigResult.calendar_date_range_end ?? "";
           setSettings(settingsResult);
           setSources(sourcesResult);
+          setSourceConfig(sourceConfigResult);
           setConnections(connectionsResult);
           setWatchDirsText(watchDirs);
           setNotionPageIdsText(notionPageIds);
@@ -492,7 +503,7 @@ function SettingsPanel({
     );
   }
 
-  if (!settings || !sources || !connections) {
+  if (!settings || !sources || !sourceConfig || !connections) {
     return (
       <div className="settings-panel">
         <h1>Settings</h1>
@@ -714,7 +725,7 @@ function SettingsPanel({
           <section className="settings-section">
             <div className="settings-section-header">
               <h2>Local folders to watch</h2>
-              {!sources.running_in_docker && (
+              {!sourceConfig.running_in_docker && (
                 <button
                   type="button"
                   className="settings-ghost-button"
@@ -725,21 +736,44 @@ function SettingsPanel({
                 </button>
               )}
             </div>
-            {sources.running_in_docker ? (
+            {sourceConfig.running_in_docker ? (
               <>
                 <p className="settings-field-hint">
-                  Fixed by the Docker Compose volume mount — the running app
-                  can't mount a new host folder into itself. To change this,
-                  set <code>HOST_WATCH_DIR</code> in the host's{" "}
+                  Pick which of the folders mounted via{" "}
+                  <code>HOST_WATCH_DIR</code> to actually watch. To mount a
+                  different host folder entirely, set{" "}
+                  <code>HOST_WATCH_DIR</code> in the host's{" "}
                   <code>.env</code> next to <code>docker-compose.yml</code>
                   and restart the stack (<code>docker compose up -d</code>).
                 </p>
-                {watchDirsText ? (
-                  <ul className="source-scope-readonly-list">
-                    {linesToList(watchDirsText).map((dir) => (
-                      <li key={dir}>{dir}</li>
-                    ))}
-                  </ul>
+                {sourceConfig.available_watch_directories.length > 0 ? (
+                  <div className="watch-dir-picker">
+                    {sourceConfig.available_watch_directories.map((dir) => {
+                      const watched = linesToList(watchDirsText).includes(dir);
+                      return (
+                        <label className="watch-dir-picker-option" key={dir}>
+                          <input
+                            type="checkbox"
+                            checked={watched}
+                            onChange={(event) => {
+                              const current = linesToList(watchDirsText);
+                              const updated = event.target.checked
+                                ? [...current, dir]
+                                : current.filter((d) => d !== dir);
+                              saveScopeTextarea(
+                                "local_files_watch_dirs",
+                                "watchDirsText",
+                                setWatchDirsText,
+                                updated.join("\n"),
+                                updated,
+                              );
+                            }}
+                          />
+                          <span>{dir}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
                 ) : (
                   <p className="settings-field-hint">
                     No folder is mounted — <code>HOST_WATCH_DIR</code> is

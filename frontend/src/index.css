@@ -968,23 +968,32 @@ a {
   border-color: var(--accent);
 }
 
-/* Read-only stand-in for .source-scope-textarea when running in Docker --
-   local_files_watch_dirs is a fixed volume mount there, not an editable
-   field (see SettingsPanel.jsx, DECISIONS.md). */
-.source-scope-readonly-list {
-  margin: 0;
+/* Stand-in for .source-scope-textarea when running in Docker --
+   local_files_watch_dirs can only be narrowed to a subset of what's
+   already mounted there, via checkboxes, not freely typed (see
+   SettingsPanel.jsx, DECISIONS.md, issue #92). */
+.watch-dir-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   padding: 12px 17px;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.03);
+}
+
+.watch-dir-picker-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   color: var(--text-h);
   font-size: 14px;
   font-family: var(--mono);
-  list-style: none;
+  cursor: pointer;
 }
 
-.source-scope-readonly-list li + li {
-  margin-top: 6px;
+.watch-dir-picker-option input {
+  cursor: pointer;
 }
 
 .date-range-fields {

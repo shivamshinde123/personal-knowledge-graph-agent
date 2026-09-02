@@ -971,13 +971,21 @@ entry points above/below it. See DECISIONS.md, 2026-09-02.
    other, the same "share the filesystem" relationship a manual dev
    setup's foreground backend process and spawned `daily_batch`
    subprocess already have
-3. Both mount the real `config/.env` read-only via `env_file:` unchanged —
-   every credential works exactly as it does outside Docker — while a
-   compose-level `environment:` block overrides only
-   `SQLITE_DB_PATH`/`CHROMA_PERSIST_DIR`/`NEO4J_URI`/`OLLAMA_HOST`/
-   `LOCAL_FILES_WATCH_DIRS`/`RUNNING_IN_DOCKER`, since those must point
-   in-container/in-network rather than at the host; real env vars set
-   this way win over the mounted file's own values
+3. Both bind-mount the real `./config` directory (`- ./config:/app/config`),
+   not `env_file:` — verified directly that `env_file:` breaks every
+   runtime settings write silently (it injects each key as a frozen OS
+   env var at container-start, which always wins over anything later
+   written to `config/.env` on disk), and that mounting only the single
+   `.env` file rather than its whole parent directory breaks the write
+   itself (`python-dotenv`'s atomic rename needs its temp file and the
+   target on the same mount point). See DECISIONS.md, 2026-09-02 ("`config/.env`
+   had to become a real bind mount"). A compose-level `environment:`
+   block overrides only `SQLITE_DB_PATH`/`CHROMA_PERSIST_DIR`/`NEO4J_URI`/
+   `OLLAMA_HOST`/`RUNNING_IN_DOCKER`/`FASTAPI_PORT`, since those must
+   point in-container/in-network rather than at the host; everything
+   else in `config/.env` (credentials, `LOCAL_FILES_WATCH_DIRS`,
+   `BROWSER_HISTORY_PATH`, ...) stays live-writable through the normal
+   `PUT`/`POST` endpoints, with writes landing on the real host file
 4. `ollama` only starts when the `local-llm` Compose profile is active
    (`--profile local-llm`, or `COMPOSE_PROFILES=local-llm` in the
    root-level `.env`) — irrelevant, and skipped, under
@@ -1064,18 +1072,27 @@ See DECISIONS.md, 2026-08-29.
 3. `check_all_connections()` checks all six sources, always in the same
    order: `local_file`/`browser_history` — a real filesystem check
    (configured path/dir exists and is reachable); `notion` — a real,
-   cheap Notion API call (`Client(auth=...).users.me()`) if
-   `NOTION_API_KEY` is set; `gmail` — a real, cheap Gmail API call
-   (`users().getProfile()`) using the cached OAuth token if
-   `GMAIL_CREDENTIALS_PATH` is set; `github` — a real, cheap GitHub API
-   call (`GET /user`) if `GITHUB_TOKEN` is set; `calendar` — a real,
-   cheap Calendar API call (`calendarList().get(calendarId="primary")`)
-   using the cached OAuth token if `GOOGLE_CALENDAR_CREDENTIALS_PATH` is
-   set. For the two OAuth sources (Gmail, Calendar), "not yet authorized"
-   (the one-time `setup_auth()` step hasn't been run) reports
-   `"not_configured"`, not an error, since nothing is actually broken;
-   any other failure (revoked token, unreachable API) reports `"error"`
-   — see DECISIONS.md, 2026-08-30
+   cheap Notion API call (`notion_key_works()` → `Client(auth=...).users.me()`)
+   if `NOTION_API_KEY` is set; `gmail` — a real, cheap Gmail API call
+   (`users().getProfile()`) using the cached OAuth token if either
+   `GMAIL_CREDENTIALS_PATH` is set **or** the guided setup wizard's shared
+   Google token exists (`agent/google_oauth.py::is_connected()` — see
+   DECISIONS.md, 2026-09-02, issue #92); `github` — a real, cheap GitHub
+   API call (`github_token_works()` → `GET /user`) if `GITHUB_TOKEN` is
+   set; `calendar` — a real, cheap Calendar API call
+   (`calendarList().get(calendarId="primary")`) using the cached OAuth
+   token, same either-path "configured" check as Gmail
+   (`GOOGLE_CALENDAR_CREDENTIALS_PATH` or the shared wizard token).
+   `notion_key_works()`/`github_token_works()` are standalone, parameterized
+   functions (not inlined in `_check_notion()`/`_check_github()` any
+   more) — the guided setup wizard's `POST /api/setup/validate` calls the
+   same two functions directly, against a pasted-but-not-yet-saved value,
+   before persisting it (see the `/api/setup/*` entry point below,
+   DECISIONS.md, 2026-09-02).
+   For the two OAuth sources (Gmail, Calendar), "not yet authorized" (no
+   token via either path yet) reports `"not_configured"`, not an error,
+   since nothing is actually broken; any other failure (revoked token,
+   unreachable API) reports `"error"` — see DECISIONS.md, 2026-08-30
 4. Returns `{"connections": [{"source_type", "status", "detail",
    "checked_at"}, ...]}`, `status` one of `"ok"` / `"error"` /
    `"not_configured"`
@@ -1146,7 +1163,13 @@ provider config. See DECISIONS.md, 2026-08-30.
 1. `GET /settings/sources` → `config/settings.py::get_settings().env`'s
    `watch_dirs`/`notion_page_ids_list` computed properties, read directly
    (same "config isn't storage/providers" reasoning as `GET /settings`
-   above). Gmail's/Calendar's date-range fields come from
+   above). `watch_dirs` itself defaults to `["/data/watched"]` (the whole
+   Docker volume mount) when `LOCAL_FILES_WATCH_DIRS` is unset **and**
+   `running_in_docker` — see DECISIONS.md, 2026-09-02 ("Local files gets
+   a real picker..."). Also returns `available_watch_directories` —
+   `agent/mounted_files.py::list_watched_directories()` (immediate
+   subdirectories under `/data/watched`) when `running_in_docker`, else
+   always `[]`. Gmail's/Calendar's date-range fields come from
    `effective_gmail_date_range_start`/`_end` and
    `effective_calendar_date_range_start`/`_end` — always a real window,
    defaulted when unset (see DECISIONS.md, 2026-09-01) — while GitHub's
@@ -1154,25 +1177,36 @@ provider config. See DECISIONS.md, 2026-08-30.
    `None`-able)
 2. `PUT /settings/sources` — **branch point**: if the payload includes
    `local_files_watch_dirs` (non-`None`) while
-   `settings.env.running_in_docker` is set, returns `422
-   {"error": "not_available_in_docker", ...}` immediately, without calling
-   `update_source_config()` at all — that field is a fixed,
-   volume-mount-backed container path in Docker, not something the running
-   app can change on its own (see DECISIONS.md, 2026-09-02). Every other
+   `settings.env.running_in_docker` is set, each given entry is checked
+   with `agent/mounted_files.py::is_within_watched_root()` — any entry
+   that isn't `/data/watched` itself or a descendant of it returns `422
+   {"error": "not_available_in_docker", ...}` immediately, without
+   calling `update_source_config()` at all; a value *within* the mount
+   is accepted and proceeds normally — the running app still can't mount
+   a *new* host folder into itself, only Docker Compose can, at
+   container-start, but a subset of what's already mounted is genuinely
+   pickable (reversed from the original "fully fixed" design the same
+   day, once testing showed the blanket rejection was stricter than the
+   real constraint required — see DECISIONS.md, 2026-09-02). Every other
    field in the same payload is unaffected by this check. Otherwise:
    `config/settings.py::update_source_config()` — writes
    `LOCAL_FILES_WATCH_DIRS`/`NOTION_PAGE_IDS`/
-   `CALENDAR_DATE_RANGE_START`/`_END`/etc. to `config/.env` via
-   `python-dotenv`'s `set_key()` (rewrites just those lines in place,
-   leaving every other line/comment untouched), only the given fields (a
-   partial update); a `ConfigError` (file I/O failure) maps to 500 via the
-   shared handler
-3. Both return `{"local_files_watch_dirs": [...], "notion_page_ids": [...],
+   `CALENDAR_DATE_RANGE_START`/`_END`/`BROWSER_HISTORY_PATH`/etc. to
+   `config/.env` via `python-dotenv`'s `set_key()` (rewrites just those
+   lines in place, leaving every other line/comment untouched), only the
+   given fields (a partial update); a `ConfigError` (file I/O failure)
+   maps to 500 via the shared handler. `browser_history_path` had no
+   update path at all before issue #92's guided setup wizard — previously
+   only settable by hand in `config/.env`, unlike every other field here
+   (see DECISIONS.md, 2026-09-02)
+3. Both return `{"local_files_watch_dirs": [...],
+   "available_watch_directories": [...], "notion_page_ids": [...],
    "github_repos": [...], "gmail_date_range_start"/"_end",
    "github_date_range_start"/"_end", "calendar_date_range_start"/"_end",
-   "running_in_docker": bool}` — the last field tells the frontend which
-   Local Files UI to render (editable + Browse vs. read-only list, see
-   `SettingsPanel.jsx` below)
+   "browser_history_path": str | null, "running_in_docker": bool}` — the
+   last two fields tell the frontend which Local Files UI to render
+   (editable + Browse vs. a checkbox picker over
+   `available_watch_directories`, see `SettingsPanel.jsx` below)
 4. `extractors/notion.py::extract_new_items()` reads
    `notion_page_ids_list` on its next run: non-empty means fetch exactly
    those pages by id (`client.pages.retrieve()`) instead of the
@@ -1210,6 +1244,116 @@ reverse full-database wipe. See DECISIONS.md, 2026-08-30.
    `app.state.collection` fresh each time, so this swap is what keeps
    them from hitting a stale/deleted collection
 4. Returns `{"status": "reset"}` on full success
+
+---
+
+## Entry point: `/api/setup/*` (`api/routes/setup.py`)
+
+Extension beyond `docs/API_Specification.docx` — the guided first-run
+setup wizard, issue #92. Google OAuth (phase 1) and credential
+validate/save (phase 2) are both backend-complete; the frontend wizard
+shell itself, and local files/browser history, are not built yet. See
+DECISIONS.md, 2026-09-02 (both entries).
+
+1. `POST /setup/google/oauth/start` — request body validated against
+   `api/schemas.py::GoogleOAuthStartRequest` (`client_id`, `client_secret`).
+   Builds `redirect_uri` from the *inbound request itself*
+   (`request.url_for("google_oauth_callback_route")`) — correct for
+   whatever host/port this request actually arrived on, dev or Docker,
+   with nothing to configure separately. Calls
+   `agent/google_oauth.py::start_authorization()` (thin wrapper over
+   `extractors/google_oauth.py`, the real implementation — see that
+   module's own docstring for why the real logic can't live in `agent/`):
+   saves the credentials to `config/.env`
+   (`config/settings.py::update_google_oauth_config()`), builds the
+   Google consent URL via `google_auth_oauthlib.flow.Flow` (requesting
+   both Gmail-readonly and Calendar-readonly scopes in one screen — see
+   DECISIONS.md), and tracks the pending flow in-memory keyed by its
+   `state`. Returns `{"authorization_url": str}` — the wizard opens this
+   in a new tab/popup, it doesn't navigate there itself.
+
+   **Branch point**: empty/malformed credentials or a Google-side
+   rejection raise `GoogleOAuthError`, mapped by `api/main.py`'s
+   dedicated handler to `400` (bad input, never this server's fault) —
+   distinct from every other unregistered exception's `500`.
+
+2. `GET /setup/google/oauth/callback` (registered as
+   `name="google_oauth_callback_route"`, so `request.url_for()` above can
+   resolve it) — Google's own redirect target, hit by the user's browser
+   navigating there directly, never by the frontend's `fetch()` calls.
+   Always returns HTML (`_callback_page()`, a tiny inline template), not
+   JSON, regardless of outcome, since there's no JSON-consuming caller on
+   this request. **Branch points**, in order: a `?error=...` query param
+   (user denied consent) → failure page immediately; a missing `state` →
+   failure page; otherwise calls
+   `agent/google_oauth.py::complete_authorization(state, authorization_response=str(request.url))`
+   — looks up the pending flow by `state` (a stale/forged/already-used
+   callback raises `GoogleOAuthError`, rendered as a failure page, not a
+   500, since `GoogleOAuthError` is caught directly in this route rather
+   than left to propagate), exchanges the code via
+   `Flow.fetch_token()`, and writes the resulting credentials to
+   `extractors/google_oauth.py::token_path()`
+   (`data/google_oauth_token.json` — a Docker-volume-backed path, see
+   DECISIONS.md issue #52). Success renders a plain "connected, close
+   this tab" page.
+
+3. `GET /setup/google/oauth/status` → `agent/google_oauth.py::is_connected()`
+   (a cheap on-disk check — does the shared token file exist) → `{"connected": bool}`.
+   Polled by the wizard's own tab while the popup from step 1 is open,
+   since the actual callback in step 2 lands in that separate tab/window,
+   not the one the wizard itself is running in.
+
+4. `extractors/gmail.py`'s/`extractors/calendar.py`'s own
+   `_get_credentials()` read this same shared token
+   (`extractors/google_oauth.py::load_credentials()`) as their first
+   choice on every later ingestion run, falling back to each extractor's
+   own older, separate per-service token file if the guided flow was
+   never completed — see the `scheduler/daily_batch.py` entry point above
+   and DECISIONS.md, 2026-09-02.
+
+5. `POST /setup/validate` — request body validated against
+   `api/schemas.py::SetupValidateRequest` (`source`: one of
+   `"openrouter"`/`"notion"`/`"github"`, `value`: the raw pasted
+   credential). Dispatches to `agent/connection_check.py`'s
+   `openrouter_key_works()`/`notion_key_works()`/`github_token_works()` —
+   each makes one real, cheap API call with the *given* value directly,
+   never reading from or writing to `config/.env` at all. Returns
+   `{"status": "ok"|"error", "detail": str}`. See DECISIONS.md, 2026-09-02
+   ("Validate-before-save credentials..."), including the dispatch-dict
+   bug found and fixed there (must resolve the validator function by
+   plain name at call time, not through a dict built once at import
+   time, or a test's monkeypatch on that name silently has no effect).
+
+6. `POST /setup/credentials` — request body validated against
+   `api/schemas.py::SetupCredentialsRequest` (`notion_api_key`,
+   `github_token`, `openrouter_api_key`, all optional). Calls
+   `config/settings.py::update_credentials_config()` — the first update
+   endpoint these three credentials have ever had; previously only
+   editable by hand in `config/.env`. Does no validation of its own — the
+   wizard always calls step 5 first and only reaches this on a confirmed
+   `"ok"` result. Returns `{"status": "updated"}`; a `ConfigError` maps to
+   `500` via the shared handler.
+
+7. `GET /setup/host-data-files` → `agent/mounted_files.py::list_host_data_files()`
+   — lists every file under the fixed `/host-data` mount (matching
+   `docker-compose.yml`'s own `HOST_DATA_DIR` bind mount exactly, not
+   derived from settings), `/host-data`-relative POSIX-style paths,
+   capped at 500. Always `[]` outside Docker, where `/host-data` doesn't
+   exist. Returns `{"files": [...]}` — lets the wizard's browser-history
+   step show a real pick list under Docker instead of asking the user to
+   type an in-container path blind; outside Docker, an empty list means
+   the wizard falls back to a plain text input for the real host path.
+   See DECISIONS.md, 2026-09-02 ("Browser history gets an update
+   endpoint; local files stays fixed under Docker").
+
+   **Note on local files under Docker**: this was originally left fully
+   read-only (no new endpoint at all), then reversed the same day once
+   testing showed the real constraint only forbids mounting a *new* host
+   folder at runtime, not narrowing to a subset of what's already
+   mounted — see `GET`/`PUT /api/settings/sources` above
+   (`available_watch_directories`, `is_within_watched_root()`) and
+   DECISIONS.md, 2026-09-02 ("Local files gets a real picker under
+   Docker after all").
 
 ---
 
@@ -1466,13 +1610,32 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    with manually pasted paths rather than replacing them, then calls
    `saveScopeTextarea()` explicitly — a path picked this way never fires
    the textarea's own `onBlur`, since the user never focused it — see
-   DECISIONS.md, 2026-08-30 and 2026-09-01. **Branch point**: when
-   `sources.running_in_docker` is true (see `GET /api/settings/sources`
-   above), "Local folders to watch" renders read-only instead — a plain
-   list built from the same `watchDirsText` state, no "Browse…" button, no
-   editable textarea, with a hint pointing at `HOST_WATCH_DIR` + restarting
-   the stack as the way to actually change it (see DECISIONS.md,
-   2026-09-02). The "Data Ingestion" section also renders the
+   DECISIONS.md, 2026-08-30 and 2026-09-01.
+
+   `getSourceConfig()`'s own result is kept in a dedicated `sourceConfig`
+   state (populated once on mount, alongside `sources`/`settings`/
+   `connections`) — this state didn't exist before 2026-09-02: the
+   Docker-mode branch below had been reading `sources.running_in_docker`/
+   `sources.available_watch_directories` instead, but `sources` actually
+   holds `getSourcesStatus()`'s result (the last ingestion run's
+   outcome), not `getSourceConfig()`'s — both fields were always
+   `undefined` there, a real, shipped bug caught only by testing against
+   a live Docker container, not by reading the code (see DECISIONS.md,
+   2026-09-02, "`config/.env` had to become a real bind mount").
+
+   **Branch point**: when `sourceConfig.running_in_docker` is true, "Local
+   folders to watch" renders a checkbox picker instead of the Browse
+   button + free-text textarea — one checkbox per
+   `sourceConfig.available_watch_directories` entry, checked against
+   `linesToList(watchDirsText)`; toggling one calls the same
+   `saveScopeTextarea()` used elsewhere, with an explicit `listOverride`
+   (the newly-toggled list) so the write goes out immediately rather than
+   waiting for a textarea's `onBlur` that no longer exists in this mode.
+   The backend accepts any subset of what's mounted and rejects anything
+   outside it (see `PUT /api/settings/sources` above) — this was
+   originally fully read-only with no picker at all, reversed the same
+   day (see DECISIONS.md, 2026-09-02, "Local files gets a real picker
+   under Docker after all"). The "Data Ingestion" section also renders the
    `ingestionStatus` prop (from `App.jsx`, see above), when non-null, as a
    "Started at HH:MM:SS" line plus a progress bar — an indeterminate
    sliding-segment animation while `status === "running"` (no known total
