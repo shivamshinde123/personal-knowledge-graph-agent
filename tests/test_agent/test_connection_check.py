@@ -23,6 +23,19 @@ def reset_cache(monkeypatch):
     monkeypatch.setattr(connection_check_module, "_cache_time", None)
 
 
+@pytest.fixture(autouse=True)
+def no_shared_google_token_by_default(monkeypatch):
+    """Never let these tests see this machine's own real shared token file.
+
+    _check_gmail()/_check_calendar() both also treat the guided setup
+    wizard's shared token as "configured" (see DECISIONS.md, issue #92) —
+    defaulting this to False keeps every existing GMAIL_CREDENTIALS_PATH/
+    GOOGLE_CALENDAR_CREDENTIALS_PATH-focused test's behavior unchanged;
+    the dedicated tests for the new path override this explicitly.
+    """
+    monkeypatch.setattr("agent.google_oauth.is_connected", lambda: False)
+
+
 def fake_env(
     *,
     watch_dirs=(),
@@ -239,6 +252,37 @@ class TestCheckGmail:
         assert gmail.status == "error"
         assert "revoked" in gmail.detail
 
+    def test_the_guided_wizards_shared_token_also_counts_as_configured(
+        self, monkeypatch
+    ):
+        # No GMAIL_CREDENTIALS_PATH at all -- only the wizard's shared
+        # token exists, which must still be enough to proceed to the real
+        # live check rather than reporting "not_configured".
+        patch_settings(monkeypatch, fake_env(gmail_credentials_path=None))
+        monkeypatch.setattr("agent.google_oauth.is_connected", lambda: True)
+        monkeypatch.setattr("extractors.gmail._get_credentials", lambda: object())
+
+        class FakeProfile:
+            def execute(self):
+                return {"emailAddress": "me@example.com"}
+
+        class FakeUsers:
+            def getProfile(self, userId):
+                return FakeProfile()
+
+        class FakeService:
+            def users(self):
+                return FakeUsers()
+
+        monkeypatch.setattr(
+            "extractors.gmail._build_service", lambda creds: FakeService()
+        )
+
+        results = check_all_connections()
+
+        gmail = next(r for r in results if r.source_type == "gmail")
+        assert gmail.status == "ok"
+
 
 class TestCheckGitHub:
     def test_no_token_is_not_configured(self, monkeypatch):
@@ -365,6 +409,34 @@ class TestCheckCalendar:
         calendar = next(r for r in results if r.source_type == "calendar")
         assert calendar.status == "error"
         assert "revoked" in calendar.detail
+
+    def test_the_guided_wizards_shared_token_also_counts_as_configured(
+        self, monkeypatch
+    ):
+        patch_settings(monkeypatch, fake_env(google_calendar_credentials_path=None))
+        monkeypatch.setattr("agent.google_oauth.is_connected", lambda: True)
+        monkeypatch.setattr("extractors.calendar._get_credentials", lambda: object())
+
+        class FakeCalendarListGet:
+            def execute(self):
+                return {"id": "primary"}
+
+        class FakeCalendarList:
+            def get(self, calendarId):
+                return FakeCalendarListGet()
+
+        class FakeService:
+            def calendarList(self):
+                return FakeCalendarList()
+
+        monkeypatch.setattr(
+            "extractors.calendar._build_service", lambda creds: FakeService()
+        )
+
+        results = check_all_connections()
+
+        calendar = next(r for r in results if r.source_type == "calendar")
+        assert calendar.status == "ok"
 
 
 class TestGetConnectionStatus:

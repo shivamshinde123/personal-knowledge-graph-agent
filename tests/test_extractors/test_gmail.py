@@ -372,3 +372,49 @@ class TestConnectionCheckHelpers:
 
         assert callable(_build_service)
         assert callable(_get_credentials)
+
+
+class TestGetCredentials:
+    """Shared-token-first-then-fallback behavior for _get_credentials().
+
+    The guided setup wizard's shared token is tried first, falling back
+    to this extractor's own older, separate per-service token file.
+    """
+
+    def test_uses_the_shared_token_when_the_guided_flow_completed(self, monkeypatch):
+        shared_creds = object()
+        monkeypatch.setattr(
+            "extractors.google_oauth.load_credentials", lambda: shared_creds
+        )
+
+        from extractors.gmail import _get_credentials
+
+        assert _get_credentials() is shared_creds
+
+    def test_falls_back_to_the_per_service_token_when_no_shared_token(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setattr("extractors.google_oauth.load_credentials", lambda: None)
+        monkeypatch.setattr(
+            "extractors.gmail._token_path", lambda: tmp_path / "missing.json"
+        )
+
+        from extractors.gmail import _get_credentials
+
+        with pytest.raises(ExtractorError, match="not authorized yet"):
+            _get_credentials()
+
+    def test_a_shared_token_error_is_wrapped_as_extractor_error(self, monkeypatch):
+        from extractors.google_oauth import GoogleOAuthError
+
+        def raise_oauth_error():
+            raise GoogleOAuthError("revoked")
+
+        monkeypatch.setattr(
+            "extractors.google_oauth.load_credentials", raise_oauth_error
+        )
+
+        from extractors.gmail import _get_credentials
+
+        with pytest.raises(ExtractorError, match="revoked"):
+            _get_credentials()

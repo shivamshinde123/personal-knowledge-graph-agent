@@ -1066,16 +1066,18 @@ See DECISIONS.md, 2026-08-29.
    (configured path/dir exists and is reachable); `notion` — a real,
    cheap Notion API call (`Client(auth=...).users.me()`) if
    `NOTION_API_KEY` is set; `gmail` — a real, cheap Gmail API call
-   (`users().getProfile()`) using the cached OAuth token if
-   `GMAIL_CREDENTIALS_PATH` is set; `github` — a real, cheap GitHub API
-   call (`GET /user`) if `GITHUB_TOKEN` is set; `calendar` — a real,
+   (`users().getProfile()`) using the cached OAuth token if either
+   `GMAIL_CREDENTIALS_PATH` is set **or** the guided setup wizard's shared
+   Google token exists (`agent/google_oauth.py::is_connected()` — see
+   DECISIONS.md, 2026-09-02, issue #92); `github` — a real, cheap GitHub
+   API call (`GET /user`) if `GITHUB_TOKEN` is set; `calendar` — a real,
    cheap Calendar API call (`calendarList().get(calendarId="primary")`)
-   using the cached OAuth token if `GOOGLE_CALENDAR_CREDENTIALS_PATH` is
-   set. For the two OAuth sources (Gmail, Calendar), "not yet authorized"
-   (the one-time `setup_auth()` step hasn't been run) reports
-   `"not_configured"`, not an error, since nothing is actually broken;
-   any other failure (revoked token, unreachable API) reports `"error"`
-   — see DECISIONS.md, 2026-08-30
+   using the cached OAuth token, same either-path "configured" check as
+   Gmail (`GOOGLE_CALENDAR_CREDENTIALS_PATH` or the shared wizard token).
+   For the two OAuth sources (Gmail, Calendar), "not yet authorized" (no
+   token via either path yet) reports `"not_configured"`, not an error,
+   since nothing is actually broken; any other failure (revoked token,
+   unreachable API) reports `"error"` — see DECISIONS.md, 2026-08-30
 4. Returns `{"connections": [{"source_type", "status", "detail",
    "checked_at"}, ...]}`, `status` one of `"ok"` / `"error"` /
    `"not_configured"`
@@ -1210,6 +1212,71 @@ reverse full-database wipe. See DECISIONS.md, 2026-08-30.
    `app.state.collection` fresh each time, so this swap is what keeps
    them from hitting a stale/deleted collection
 4. Returns `{"status": "reset"}` on full success
+
+---
+
+## Entry point: `POST`/`GET /api/setup/google/oauth/*` (`api/routes/setup.py`)
+
+Extension beyond `docs/API_Specification.docx` — the guided first-run
+setup wizard, issue #92, phase 1 (Google OAuth only — every other wizard
+step is still a thin shell around `api/routes/settings.py`/
+`api/routes/sources.py`, not built yet). See DECISIONS.md, 2026-09-02.
+
+1. `POST /setup/google/oauth/start` — request body validated against
+   `api/schemas.py::GoogleOAuthStartRequest` (`client_id`, `client_secret`).
+   Builds `redirect_uri` from the *inbound request itself*
+   (`request.url_for("google_oauth_callback_route")`) — correct for
+   whatever host/port this request actually arrived on, dev or Docker,
+   with nothing to configure separately. Calls
+   `agent/google_oauth.py::start_authorization()` (thin wrapper over
+   `extractors/google_oauth.py`, the real implementation — see that
+   module's own docstring for why the real logic can't live in `agent/`):
+   saves the credentials to `config/.env`
+   (`config/settings.py::update_google_oauth_config()`), builds the
+   Google consent URL via `google_auth_oauthlib.flow.Flow` (requesting
+   both Gmail-readonly and Calendar-readonly scopes in one screen — see
+   DECISIONS.md), and tracks the pending flow in-memory keyed by its
+   `state`. Returns `{"authorization_url": str}` — the wizard opens this
+   in a new tab/popup, it doesn't navigate there itself.
+
+   **Branch point**: empty/malformed credentials or a Google-side
+   rejection raise `GoogleOAuthError`, mapped by `api/main.py`'s
+   dedicated handler to `400` (bad input, never this server's fault) —
+   distinct from every other unregistered exception's `500`.
+
+2. `GET /setup/google/oauth/callback` (registered as
+   `name="google_oauth_callback_route"`, so `request.url_for()` above can
+   resolve it) — Google's own redirect target, hit by the user's browser
+   navigating there directly, never by the frontend's `fetch()` calls.
+   Always returns HTML (`_callback_page()`, a tiny inline template), not
+   JSON, regardless of outcome, since there's no JSON-consuming caller on
+   this request. **Branch points**, in order: a `?error=...` query param
+   (user denied consent) → failure page immediately; a missing `state` →
+   failure page; otherwise calls
+   `agent/google_oauth.py::complete_authorization(state, authorization_response=str(request.url))`
+   — looks up the pending flow by `state` (a stale/forged/already-used
+   callback raises `GoogleOAuthError`, rendered as a failure page, not a
+   500, since `GoogleOAuthError` is caught directly in this route rather
+   than left to propagate), exchanges the code via
+   `Flow.fetch_token()`, and writes the resulting credentials to
+   `extractors/google_oauth.py::token_path()`
+   (`data/google_oauth_token.json` — a Docker-volume-backed path, see
+   DECISIONS.md issue #52). Success renders a plain "connected, close
+   this tab" page.
+
+3. `GET /setup/google/oauth/status` → `agent/google_oauth.py::is_connected()`
+   (a cheap on-disk check — does the shared token file exist) → `{"connected": bool}`.
+   Polled by the wizard's own tab while the popup from step 1 is open,
+   since the actual callback in step 2 lands in that separate tab/window,
+   not the one the wizard itself is running in.
+
+4. `extractors/gmail.py`'s/`extractors/calendar.py`'s own
+   `_get_credentials()` read this same shared token
+   (`extractors/google_oauth.py::load_credentials()`) as their first
+   choice on every later ingestion run, falling back to each extractor's
+   own older, separate per-service token file if the guided flow was
+   never completed — see the `scheduler/daily_batch.py` entry point above
+   and DECISIONS.md, 2026-09-02.
 
 ---
 

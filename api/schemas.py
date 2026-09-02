@@ -317,3 +317,33 @@ class GraphResponse(BaseModel):
 
     nodes: list[GraphNodeResponse]
     edges: list[GraphEdgeResponse]
+
+
+class GoogleOAuthStartRequest(BaseModel):
+    """``POST /api/setup/google/oauth/start`` request body.
+
+    Extension beyond ``docs/API_Specification.docx`` — the guided setup
+    wizard (issue #92). Both fields are saved to ``config/.env`` before
+    the authorization URL is built, so a completed connection persists the
+    same way any other credential does.
+    """
+
+    client_id: str
+    client_secret: str
+
+
+class GoogleOAuthStartResponse(BaseModel):
+    """``POST /api/setup/google/oauth/start`` response body."""
+
+    authorization_url: str
+
+
+class GoogleOAuthStatusResponse(BaseModel):
+    """``GET /api/setup/google/oauth/status`` response body.
+
+    Polled by the wizard while its "Connect Google" popup is open, since
+    the actual callback lands in that separate popup/tab, not the
+    wizard's own — see ``frontend/src/components/SetupWizard.jsx``.
+    """
+
+    connected: bool

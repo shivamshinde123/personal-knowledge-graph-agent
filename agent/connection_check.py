@@ -156,11 +156,18 @@ def _check_notion(env: EnvSettings, now: datetime) -> ConnectionStatus:
 
 
 def _check_gmail(env: EnvSettings, now: datetime) -> ConnectionStatus:
-    if env.gmail_credentials_path is None:
+    from agent.google_oauth import is_connected as google_oauth_connected
+
+    # "Configured" via either path: the older per-service file
+    # (GMAIL_CREDENTIALS_PATH + a completed extractors/gmail.py::setup_auth())
+    # or the guided setup wizard's shared Gmail+Calendar token — see
+    # DECISIONS.md, issue #92.
+    if env.gmail_credentials_path is None and not google_oauth_connected():
         return ConnectionStatus(
             source_type="gmail",
             status="not_configured",
-            detail="GMAIL_CREDENTIALS_PATH is not set.",
+            detail="Not connected — connect Google from Settings, or set "
+            "GMAIL_CREDENTIALS_PATH.",
             checked_at=now,
         )
     try:
@@ -235,11 +242,15 @@ def _check_github(env: EnvSettings, now: datetime) -> ConnectionStatus:
 
 
 def _check_calendar(env: EnvSettings, now: datetime) -> ConnectionStatus:
-    if env.google_calendar_credentials_path is None:
+    from agent.google_oauth import is_connected as google_oauth_connected
+
+    # Same "configured via either path" reasoning as _check_gmail() above.
+    if env.google_calendar_credentials_path is None and not google_oauth_connected():
         return ConnectionStatus(
             source_type="calendar",
             status="not_configured",
-            detail="GOOGLE_CALENDAR_CREDENTIALS_PATH is not set.",
+            detail="Not connected — connect Google from Settings, or set "
+            "GOOGLE_CALENDAR_CREDENTIALS_PATH.",
             checked_at=now,
         )
     try:

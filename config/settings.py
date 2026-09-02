@@ -239,6 +239,16 @@ class EnvSettings(BaseSettings):
     github_date_range_start: date | None = None
     github_date_range_end: date | None = None
     google_calendar_credentials_path: Path | None = None
+    # Set by the guided setup wizard (agent/google_oauth.py) as an
+    # alternative to gmail_credentials_path/google_calendar_credentials_path
+    # above — a single Client ID/Secret pair drives one combined
+    # Gmail+Calendar consent screen, with the resulting token shared by
+    # both extractors, rather than a separately downloaded/placed
+    # client_secret.json per service. Both paths are supported side by
+    # side: an existing manual setup using the file-based path keeps
+    # working unchanged. See DECISIONS.md, issue #92.
+    google_oauth_client_id: str | None = None
+    google_oauth_client_secret: str | None = None
     # A window on each event's own start time (Google Calendar API's
     # timeMin/timeMax), not the incremental `since`/`updatedMin` check
     # extract_new_items() already does — the two are independent, ANDed
@@ -620,6 +630,52 @@ def update_source_config(
 
     # Same reasoning as update_llm_config(): only the real default file's
     # write should invalidate the process-wide cache.
+    if path == DEFAULT_ENV_PATH:
+        return reload_settings().env
+    return EnvSettings(_env_file=path)
+
+
+def update_google_oauth_config(
+    *,
+    client_id: str,
+    client_secret: str,
+    path: Path = DEFAULT_ENV_PATH,
+) -> EnvSettings:
+    """Save the guided-setup Google OAuth Client ID/Secret to ``config/.env``.
+
+    Used by ``agent/google_oauth.py::start_authorization()`` — called once
+    per authorization attempt, so re-pasting the same values on a retry is
+    a harmless no-op write. Unlike ``update_source_config()``'s optional
+    fields, both are always required and always written together, since a
+    Client ID with no matching Secret (or vice versa) can never build a
+    valid authorization request.
+
+    Args:
+        client_id: The Desktop-app OAuth Client ID pasted into the wizard.
+        client_secret: The matching OAuth Client Secret.
+        path: Path to the ``.env`` file. Defaults to the real one; passing
+            a different path (tests) writes there instead and leaves the
+            process-wide ``get_settings()`` cache untouched.
+
+    Returns:
+        The freshly reloaded environment settings, read back from ``path``
+        itself rather than assumed from the in-memory update.
+
+    Raises:
+        ConfigError: If the file can't be written to.
+    """
+    from dotenv import set_key
+
+    try:
+        _retry_on_transient_permission_error(
+            lambda: set_key(path, "GOOGLE_OAUTH_CLIENT_ID", client_id)
+        )
+        _retry_on_transient_permission_error(
+            lambda: set_key(path, "GOOGLE_OAUTH_CLIENT_SECRET", client_secret)
+        )
+    except OSError as exc:
+        raise ConfigError(f"Could not write {path}: {exc}") from exc
+
     if path == DEFAULT_ENV_PATH:
         return reload_settings().env
     return EnvSettings(_env_file=path)

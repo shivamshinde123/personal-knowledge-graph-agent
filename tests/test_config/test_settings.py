@@ -16,6 +16,7 @@ from config.settings import (
     get_settings,
     load_config,
     reload_settings,
+    update_google_oauth_config,
     update_llm_config,
     update_source_config,
 )
@@ -639,6 +640,41 @@ class TestUpdateSourceConfig:
 
         assert calls["count"] == 2
         assert [str(p) for p in result.watch_dirs] == [str(anchor_path(Path("/a/b")))]
+
+
+class TestUpdateGoogleOAuthConfig:
+    def test_writes_both_fields(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+
+        result = update_google_oauth_config(
+            client_id="cid-123", client_secret="secret-456", path=env_path
+        )
+
+        assert result.google_oauth_client_id == "cid-123"
+        assert result.google_oauth_client_secret == "secret-456"
+
+    def test_leaves_other_lines_untouched(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+
+        update_google_oauth_config(client_id="cid", client_secret="cs", path=env_path)
+
+        assert "SOME_OTHER_KEY=unchanged" in env_path.read_text(encoding="utf-8")
+
+    def test_a_retry_on_write_updates_both_values(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+
+        update_google_oauth_config(
+            client_id="first", client_secret="first-s", path=env_path
+        )
+        result = update_google_oauth_config(
+            client_id="second", client_secret="second-s", path=env_path
+        )
+
+        assert result.google_oauth_client_id == "second"
+        assert result.google_oauth_client_secret == "second-s"
 
 
 class TestGetSettings:

@@ -29,8 +29,19 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from agent.google_oauth import GoogleOAuthError
 from agent.tracing import enable_tracing
-from api.routes import admin, graph, health, ingest, query, sessions, settings, sources
+from api.routes import (
+    admin,
+    graph,
+    health,
+    ingest,
+    query,
+    sessions,
+    settings,
+    setup,
+    sources,
+)
 from config.settings import PROJECT_ROOT, ConfigError, get_settings
 from providers.base import ProviderError
 from storage.chroma_store import VectorStoreError, get_collection
@@ -109,6 +120,7 @@ def create_app(*, lifespan_fn=lifespan) -> FastAPI:
     app.include_router(ingest.router, prefix="/api")
     app.include_router(graph.router, prefix="/api")
     app.include_router(admin.router, prefix="/api")
+    app.include_router(setup.router, prefix="/api")
     _register_exception_handlers(app)
     return app
 
@@ -118,9 +130,9 @@ def _register_exception_handlers(app: FastAPI) -> None:
 
     Per ``docs/API_Specification.docx`` section 2. The exception *types*
     caught here (``ProviderError``, ``VectorStoreError``, ``GraphStoreError``,
-    ``StorageError``, ``ConfigError``) are imported purely for HTTP status
-    mapping, not to call anything in those layers — this is
-    presentation-layer plumbing done once, here, not business logic
+    ``StorageError``, ``ConfigError``, ``GoogleOAuthError``) are imported
+    purely for HTTP status mapping, not to call anything in those layers —
+    this is presentation-layer plumbing done once, here, not business logic
     scattered across route modules. See ``DECISIONS.md``.
     """
 
@@ -153,6 +165,22 @@ def _register_exception_handlers(app: FastAPI) -> None:
     async def handle_config_error(request: Request, exc: ConfigError) -> JSONResponse:
         return JSONResponse(
             status_code=500, content={"error": "config_error", "detail": str(exc)}
+        )
+
+    @app.exception_handler(GoogleOAuthError)
+    async def handle_google_oauth_error(
+        request: Request, exc: GoogleOAuthError
+    ) -> JSONResponse:
+        # 400, not 500 -- every case this raises (empty/malformed
+        # credentials, a stale/forged callback state, a denied consent) is
+        # bad client input or the far end (Google) rejecting the request,
+        # never this server's own fault. Only ever reached by
+        # POST /api/setup/google/oauth/start -- the callback route itself
+        # catches GoogleOAuthError directly and renders an HTML failure
+        # page instead, since it's hit by a browser navigation, not a
+        # JSON-consuming caller. See api/routes/setup.py.
+        return JSONResponse(
+            status_code=400, content={"error": "google_oauth_error", "detail": str(exc)}
         )
 
     @app.exception_handler(Exception)
