@@ -110,3 +110,110 @@ class TestGoogleOAuthStatus:
         response = client.get("/api/setup/google/oauth/status")
 
         assert response.json() == {"connected": True}
+
+
+class TestValidateCredential:
+    def test_openrouter_ok(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "api.routes.setup.openrouter_key_works",
+            lambda value: (True, "OpenRouter API key verified."),
+        )
+
+        response = client.post(
+            "/api/setup/validate", json={"source": "openrouter", "value": "sk-or-x"}
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "status": "ok",
+            "detail": "OpenRouter API key verified.",
+        }
+
+    def test_notion_error(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "api.routes.setup.notion_key_works",
+            lambda value: (False, "API token is invalid."),
+        )
+
+        response = client.post(
+            "/api/setup/validate", json={"source": "notion", "value": "bad"}
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "status": "error",
+            "detail": "API token is invalid.",
+        }
+
+    def test_github_ok(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "api.routes.setup.github_token_works",
+            lambda value: (True, "GitHub token verified."),
+        )
+
+        response = client.post(
+            "/api/setup/validate", json={"source": "github", "value": "ghp-x"}
+        )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
+
+    def test_never_saves_the_value(self, client, monkeypatch):
+        monkeypatch.setattr(
+            "api.routes.setup.openrouter_key_works", lambda value: (True, "ok")
+        )
+        called = False
+
+        def fail_if_called(**kwargs):
+            nonlocal called
+            called = True
+
+        monkeypatch.setattr(
+            "api.routes.setup.update_credentials_config", fail_if_called
+        )
+
+        client.post("/api/setup/validate", json={"source": "openrouter", "value": "x"})
+
+        assert called is False
+
+    def test_an_invalid_source_returns_422(self, client):
+        response = client.post(
+            "/api/setup/validate", json={"source": "not_a_real_source", "value": "x"}
+        )
+
+        assert response.status_code == 422
+
+
+class TestSaveCredentials:
+    def test_saves_the_given_fields(self, client, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(
+            "api.routes.setup.update_credentials_config",
+            lambda **kwargs: captured.update(kwargs),
+        )
+
+        response = client.post(
+            "/api/setup/credentials",
+            json={"notion_api_key": "ntn-123", "github_token": "ghp-456"},
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "updated"}
+        assert captured == {
+            "notion_api_key": "ntn-123",
+            "github_token": "ghp-456",
+            "openrouter_api_key": None,
+        }
+
+    def test_config_error_is_mapped_to_500(self, client, monkeypatch):
+        from config.settings import ConfigError
+
+        def boom(**kwargs):
+            raise ConfigError("could not write .env")
+
+        monkeypatch.setattr("api.routes.setup.update_credentials_config", boom)
+
+        response = client.post("/api/setup/credentials", json={"notion_api_key": "x"})
+
+        assert response.status_code == 500
+        assert response.json()["error"] == "config_error"

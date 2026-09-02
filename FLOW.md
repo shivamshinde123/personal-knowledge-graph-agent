@@ -1064,16 +1064,23 @@ See DECISIONS.md, 2026-08-29.
 3. `check_all_connections()` checks all six sources, always in the same
    order: `local_file`/`browser_history` — a real filesystem check
    (configured path/dir exists and is reachable); `notion` — a real,
-   cheap Notion API call (`Client(auth=...).users.me()`) if
-   `NOTION_API_KEY` is set; `gmail` — a real, cheap Gmail API call
+   cheap Notion API call (`notion_key_works()` → `Client(auth=...).users.me()`)
+   if `NOTION_API_KEY` is set; `gmail` — a real, cheap Gmail API call
    (`users().getProfile()`) using the cached OAuth token if either
    `GMAIL_CREDENTIALS_PATH` is set **or** the guided setup wizard's shared
    Google token exists (`agent/google_oauth.py::is_connected()` — see
    DECISIONS.md, 2026-09-02, issue #92); `github` — a real, cheap GitHub
-   API call (`GET /user`) if `GITHUB_TOKEN` is set; `calendar` — a real,
-   cheap Calendar API call (`calendarList().get(calendarId="primary")`)
-   using the cached OAuth token, same either-path "configured" check as
-   Gmail (`GOOGLE_CALENDAR_CREDENTIALS_PATH` or the shared wizard token).
+   API call (`github_token_works()` → `GET /user`) if `GITHUB_TOKEN` is
+   set; `calendar` — a real, cheap Calendar API call
+   (`calendarList().get(calendarId="primary")`) using the cached OAuth
+   token, same either-path "configured" check as Gmail
+   (`GOOGLE_CALENDAR_CREDENTIALS_PATH` or the shared wizard token).
+   `notion_key_works()`/`github_token_works()` are standalone, parameterized
+   functions (not inlined in `_check_notion()`/`_check_github()` any
+   more) — the guided setup wizard's `POST /api/setup/validate` calls the
+   same two functions directly, against a pasted-but-not-yet-saved value,
+   before persisting it (see the `/api/setup/*` entry point below,
+   DECISIONS.md, 2026-09-02).
    For the two OAuth sources (Gmail, Calendar), "not yet authorized" (no
    token via either path yet) reports `"not_configured"`, not an error,
    since nothing is actually broken; any other failure (revoked token,
@@ -1215,12 +1222,13 @@ reverse full-database wipe. See DECISIONS.md, 2026-08-30.
 
 ---
 
-## Entry point: `POST`/`GET /api/setup/google/oauth/*` (`api/routes/setup.py`)
+## Entry point: `/api/setup/*` (`api/routes/setup.py`)
 
 Extension beyond `docs/API_Specification.docx` — the guided first-run
-setup wizard, issue #92, phase 1 (Google OAuth only — every other wizard
-step is still a thin shell around `api/routes/settings.py`/
-`api/routes/sources.py`, not built yet). See DECISIONS.md, 2026-09-02.
+setup wizard, issue #92. Google OAuth (phase 1) and credential
+validate/save (phase 2) are both backend-complete; the frontend wizard
+shell itself, and local files/browser history, are not built yet. See
+DECISIONS.md, 2026-09-02 (both entries).
 
 1. `POST /setup/google/oauth/start` — request body validated against
    `api/schemas.py::GoogleOAuthStartRequest` (`client_id`, `client_secret`).
@@ -1277,6 +1285,29 @@ step is still a thin shell around `api/routes/settings.py`/
    own older, separate per-service token file if the guided flow was
    never completed — see the `scheduler/daily_batch.py` entry point above
    and DECISIONS.md, 2026-09-02.
+
+5. `POST /setup/validate` — request body validated against
+   `api/schemas.py::SetupValidateRequest` (`source`: one of
+   `"openrouter"`/`"notion"`/`"github"`, `value`: the raw pasted
+   credential). Dispatches to `agent/connection_check.py`'s
+   `openrouter_key_works()`/`notion_key_works()`/`github_token_works()` —
+   each makes one real, cheap API call with the *given* value directly,
+   never reading from or writing to `config/.env` at all. Returns
+   `{"status": "ok"|"error", "detail": str}`. See DECISIONS.md, 2026-09-02
+   ("Validate-before-save credentials..."), including the dispatch-dict
+   bug found and fixed there (must resolve the validator function by
+   plain name at call time, not through a dict built once at import
+   time, or a test's monkeypatch on that name silently has no effect).
+
+6. `POST /setup/credentials` — request body validated against
+   `api/schemas.py::SetupCredentialsRequest` (`notion_api_key`,
+   `github_token`, `openrouter_api_key`, all optional). Calls
+   `config/settings.py::update_credentials_config()` — the first update
+   endpoint these three credentials have ever had; previously only
+   editable by hand in `config/.env`. Does no validation of its own — the
+   wizard always calls step 5 first and only reaches this on a confirmed
+   `"ok"` result. Returns `{"status": "updated"}`; a `ConfigError` maps to
+   `500` via the shared handler.
 
 ---
 

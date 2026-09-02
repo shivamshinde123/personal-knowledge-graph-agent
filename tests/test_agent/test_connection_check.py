@@ -14,6 +14,9 @@ from agent.connection_check import (
     ConnectionStatus,
     check_all_connections,
     get_connection_status,
+    github_token_works,
+    notion_key_works,
+    openrouter_key_works,
 )
 
 
@@ -493,3 +496,117 @@ class TestGetConnectionStatus:
         get_connection_status(max_age_seconds=300)
 
         assert len(calls) == 1
+
+
+class TestNotionKeyWorks:
+    """Validates a raw, not-yet-saved key directly.
+
+    Used by the guided setup wizard's POST /api/setup/validate, before
+    anything is persisted to config/.env.
+    """
+
+    def test_a_working_key_returns_true(self, monkeypatch):
+        class FakeUsers:
+            def me(self):
+                return {"id": "bot-user"}
+
+        class FakeClient:
+            def __init__(self, auth):
+                self.users = FakeUsers()
+
+        monkeypatch.setattr("notion_client.Client", FakeClient)
+
+        ok, detail = notion_key_works("a-key")
+
+        assert ok is True
+        assert "verified" in detail
+
+    def test_a_bad_key_returns_false(self, monkeypatch):
+        class FakeUsers:
+            def me(self):
+                raise RuntimeError("API token is invalid.")
+
+        class FakeClient:
+            def __init__(self, auth):
+                self.users = FakeUsers()
+
+        monkeypatch.setattr("notion_client.Client", FakeClient)
+
+        ok, detail = notion_key_works("bad-key")
+
+        assert ok is False
+        assert "invalid" in detail
+
+
+class TestGithubTokenWorks:
+    def test_a_working_token_returns_true(self, monkeypatch):
+        import httpx
+
+        def handler(request):
+            return httpx.Response(200, json={"login": "octocat"})
+
+        monkeypatch.setattr(
+            "httpx.get",
+            lambda url, **kwargs: httpx.Client(
+                transport=httpx.MockTransport(handler)
+            ).get(url, **{k: v for k, v in kwargs.items() if k != "timeout"}),
+        )
+
+        ok, detail = github_token_works("a-token")
+
+        assert ok is True
+        assert "verified" in detail
+
+    def test_a_bad_token_returns_false(self, monkeypatch):
+        import httpx
+
+        def handler(request):
+            return httpx.Response(401, json={"message": "Bad credentials"})
+
+        monkeypatch.setattr(
+            "httpx.get",
+            lambda url, **kwargs: httpx.Client(
+                transport=httpx.MockTransport(handler)
+            ).get(url, **{k: v for k, v in kwargs.items() if k != "timeout"}),
+        )
+
+        ok, detail = github_token_works("bad-token")
+
+        assert ok is False
+
+
+class TestOpenrouterKeyWorks:
+    def test_a_working_key_returns_true(self, monkeypatch):
+        import httpx
+
+        def handler(request):
+            return httpx.Response(200, json={"data": {"usage": 0}})
+
+        monkeypatch.setattr(
+            "httpx.get",
+            lambda url, **kwargs: httpx.Client(
+                transport=httpx.MockTransport(handler)
+            ).get(url, **{k: v for k, v in kwargs.items() if k != "timeout"}),
+        )
+
+        ok, detail = openrouter_key_works("a-key")
+
+        assert ok is True
+        assert "verified" in detail
+
+    def test_a_bad_key_returns_false(self, monkeypatch):
+        import httpx
+
+        def handler(request):
+            return httpx.Response(401, json={"error": {"message": "User not found."}})
+
+        monkeypatch.setattr(
+            "httpx.get",
+            lambda url, **kwargs: httpx.Client(
+                transport=httpx.MockTransport(handler)
+            ).get(url, **{k: v for k, v in kwargs.items() if k != "timeout"}),
+        )
+
+        ok, detail = openrouter_key_works("bad-key")
+
+        assert ok is False

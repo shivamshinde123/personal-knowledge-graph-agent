@@ -681,6 +681,67 @@ def update_google_oauth_config(
     return EnvSettings(_env_file=path)
 
 
+def update_credentials_config(
+    *,
+    notion_api_key: str | None = None,
+    github_token: str | None = None,
+    openrouter_api_key: str | None = None,
+    path: Path = DEFAULT_ENV_PATH,
+) -> EnvSettings:
+    """Save Notion/GitHub/OpenRouter credentials to ``config/.env``.
+
+    Before the guided setup wizard (issue #92), these three had no update
+    function at all — the only way to set them was editing ``config/.env``
+    by hand; only source-*scope* fields (``local_files_watch_dirs``,
+    ``notion_page_ids``, date ranges, ...) had one
+    (:func:`update_source_config`). Used by
+    ``POST /api/setup/credentials`` — the wizard validates each value with
+    ``agent/connection_check.py``'s ``notion_key_works()``/
+    ``github_token_works()``/``openrouter_key_works()`` *before* calling
+    this, so a bad credential is never persisted; this function itself
+    doesn't validate anything, it only writes.
+
+    Args:
+        notion_api_key: New Notion integration token, or ``None`` to leave
+            unchanged.
+        github_token: New GitHub personal access token, or ``None`` to
+            leave unchanged.
+        openrouter_api_key: New OpenRouter API key, or ``None`` to leave
+            unchanged.
+        path: Path to the ``.env`` file. Defaults to the real one; passing
+            a different path (tests) writes there instead and leaves the
+            process-wide ``get_settings()`` cache untouched.
+
+    Returns:
+        The freshly reloaded environment settings, read back from ``path``
+        itself rather than assumed from the in-memory update.
+
+    Raises:
+        ConfigError: If the file can't be written to.
+    """
+    from dotenv import set_key
+
+    try:
+        if notion_api_key is not None:
+            _retry_on_transient_permission_error(
+                lambda: set_key(path, "NOTION_API_KEY", notion_api_key)
+            )
+        if github_token is not None:
+            _retry_on_transient_permission_error(
+                lambda: set_key(path, "GITHUB_TOKEN", github_token)
+            )
+        if openrouter_api_key is not None:
+            _retry_on_transient_permission_error(
+                lambda: set_key(path, "OPENROUTER_API_KEY", openrouter_api_key)
+            )
+    except OSError as exc:
+        raise ConfigError(f"Could not write {path}: {exc}") from exc
+
+    if path == DEFAULT_ENV_PATH:
+        return reload_settings().env
+    return EnvSettings(_env_file=path)
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Return the process-wide settings, loading them on first call.

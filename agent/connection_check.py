@@ -127,6 +127,32 @@ def _check_local_files(env: EnvSettings, now: datetime) -> ConnectionStatus:
     )
 
 
+def notion_key_works(api_key: str) -> tuple[bool, str]:
+    """Make a real, cheap Notion API call to check whether ``api_key`` works.
+
+    Extracted from :func:`_check_notion` so the guided setup wizard's
+    ``POST /api/setup/validate`` can check a *pasted, not-yet-saved* key
+    directly — the wizard validates before persisting, per issue #92,
+    rather than saving blind and finding out on the next Settings
+    "Reverify".
+
+    Args:
+        api_key: The token to check — never read from settings here.
+
+    Returns:
+        ``(True, "Notion API token verified.")`` on success, or
+        ``(False, <error detail>)`` on failure.
+    """
+    try:
+        from notion_client import Client
+
+        Client(auth=api_key).users.me()
+    except Exception as exc:
+        logger.warning("Notion connection check failed: %s", exc)
+        return False, str(exc)
+    return True, "Notion API token verified."
+
+
 def _check_notion(env: EnvSettings, now: datetime) -> ConnectionStatus:
     if not env.notion_api_key:
         return ConnectionStatus(
@@ -135,22 +161,11 @@ def _check_notion(env: EnvSettings, now: datetime) -> ConnectionStatus:
             detail="NOTION_API_KEY is not set.",
             checked_at=now,
         )
-    try:
-        from notion_client import Client
-
-        Client(auth=env.notion_api_key).users.me()
-    except Exception as exc:
-        logger.warning("Notion connection check failed: %s", exc)
-        return ConnectionStatus(
-            source_type="notion",
-            status="error",
-            detail=str(exc),
-            checked_at=now,
-        )
+    ok, detail = notion_key_works(env.notion_api_key)
     return ConnectionStatus(
         source_type="notion",
-        status="ok",
-        detail="Notion API token verified.",
+        status="ok" if ok else "error",
+        detail=detail,
         checked_at=now,
     )
 
@@ -205,6 +220,72 @@ def _check_gmail(env: EnvSettings, now: datetime) -> ConnectionStatus:
     )
 
 
+def github_token_works(token: str) -> tuple[bool, str]:
+    """Make a real, cheap GitHub API call to check whether ``token`` works.
+
+    Same "validate a pasted, not-yet-saved value" role as
+    :func:`notion_key_works` — see its docstring.
+
+    Args:
+        token: The token to check — never read from settings here.
+
+    Returns:
+        ``(True, "GitHub token verified.")`` on success, or
+        ``(False, <error detail>)`` on failure.
+    """
+    try:
+        import httpx
+
+        response = httpx.get(
+            "https://api.github.com/user",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+            },
+            timeout=10.0,
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        logger.warning("GitHub connection check failed: %s", exc)
+        return False, str(exc)
+    return True, "GitHub token verified."
+
+
+def openrouter_key_works(api_key: str) -> tuple[bool, str]:
+    """Make a real, free OpenRouter API call to check whether ``api_key`` works.
+
+    Uses OpenRouter's own key-info endpoint (``GET /api/v1/key``) — reports
+    usage/limits for the calling key rather than running an actual
+    (billed) completion, verified directly to return ``401`` for an
+    invalid key and ``200`` for a valid one. There is no existing
+    ``_check_*`` counterpart for this in ``check_all_connections()`` — the
+    LLM provider isn't one of the six ingestion sources that function
+    checks, and ``agent/health.py``'s own ``_check_llm_provider()`` only
+    confirms a provider can be *constructed* (a key is present), never
+    that it actually works. See DECISIONS.md, issue #92.
+
+    Args:
+        api_key: The token to check — never read from settings here.
+
+    Returns:
+        ``(True, "OpenRouter API key verified.")`` on success, or
+        ``(False, <error detail>)`` on failure.
+    """
+    try:
+        import httpx
+
+        response = httpx.get(
+            "https://openrouter.ai/api/v1/key",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=10.0,
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        logger.warning("OpenRouter connection check failed: %s", exc)
+        return False, str(exc)
+    return True, "OpenRouter API key verified."
+
+
 def _check_github(env: EnvSettings, now: datetime) -> ConnectionStatus:
     if not env.github_token:
         return ConnectionStatus(
@@ -213,30 +294,11 @@ def _check_github(env: EnvSettings, now: datetime) -> ConnectionStatus:
             detail="GITHUB_TOKEN is not set.",
             checked_at=now,
         )
-    try:
-        import httpx
-
-        response = httpx.get(
-            "https://api.github.com/user",
-            headers={
-                "Authorization": f"Bearer {env.github_token}",
-                "Accept": "application/vnd.github+json",
-            },
-            timeout=10.0,
-        )
-        response.raise_for_status()
-    except Exception as exc:
-        logger.warning("GitHub connection check failed: %s", exc)
-        return ConnectionStatus(
-            source_type="github",
-            status="error",
-            detail=str(exc),
-            checked_at=now,
-        )
+    ok, detail = github_token_works(env.github_token)
     return ConnectionStatus(
         source_type="github",
-        status="ok",
-        detail="GitHub token verified.",
+        status="ok" if ok else "error",
+        detail=detail,
         checked_at=now,
     )
 

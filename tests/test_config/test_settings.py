@@ -16,6 +16,7 @@ from config.settings import (
     get_settings,
     load_config,
     reload_settings,
+    update_credentials_config,
     update_google_oauth_config,
     update_llm_config,
     update_source_config,
@@ -675,6 +676,45 @@ class TestUpdateGoogleOAuthConfig:
 
         assert result.google_oauth_client_id == "second"
         assert result.google_oauth_client_secret == "second-s"
+
+
+class TestUpdateCredentialsConfig:
+    def test_updates_only_the_given_field(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+
+        result = update_credentials_config(notion_api_key="ntn-123", path=env_path)
+
+        assert result.notion_api_key == "ntn-123"
+        assert result.github_token is None
+        assert result.openrouter_api_key is None
+
+    def test_updates_multiple_fields_at_once(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+
+        result = update_credentials_config(
+            github_token="ghp-456", openrouter_api_key="sk-or-789", path=env_path
+        )
+
+        assert result.github_token == "ghp-456"
+        assert result.openrouter_api_key == "sk-or-789"
+
+    def test_leaves_other_lines_untouched(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("SOME_OTHER_KEY=unchanged\n", encoding="utf-8")
+
+        update_credentials_config(notion_api_key="ntn-123", path=env_path)
+
+        assert "SOME_OTHER_KEY=unchanged" in env_path.read_text(encoding="utf-8")
+
+    def test_no_fields_given_changes_nothing(self, tmp_path):
+        env_path = tmp_path / ".env"
+        env_path.write_text("NOTION_API_KEY=original\n", encoding="utf-8")
+
+        result = update_credentials_config(path=env_path)
+
+        assert result.notion_api_key == "original"
 
 
 class TestGetSettings:

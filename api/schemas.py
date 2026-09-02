@@ -347,3 +347,42 @@ class GoogleOAuthStatusResponse(BaseModel):
     """
 
     connected: bool
+
+
+class SetupValidateRequest(BaseModel):
+    """``POST /api/setup/validate`` request body.
+
+    Validates a *pasted, not-yet-saved* credential against the real API
+    before the wizard persists it — per issue #92, "validated... before
+    letting the user continue (not just saved blind)."
+    """
+
+    source: Literal["openrouter", "notion", "github"]
+    value: str
+
+
+class SetupValidateResponse(BaseModel):
+    """``POST /api/setup/validate`` response body."""
+
+    status: Literal["ok", "error"]
+    detail: str
+
+
+class SetupCredentialsRequest(BaseModel):
+    """``POST /api/setup/credentials`` request body — every field optional.
+
+    Only ever called by the wizard after the matching
+    ``POST /api/setup/validate`` call for that field returned
+    ``status: "ok"`` — this endpoint itself doesn't validate anything, it
+    only writes.
+    """
+
+    notion_api_key: str | None = None
+    github_token: str | None = None
+    openrouter_api_key: str | None = None
+
+
+class SetupCredentialsResponse(BaseModel):
+    """``POST /api/setup/credentials`` response body."""
+
+    status: Literal["updated"]

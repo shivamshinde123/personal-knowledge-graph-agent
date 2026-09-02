@@ -1,12 +1,16 @@
 """Guided setup wizard endpoints — issue #92.
 
-Currently just the Google OAuth (Gmail + Calendar) flow, the one part of
-the wizard needing new backend capability at all — every other step
-(provider mode, cloud credentials, Notion, GitHub, local files, browser
-history) is a thin wizard shell around functionality
-``api/routes/settings.py`` and ``api/routes/sources.py`` already expose.
-See ``agent/google_oauth.py``, ``extractors/google_oauth.py``,
-``DECISIONS.md``.
+The Google OAuth (Gmail + Calendar) flow needed genuinely new backend
+capability (see ``agent/google_oauth.py``, ``extractors/google_oauth.py``).
+Provider mode, Notion, and GitHub are mostly a thin wizard shell around
+functionality ``api/routes/settings.py``/``api/routes/sources.py`` already
+expose — except that, before this module, there was no way to *save*
+``NOTION_API_KEY``/``GITHUB_TOKEN``/``OPENROUTER_API_KEY`` at all (only
+source-scope fields had an update endpoint), and no way to validate a
+credential against the real API *before* saving it, which issue #92
+explicitly asks for. ``POST /setup/validate`` and ``POST /setup/credentials``
+below fill both gaps. Local files and browser history are still
+untouched — tracked separately, same issue.
 """
 
 from __future__ import annotations
@@ -14,13 +18,23 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
+from agent.connection_check import (
+    github_token_works,
+    notion_key_works,
+    openrouter_key_works,
+)
 from agent.google_oauth import GoogleOAuthError, complete_authorization, is_connected
 from agent.google_oauth import start_authorization as start_google_authorization
 from api.schemas import (
     GoogleOAuthStartRequest,
     GoogleOAuthStartResponse,
     GoogleOAuthStatusResponse,
+    SetupCredentialsRequest,
+    SetupCredentialsResponse,
+    SetupValidateRequest,
+    SetupValidateResponse,
 )
+from config.settings import update_credentials_config
 
 router = APIRouter()
 
@@ -111,3 +125,47 @@ def google_oauth_status_route() -> GoogleOAuthStatusResponse:
     happened, since the callback lands in a separate tab/window.
     """
     return GoogleOAuthStatusResponse(connected=is_connected())
+
+
+@router.post("/setup/validate", response_model=SetupValidateResponse)
+def validate_credential_route(payload: SetupValidateRequest) -> SetupValidateResponse:
+    """Check a pasted credential against the real API, before saving it.
+
+    Never touches ``config/.env`` — a raw value in, a real/fake result
+    out. The wizard only calls ``POST /setup/credentials`` once this
+    returns ``status: "ok"``, so a bad credential is never persisted (per
+    issue #92's "validated... before letting the user continue" — not the
+    same as ``PUT /api/settings/sources``, which saves unconditionally).
+    """
+    # Dispatches on the plain module-level names (not a dict built once at
+    # import time, which would capture stale references tests couldn't
+    # monkeypatch) — a plain function reference in a function body is
+    # looked up fresh from this module's namespace on every call.
+    if payload.source == "openrouter":
+        ok, detail = openrouter_key_works(payload.value)
+    elif payload.source == "notion":
+        ok, detail = notion_key_works(payload.value)
+    else:
+        ok, detail = github_token_works(payload.value)
+    return SetupValidateResponse(status="ok" if ok else "error", detail=detail)
+
+
+@router.post("/setup/credentials", response_model=SetupCredentialsResponse)
+def save_credentials_route(
+    payload: SetupCredentialsRequest,
+) -> SetupCredentialsResponse:
+    """Save Notion/GitHub/OpenRouter credentials to ``config/.env``.
+
+    Before this endpoint, none of these three had any way to be set
+    except editing ``config/.env`` by hand — only source-*scope* fields
+    (``PUT /api/settings/sources``) had one. Does no validation of its
+    own; the wizard calls ``POST /setup/validate`` first and only reaches
+    here on a confirmed-good value. A ``ConfigError`` (file I/O failure)
+    maps to 500 via ``api/main.py``'s shared handler.
+    """
+    update_credentials_config(
+        notion_api_key=payload.notion_api_key,
+        github_token=payload.github_token,
+        openrouter_api_key=payload.openrouter_api_key,
+    )
+    return SetupCredentialsResponse(status="updated")
