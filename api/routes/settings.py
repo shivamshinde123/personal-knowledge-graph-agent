@@ -16,6 +16,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from agent.browse import browse_folder
+from agent.mounted_files import is_within_watched_root, list_watched_directories
 from api.schemas import (
     BrowseFolderResponse,
     SettingsResponse,
@@ -81,6 +82,9 @@ def get_source_config_route() -> SourceConfigResponse:
     env = get_settings().env
     return SourceConfigResponse(
         local_files_watch_dirs=[str(d) for d in env.watch_dirs],
+        available_watch_directories=(
+            list_watched_directories() if env.running_in_docker else []
+        ),
         notion_page_ids=env.notion_page_ids_list,
         github_repos=env.github_repos_list,
         gmail_date_range_start=_isoformat(env.effective_gmail_date_range_start),
@@ -105,9 +109,14 @@ def browse_folder_route():
     to PowerShell) — neither holds inside a Docker container, so this
     returns a clear ``422`` instead of attempting the dialog at all when
     ``running_in_docker`` is set (see ``EnvSettings.running_in_docker``'s
-    docstring, ``DECISIONS.md``). Blocks until the dialog is closed
-    otherwise; ``path`` is ``null`` if the user cancelled rather than
-    picking one.
+    docstring, ``DECISIONS.md``). Under Docker, picking *among already-
+    mounted* folders instead goes through
+    ``GET /api/settings/sources``'s ``available_watch_directories`` (see
+    ``agent/mounted_files.py::list_watched_directories()``) — this native
+    dialog can never reach a host path outside what's already mounted
+    regardless of platform, so there's nothing for it to fall back to.
+    Blocks until the dialog is closed otherwise; ``path`` is ``null`` if
+    the user cancelled rather than picking one.
     """
     if get_settings().env.running_in_docker:
         return JSONResponse(
@@ -115,9 +124,10 @@ def browse_folder_route():
             content={
                 "error": "not_available_in_docker",
                 "detail": (
-                    "The folder picker isn't available when running in "
-                    "Docker. Set HOST_WATCH_DIR in your docker-compose "
-                    ".env and restart the stack to change watched folders."
+                    "The native folder picker isn't available when running "
+                    "in Docker. Pick from the already-mounted folders "
+                    "instead, or set HOST_WATCH_DIR in your docker-compose "
+                    ".env and restart the stack to mount a different one."
                 ),
             },
         )
@@ -128,27 +138,35 @@ def browse_folder_route():
 def put_source_config_route(payload: SourceConfigUpdateRequest):
     """Update the source-scope configuration; a ``ConfigError`` maps to 500.
 
-    ``local_files_watch_dirs`` is rejected with a ``422`` while
-    ``running_in_docker`` is set — it's a fixed, volume-backed container
-    path in that mode, not something the running app can change on its own
-    (see ``SourceConfigResponse``'s docstring). Every other field is
-    unaffected by this check.
+    Under ``running_in_docker``, ``local_files_watch_dirs`` can be
+    narrowed to any subset of what's already mounted at ``/data/watched``
+    (see ``agent/mounted_files.py::list_watched_directories()``), but a
+    path outside that mount is rejected with a ``422`` — the running app
+    still can't mount a *new* host folder into itself, only Docker
+    Compose can, at container-start (see ``SourceConfigResponse``'s
+    docstring, DECISIONS.md, issue #92). Every other field is unaffected
+    by this check.
     """
     if (
         payload.local_files_watch_dirs is not None
         and get_settings().env.running_in_docker
     ):
-        return JSONResponse(
-            status_code=422,
-            content={
-                "error": "not_available_in_docker",
-                "detail": (
-                    "local_files_watch_dirs can't be changed while running "
-                    "in Docker. Set HOST_WATCH_DIR in your docker-compose "
-                    ".env and restart the stack instead."
-                ),
-            },
-        )
+        escaping = [
+            d for d in payload.local_files_watch_dirs if not is_within_watched_root(d)
+        ]
+        if escaping:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": "not_available_in_docker",
+                    "detail": (
+                        "These paths aren't under the mounted /data/watched "
+                        f"folder: {', '.join(escaping)}. To watch a "
+                        "different host folder entirely, set HOST_WATCH_DIR "
+                        "in your docker-compose .env and restart the stack."
+                    ),
+                },
+            )
     env = update_source_config(
         local_files_watch_dirs=payload.local_files_watch_dirs,
         notion_page_ids=payload.notion_page_ids,
@@ -163,6 +181,9 @@ def put_source_config_route(payload: SourceConfigUpdateRequest):
     )
     return SourceConfigResponse(
         local_files_watch_dirs=[str(d) for d in env.watch_dirs],
+        available_watch_directories=(
+            list_watched_directories() if env.running_in_docker else []
+        ),
         notion_page_ids=env.notion_page_ids_list,
         github_repos=env.github_repos_list,
         gmail_date_range_start=_isoformat(env.effective_gmail_date_range_start),
