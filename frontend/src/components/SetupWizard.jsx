@@ -13,6 +13,14 @@ import {
 } from "../api/client.js";
 import { useConfirm } from "../hooks/useConfirm.jsx";
 
+/** "a\nb\n\nc" -> ["a", "b", "c"] — one entry per non-blank line. */
+function linesToList(text) {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
 // "openrouter" only appears when Cloud mode is picked on the provider
 // step — see visibleSteps() below. Every step after "provider" is
 // individually optional (no source is required — see CLAUDE.md); "Skip"
@@ -161,6 +169,18 @@ function SetupWizard({ onClose, onTriggerIngestion, onResetAll, onError }) {
   const [isBrowsing, setIsBrowsing] = useState(false);
   const [browserHistoryPath, setBrowserHistoryPath] = useState("");
   const [hostDataFiles, setHostDataFiles] = useState([]);
+  // Scope/date-range filters — the same fields SettingsPanel.jsx already
+  // exposes, added here after the fact (see DECISIONS.md) so the wizard
+  // covers the full first-run setup for these three sources, not just
+  // their credentials.
+  const [notionPageIdsText, setNotionPageIdsText] = useState("");
+  const [githubReposText, setGithubReposText] = useState("");
+  const [githubDateStart, setGithubDateStart] = useState("");
+  const [githubDateEnd, setGithubDateEnd] = useState("");
+  const [gmailDateStart, setGmailDateStart] = useState("");
+  const [gmailDateEnd, setGmailDateEnd] = useState("");
+  const [calendarDateStart, setCalendarDateStart] = useState("");
+  const [calendarDateEnd, setCalendarDateEnd] = useState("");
 
   const [isFinishing, setIsFinishing] = useState(false);
   const [confirm, confirmDialog] = useConfirm();
@@ -177,6 +197,14 @@ function SetupWizard({ onClose, onTriggerIngestion, onResetAll, onError }) {
         setSourceConfig(sourceConfigResult);
         setWatchDirs(sourceConfigResult.local_files_watch_dirs);
         setBrowserHistoryPath(sourceConfigResult.browser_history_path ?? "");
+        setNotionPageIdsText(sourceConfigResult.notion_page_ids.join("\n"));
+        setGithubReposText(sourceConfigResult.github_repos.join("\n"));
+        setGithubDateStart(sourceConfigResult.github_date_range_start ?? "");
+        setGithubDateEnd(sourceConfigResult.github_date_range_end ?? "");
+        setGmailDateStart(sourceConfigResult.gmail_date_range_start ?? "");
+        setGmailDateEnd(sourceConfigResult.gmail_date_range_end ?? "");
+        setCalendarDateStart(sourceConfigResult.calendar_date_range_start ?? "");
+        setCalendarDateEnd(sourceConfigResult.calendar_date_range_end ?? "");
         setGoogle((g) => ({ ...g, connected: googleStatus.connected }));
         if (sourceConfigResult.running_in_docker) {
           getSetupHostDataFiles()
@@ -361,6 +389,26 @@ function SetupWizard({ onClose, onTriggerIngestion, onResetAll, onError }) {
     );
   }
 
+  /** Save one of the scope textareas (Notion page IDs, GitHub repos) on blur. */
+  async function saveScopeField(apiKey, setText, text) {
+    try {
+      const result = await putSourceConfig({ [apiKey]: linesToList(text) });
+      setText(result[apiKey].join("\n"));
+    } catch (error) {
+      onError(`Could not save: ${error.message}`);
+    }
+  }
+
+  /** Save one of the six Gmail/GitHub/Calendar date-range fields on blur. */
+  async function saveDateField(apiKey, setValue, value) {
+    try {
+      const result = await putSourceConfig({ [apiKey]: value });
+      setValue(result[apiKey] ?? "");
+    } catch (error) {
+      onError(`Could not save: ${error.message}`);
+    }
+  }
+
   async function handleSaveBrowserHistoryPath(value) {
     setBrowserHistoryPath(value);
     if (value === (sourceConfig?.browser_history_path ?? "")) return;
@@ -480,9 +528,102 @@ function SetupWizard({ onClose, onTriggerIngestion, onResetAll, onError }) {
         );
 
       case "openrouter":
+        return renderCredentialStep("openrouter");
+
       case "notion":
+        return (
+          <>
+            {renderCredentialStep("notion")}
+            <div className="wizard-step-body">
+              <label className="wizard-field-label" htmlFor="wizard-notion-page-ids">
+                Page scope (optional)
+              </label>
+              <p className="settings-field-hint">
+                One page or database ID per line. Leave empty to ingest every
+                page the integration can see.
+              </p>
+              <textarea
+                id="wizard-notion-page-ids"
+                className="source-scope-textarea"
+                rows={2}
+                value={notionPageIdsText}
+                onChange={(event) => setNotionPageIdsText(event.target.value)}
+                onBlur={(event) =>
+                  saveScopeField(
+                    "notion_page_ids",
+                    setNotionPageIdsText,
+                    event.target.value,
+                  )
+                }
+                placeholder="e.g. 1a2b3c4d5e6f7890abcd1234ef567890"
+              />
+            </div>
+          </>
+        );
+
       case "github":
-        return renderCredentialStep(currentStepId);
+        return (
+          <>
+            {renderCredentialStep("github")}
+            <div className="wizard-step-body">
+              <label className="wizard-field-label" htmlFor="wizard-github-repos">
+                Repository scope (optional)
+              </label>
+              <p className="settings-field-hint">
+                One <code>owner/repo</code> per line. Leave empty to ingest
+                every repository the token can access.
+              </p>
+              <textarea
+                id="wizard-github-repos"
+                className="source-scope-textarea"
+                rows={2}
+                value={githubReposText}
+                onChange={(event) => setGithubReposText(event.target.value)}
+                onBlur={(event) =>
+                  saveScopeField(
+                    "github_repos",
+                    setGithubReposText,
+                    event.target.value,
+                  )
+                }
+                placeholder="e.g. octocat/hello-world"
+              />
+              <label className="wizard-field-label">Date range (optional)</label>
+              <div className="date-range-fields">
+                <label>
+                  From
+                  <input
+                    type="date"
+                    value={githubDateStart}
+                    onChange={(event) => setGithubDateStart(event.target.value)}
+                    onBlur={(event) =>
+                      saveDateField(
+                        "github_date_range_start",
+                        setGithubDateStart,
+                        event.target.value,
+                      )
+                    }
+                  />
+                </label>
+                <label>
+                  To
+                  <input
+                    type="date"
+                    value={githubDateEnd}
+                    onChange={(event) => setGithubDateEnd(event.target.value)}
+                    onBlur={(event) =>
+                      saveDateField(
+                        "github_date_range_end",
+                        setGithubDateEnd,
+                        event.target.value,
+                      )
+                    }
+                  />
+                </label>
+              </div>
+            </div>
+          </>
+        );
 
       case "google":
         return (
@@ -548,6 +689,83 @@ function SetupWizard({ onClose, onTriggerIngestion, onResetAll, onError }) {
                 )}
               </>
             )}
+            <label className="wizard-field-label">
+              Gmail date range (optional)
+            </label>
+            <p className="settings-field-hint">
+              Defaults to the last 15 days when left empty.
+            </p>
+            <div className="date-range-fields">
+              <label>
+                From
+                <input
+                  type="date"
+                  value={gmailDateStart}
+                  onChange={(event) => setGmailDateStart(event.target.value)}
+                  onBlur={(event) =>
+                    saveDateField(
+                      "gmail_date_range_start",
+                      setGmailDateStart,
+                      event.target.value,
+                    )
+                  }
+                />
+              </label>
+              <label>
+                To
+                <input
+                  type="date"
+                  value={gmailDateEnd}
+                  onChange={(event) => setGmailDateEnd(event.target.value)}
+                  onBlur={(event) =>
+                    saveDateField(
+                      "gmail_date_range_end",
+                      setGmailDateEnd,
+                      event.target.value,
+                    )
+                  }
+                />
+              </label>
+            </div>
+            <label className="wizard-field-label">
+              Calendar date range (optional)
+            </label>
+            <p className="settings-field-hint">
+              Defaults to today through 30 days out (upcoming events) when
+              left empty.
+            </p>
+            <div className="date-range-fields">
+              <label>
+                From
+                <input
+                  type="date"
+                  value={calendarDateStart}
+                  onChange={(event) => setCalendarDateStart(event.target.value)}
+                  onBlur={(event) =>
+                    saveDateField(
+                      "calendar_date_range_start",
+                      setCalendarDateStart,
+                      event.target.value,
+                    )
+                  }
+                />
+              </label>
+              <label>
+                To
+                <input
+                  type="date"
+                  value={calendarDateEnd}
+                  onChange={(event) => setCalendarDateEnd(event.target.value)}
+                  onBlur={(event) =>
+                    saveDateField(
+                      "calendar_date_range_end",
+                      setCalendarDateEnd,
+                      event.target.value,
+                    )
+                  }
+                />
+              </label>
+            </div>
           </div>
         );
 
@@ -676,6 +894,16 @@ function SetupWizard({ onClose, onTriggerIngestion, onResetAll, onError }) {
               any time to add more sources or change how the agent's
               powered.
             </p>
+            {sourceConfig?.running_in_docker && (
+              <p className="settings-field-hint">
+                One thing this wizard can't set: where SQLite/Chroma's data
+                lives — that's a one-time deploy decision made via{" "}
+                <code>HOST_STORAGE_DIR</code> in the host's own{" "}
+                <code>.env</code> next to <code>docker-compose.yml</code>,
+                before the stack was first started. See the README's
+                Docker section if you want to change it.
+              </p>
+            )}
           </div>
         );
 

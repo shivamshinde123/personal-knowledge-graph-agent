@@ -966,11 +966,17 @@ entry points above/below it. See DECISIONS.md, 2026-09-02.
 2. `backend` and `scheduler` are the **same built image**
    (`docker/backend.Dockerfile`) with different `command`s —
    `python -m api.main` vs. `python -m scheduler.loop` — sharing one
-   `app_data` named volume (`/app/data`, holding both the SQLite db and
-   Chroma's persist dir) so either process's writes are visible to the
-   other, the same "share the filesystem" relationship a manual dev
-   setup's foreground backend process and spawned `daily_batch`
-   subprocess already have
+   real host folder bind-mounted to `/app/data` (holding both the SQLite
+   db and Chroma's persist dir), set via `HOST_STORAGE_DIR` in the
+   root-level `.env` (defaults to `./docker/storage`) — a real, inspectable
+   host directory rather than a Docker-managed named volume, so either
+   process's writes are visible to the other (the same "share the
+   filesystem" relationship a manual dev setup's foreground backend
+   process and spawned `daily_batch` subprocess already have) and the
+   user can point it at a different drive/folder without any in-app
+   support, since there's nothing to narrow at runtime the way local
+   files' own scope is — see DECISIONS.md, 2026-09-02 ("SQLite/Chroma
+   storage location under Docker")
 3. Both bind-mount the real `./config` directory (`- ./config:/app/config`),
    not `env_file:` — verified directly that `env_file:` breaks every
    runtime settings write silently (it injects each key as a frozen OS
@@ -999,9 +1005,14 @@ entry points above/below it. See DECISIONS.md, 2026-09-02.
 6. Two separate `.env` files are in play, deliberately: the root-level one
    (`.env.docker.example` → `.env`) is read only by `docker compose`
    itself to fill in `${VARS}` in `docker-compose.yml` (`NEO4J_PASSWORD`,
-   `HOST_WATCH_DIR`, `HOST_DATA_DIR`, published ports); `config/.env` is
-   the application's own configuration, identical in shape to a manual
-   dev setup's
+   `HOST_STORAGE_DIR`, `HOST_WATCH_DIR`, `HOST_DATA_DIR`, published
+   ports) — every one of these now has a working default (`NEO4J_PASSWORD`
+   included, see DECISIONS.md, 2026-09-02 ("Neo4j gets a default
+   password")), so `docker compose up -d --build` needs no `.env` editing
+   at all to start; `config/.env` is the application's own configuration,
+   identical in shape to a manual dev setup's, and — per the guided setup
+   wizard (`SetupWizard.jsx`, see the `frontend/` entry point below) —
+   no longer needs hand-editing either
 
 ---
 
@@ -1696,13 +1707,22 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    - The OpenRouter/Notion/GitHub steps share one `renderCredentialStep()`
      path: `postSetupValidate(source, value)` first, `postSetupCredentials()`
      only on a confirmed `"ok"`, mirroring `api/routes/setup.py`'s own
-     "validate before save" contract exactly.
+     "validate before save" contract exactly. The Notion/GitHub steps also
+     render their source's scope field(s) below the credential
+     (`notion_page_ids`; `github_repos` plus its date range) via
+     `putSourceConfig()`, same endpoint/fields `SettingsPanel.jsx` uses —
+     added after the fact, since the first version of this wizard only
+     covered credentials and left scope/date filters out entirely.
    - The Google step calls `postGoogleOAuthStart()`, opens the returned
      `authorization_url` in a real popup (`window.open`), then polls
      `getGoogleOAuthStatus()` every 2s (60 attempts max) until it reports
      connected or the popup is closed — the actual token exchange lands
      in the popup's own navigation to `GET /setup/google/oauth/callback`,
-     never a response this tab receives directly.
+     never a response this tab receives directly. Below the connect
+     button, it also renders the Gmail and Calendar date-range fields
+     (`putSourceConfig()`, same fields/defaults as `SettingsPanel.jsx`)
+     regardless of connection state, since they're meaningful to set
+     ahead of actually connecting.
    - The local-files and browser-history steps reuse
      `SettingsPanel.jsx`'s own Docker-vs-not branching
      (`sourceConfig.running_in_docker`, `available_watch_directories`,
@@ -1710,7 +1730,12 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    - The final step's "Run ingestion now" calls the same
      `onTriggerIngestion` prop `App.jsx` gives `SettingsPanel.jsx`, so the
      resulting toast/progress display behaves identically to triggering
-     it from Settings directly.
+     it from Settings directly. Under Docker, it also shows a one-line
+     note pointing at `HOST_STORAGE_DIR` for SQLite/Chroma's storage
+     location — the one piece of setup this wizard can't cover, since
+     it's a deploy-time `docker-compose.yml` decision, not a runtime one
+     (see DECISIONS.md, 2026-09-02, "SQLite/Chroma storage location under
+     Docker").
 6. `Toasts.jsx` — a pure display component: renders whichever
    `{id, kind, text}` entries are in `App.jsx`'s `toasts` state as a
    fixed top-right stack, each auto-removed after 7 seconds

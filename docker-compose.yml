@@ -9,16 +9,25 @@
 # least NEO4J_PASSWORD, then `docker compose up -d`. See README.md's
 # Docker section for the full walkthrough.
 #
-# What this does NOT do yet: guide a first-run user through connecting
-# sources (API keys, Gmail/Calendar OAuth) -- that's issue #92, deliberately
-# scoped out of this round. Until then, config/.env still needs filling in
-# by hand the same way a manual dev setup does, then mounted in below.
+# A guided setup wizard (issue #92) now covers connecting sources (API
+# keys, Gmail/Calendar OAuth, local files, browser history) from the
+# frontend itself once the stack is up -- config/.env no longer needs
+# hand-editing for any of that, though it's still mounted in below and
+# stays the real on-disk source of truth for it all. See DECISIONS.md.
 
 services:
   neo4j:
     image: neo4j:5-community
     environment:
-      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in .env}
+      # Defaults rather than requiring NEO4J_PASSWORD before first launch --
+      # true one-command start. This is a known default sitting in a public
+      # repo, so it's only as safe as this app's existing "no auth layer,
+      # single-user, local-only" posture already assumes (see CLAUDE.md) --
+      # change it in .env (and re-run `docker compose up -d`) if this
+      # machine is ever reachable from a shared/untrusted network, since
+      # HOST_NEO4J_HTTP_PORT/HOST_NEO4J_BOLT_PORT below publish to every
+      # host interface by default, not just 127.0.0.1. See DECISIONS.md.
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-pkg-agent-local}
     volumes:
       - neo4j_data:/data
     ports:
@@ -71,7 +80,18 @@ services:
       OLLAMA_HOST: http://ollama:11434
       FASTAPI_PORT: 8080
     volumes:
-      - app_data:/app/data
+      # A real host folder, not a Docker-managed named volume -- lets
+      # HOST_STORAGE_DIR (in the host's own .env, next to this file) point
+      # SQLite/Chroma's data at wherever the operator wants it, same idea
+      # as HOST_WATCH_DIR below. Defaults to ./docker/storage (git-tracked
+      # via a .gitkeep, its actual contents gitignored) so the out-of-the-
+      # box behavior needs no extra configuration -- Docker creates the
+      # host directory automatically on first `up` if it doesn't exist
+      # yet. There is no in-app picker for this one (unlike local files'
+      # own): a storage location is a single, once-at-deploy decision with
+      # nothing to narrow *within*, not a runtime choice among several
+      # already-mounted subfolders. See DECISIONS.md.
+      - ${HOST_STORAGE_DIR:-./docker/storage}:/app/data
       # A real bind mount of the whole config/ directory, not `env_file:`
       # and not a single-file mount of just .env -- both were tried and
       # verified directly to fail:
@@ -129,8 +149,9 @@ services:
       NEO4J_URI: bolt://neo4j:7687
       OLLAMA_HOST: http://ollama:11434
     volumes:
-      - app_data:/app/data
-      # Same real bind mount as backend's own -- see its comment above.
+      # Same real host-folder bind mount as backend's own -- see its
+      # comment above.
+      - ${HOST_STORAGE_DIR:-./docker/storage}:/app/data
       - ./config:/app/config
       - ${HOST_WATCH_DIR:-./docker/empty}:/data/watched:ro
       - ${HOST_DATA_DIR:-./docker/empty}:/host-data:ro
@@ -155,8 +176,10 @@ services:
     restart: unless-stopped
 
 volumes:
-  # SQLite db + Chroma persist dir, both under one volume (matches the
-  # single `data/` directory a manual dev setup already uses).
-  app_data:
+  # SQLite/Chroma no longer use a named volume -- see HOST_STORAGE_DIR
+  # above. Neo4j/Ollama stay on named volumes; the same host-folder
+  # treatment for those isn't in scope here (Neo4j's own data format
+  # isn't meant to be poked at directly on the host the way a SQLite file
+  # or Chroma's on-disk collection safely can be).
   neo4j_data:
   ollama_data:
