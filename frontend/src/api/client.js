@@ -188,4 +188,62 @@ export function getSessionHistory(sessionId) {
   return request(`/sessions/${encodeURIComponent(sessionId)}`);
 }
 
+/**
+ * Save the pasted Google OAuth Client ID/Secret and get back the consent
+ * screen URL to open in a popup. Extension beyond API_Specification.docx
+ * (issue #92's guided setup wizard) — see DECISIONS.md.
+ * @param {string} clientId
+ * @param {string} clientSecret
+ */
+export function postGoogleOAuthStart(clientId, clientSecret) {
+  return request("/setup/google/oauth/start", {
+    method: "POST",
+    body: JSON.stringify({ client_id: clientId, client_secret: clientSecret }),
+  });
+}
+
+/**
+ * Polled while the "Connect Google" popup is open — the popup itself lands
+ * on the real OAuth callback, so this is how the wizard's own tab learns
+ * the connection succeeded.
+ */
+export function getGoogleOAuthStatus() {
+  return request("/setup/google/oauth/status");
+}
+
+/**
+ * Check a pasted credential against the real API before saving it — never
+ * touches config/.env. The wizard only calls postSetupCredentials() once
+ * this returns status: "ok".
+ * @param {"openrouter" | "notion" | "github"} source
+ * @param {string} value
+ */
+export function postSetupValidate(source, value) {
+  return request("/setup/validate", {
+    method: "POST",
+    body: JSON.stringify({ source, value }),
+  });
+}
+
+/**
+ * Save Notion/GitHub/OpenRouter credentials to config/.env. Does no
+ * validation of its own — call postSetupValidate() first.
+ * @param {{notion_api_key?: string, github_token?: string, openrouter_api_key?: string}} payload
+ */
+export function postSetupCredentials(payload) {
+  return request("/setup/credentials", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Files under the Docker /host-data mount, for a real pick list when
+ * setting BROWSER_HISTORY_PATH under Docker. Always {files: []} outside
+ * Docker — the wizard falls back to a plain text input in that case.
+ */
+export function getSetupHostDataFiles() {
+  return request("/setup/host-data-files");
+}
+
 export { ApiError };

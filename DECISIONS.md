@@ -8,6 +8,70 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-09-02 — Two bugs found running the real Docker stack end-to-end (not just the manual dev backend)
+
+**Context**: The wizard/picker work up to this point had only been verified against a manually-run `uv run python -m api.main` backend, never a real `docker compose up` stack. Running the actual stack surfaced two real bugs neither unit tests nor the manual-backend testing could have caught.
+
+**Bug 1 — Neo4j auth failure on first boot**: `config/.env`'s own `NEO4J_PASSWORD` (what the backend app uses to *connect* to Neo4j, via `env.neo4j_password`) and the root `.env`'s `NEO4J_PASSWORD` (what initializes the Neo4j *server* itself, via `NEO4J_AUTH`) are two separate files with the same variable name — nothing kept them in sync. A `config/.env` left over from earlier manual-dev testing had a stale password that didn't match what the Neo4j container was actually initialized with, so the backend failed to start with `Unauthorized`. **Fix**: `docker-compose.yml` now overrides `NEO4J_USER`/`NEO4J_PASSWORD` in the backend/scheduler containers' `environment:` block from the exact same `${NEO4J_PASSWORD:-pkg-agent-local}` expression the `neo4j` service itself uses — the same treatment `NEO4J_URI` already got, for the same reason (anything that must match container-to-container can't be left to `config/.env`, which is oriented around user-facing, wizard-writable settings).
+
+**Bug 2 — Browser-history radio button never showed as selected**: `agent/mounted_files.py::list_watched_directories()` (local files) returns full, ready-to-use container paths (`/data/watched/project-a`), but `list_host_data_files()` (browser history) returns paths *relative* to `/host-data` (`"History"`) — an inconsistency between the two functions' contracts that `SetupWizard.jsx` didn't account for. It compared the saved full path against the bare filename for the radio's `checked` state (always false) and saved the bare filename itself (an unusable, incomplete path) on click — found live by clicking it and seeing nothing visibly select. **Fix**: the wizard now reconstructs `/host-data/${file}` itself before using it for both the `checked` comparison and the saved value.
+
+**Also fixed**: `docker/storage/` (the new `HOST_STORAGE_DIR` default) drops files beyond just `pkg_agent.db`/`chroma/` (e.g. `backend_port.txt`) that weren't covered by the existing `*.db`/`chroma/` `.gitignore` patterns — added a `docker/storage/*` / `!docker/storage/.gitkeep` pair so the whole directory's generated contents are covered generically rather than relying on that pattern list staying exhaustive.
+
+**Affects**: `docker-compose.yml`, `frontend/src/components/SetupWizard.jsx`, `.gitignore`.
+
+---
+
+## 2026-09-02 — Google OAuth needed `OAUTHLIB_INSECURE_TRANSPORT=1` for the guided flow to work at all
+
+**Context**: Found by actually walking through the wizard's Google step live — `POST /setup/google/oauth/callback`'s token exchange failed every time with `Google authorization failed: (insecure_transport) OAuth 2 MUST utilize https.` `oauthlib` (underneath `google-auth-oauthlib`'s `Flow`) refuses to exchange a code against any redirect/callback URL that isn't `https://`, unless `OAUTHLIB_INSECURE_TRANSPORT` is set — checked directly in `oauthlib.oauth2.rfc6749.utils.is_secure_transport()`, which has no built-in exception for `localhost`/`127.0.0.1` despite that being oauthlib's own most common real-world case. This app's callback (`GET /api/setup/google/oauth/callback`) is *always* plain `http://` — a manual dev setup's `127.0.0.1:PORT`, or whatever host:port Docker publishes — since nothing in this system ever terminates TLS anywhere.
+
+**Decision**: `extractors/google_oauth.py` sets `os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")` at import time. Safe specifically because of this app's own already-locked-in posture (`CLAUDE.md`: "single-user, local-only... no authentication layer, by design") — the callback never crosses a network boundary this system doesn't already trust by that same design, and this is the standard, widely-documented workaround Google's own client library issues recommend for exactly this local-development scenario. Not something that would be appropriate for a multi-tenant or publicly-deployed service, which this deliberately isn't.
+
+**Affects**: `extractors/google_oauth.py`.
+
+---
+
+## 2026-09-02 — SQLite/Chroma storage location under Docker: a deploy-time `.env` var, not an in-app field
+
+**Context**: Asked directly — since this project ships as Docker-only, could the wizard let a user pick where SQLite/Chroma's data lives? Before this, `docker-compose.yml` stored both under a Docker-managed named volume (`app_data:/app/data`), invisible on the host filesystem and not pointed anywhere the user chooses.
+
+**Decision**: Not an in-app field at all — unlike local files' own picker (`available_watch_directories`, see the "Local files gets a real picker under Docker after all" entry below), there's nothing to *narrow* here at runtime; storage location is a single decision made once, before the containers ever start, so it belongs in the same place `NEO4J_PASSWORD`/`HOST_WATCH_DIR` already live: the root `.env` `docker compose` itself reads. Added `HOST_STORAGE_DIR` there, bind-mounted to `/app/data` in both `backend` and `scheduler`, replacing the `app_data` named volume — defaults to a git-tracked `./docker/storage` folder (empty but for a `.gitkeep`; its real contents already covered by the existing `data`/`*.db`/`chroma/` `.gitignore` patterns) so the out-of-the-box behavior needs no extra configuration, while making the data genuinely inspectable on the host instead of hidden inside a Docker volume. Changing it later does not migrate existing data — same "you move the files, we don't" convention already used for `LOCAL_FILES_WATCH_DIRS`/`BROWSER_HISTORY_PATH`. The wizard's final step adds a one-line informational note pointing at this (Docker mode only), not an editable field.
+
+**Alternatives considered**: An in-app "browse for a folder" step, matching local files' — rejected, since (unlike local files, which narrows an already-mounted tree) there is no already-mounted candidate set to choose from; the running container fundamentally cannot mount a *new* arbitrary host path at runtime, the same root constraint local files hit before its own picker was added, except here there's no "subset of what's already mounted" available to fall back to either.
+
+**Affects**: `docker-compose.yml`, `.env.docker.example`, `docker/storage/.gitkeep` (new), `README.md`'s Docker section, `frontend/src/components/SetupWizard.jsx`'s Done step.
+
+---
+
+## 2026-09-02 — Neo4j gets a default password instead of requiring one before first launch
+
+**Context**: Asked directly — should `NEO4J_PASSWORD` keep hard-failing (`docker-compose.yml`'s `${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in .env}`) until the user sets it, or default to something so `docker compose up -d --build` genuinely needs zero `.env` editing?
+
+**Decision**: Defaults to a fixed value (`pkg-agent-local`) rather than requiring one. A known default sitting in a public repo is a real (if small) exposure — `docker-compose.yml`'s `ports:` mapping for Neo4j publishes to every host interface by default, not just `127.0.0.1`, so a machine on a shared/untrusted network is genuinely reachable — but this app already carries that same exposure for everything else in the stack (the backend API, the frontend, and every other port here are equally unauthenticated and equally published), per its own locked-in "no authentication layer, single-user, local-only" design. Requiring a password specifically for Neo4j while every other port stays wide open wouldn't add real defense, only friction — asked the user directly rather than deciding this alone, given it's a genuine (if small) security trade-off, not a pure implementation detail. Documented in both `docker-compose.yml` and `.env.docker.example`: change it (or bind ports to `127.0.0.1`) if this machine is ever on a shared network.
+
+**Alternatives considered**: Auto-generating a random password on first run — rejected for now as more moving parts than the trade-off justifies (`docker compose` itself can't generate and persist a value into its own `.env` before the containers start; it would need a separate wrapper script this project doesn't otherwise have a place for).
+
+**Affects**: `docker-compose.yml`, `.env.docker.example`.
+
+---
+
+## 2026-09-02 — Guided setup wizard (issue #92, phase 4) — launched from a button, not shown automatically
+
+**Context**: The last remaining piece of issue #92 — a multi-step UI (`frontend/src/components/SetupWizard.jsx`) tying together provider mode, Google (Gmail + Calendar) OAuth, Notion/GitHub/OpenRouter credentials, local files, and browser history into one linear flow. All the backend endpoints it needed already existed from phases 1-3 (`POST /setup/google/oauth/*`, `POST /setup/validate`, `POST /setup/credentials`, `GET /setup/host-data-files`) plus the existing `/settings`/`/settings/sources` endpoints — this phase is pure frontend, no new backend surface.
+
+**Decision**: The wizard is launched from a "Guided setup" button in `SettingsPanel.jsx`'s header, not shown automatically on first run. There is no "is this a first run" signal anywhere on the backend (no `setup_complete` flag, nothing) to key an auto-popup off of, and inventing one just for this would be new backend surface for a fairly small UX win — an unprompted modal covering the whole screen on every load of an *already-configured* install (the far more common case after day one) would be a worse default than a clearly visible, discoverable button. If a real "first run" concept is ever added for another reason, revisit auto-showing the wizard then.
+
+Every step past "provider" (Google/Notion/GitHub/OpenRouter/local files/browser history) is individually skippable with no confirmation — no data source is required by design (see `CLAUDE.md`), and the wizard doubles as a "review my setup" flow on revisit (it pre-fills every step from whatever's already saved/connected), not just a one-time onboarding gate.
+
+**Provider-mode switch inside the wizard**: reuses the same "switching wipes all data" warning and `onResetAll()` call `SettingsPanel.jsx` uses, but with a single confirm rather than Settings' own two-consecutive-confirms "critical" treatment. Settings' extra friction exists because that switch is usually happening against a system with real, already-ingested data at stake; the wizard's typical context is a still-empty install where a lighter single confirm is enough — the same underlying safeguard (nothing switches without an explicit yes, and a decline reverts the pick) without stacking two dialogs for a lower-stakes moment. Only triggers `onResetAll()` at all if the picked mode actually differs from what's currently saved — picking the mode already active is a silent no-op, same as everywhere else in Settings.
+
+**Google OAuth polling**: identical pattern to the wizard's own dependency, `agent/google_oauth.py`'s popup-based flow — `postGoogleOAuthStart()` opens a real popup on Google's consent screen, and the wizard's own tab polls `GET /setup/google/oauth/status` every 2s (capped at 60 attempts, ~2 minutes) since the actual token exchange lands in the popup's callback navigation, not a `fetch()` response this tab ever sees directly. Also stops polling early if the popup was closed without connecting, rather than spinning silently to the full timeout.
+
+**Affects**: `frontend/src/components/SetupWizard.jsx` (new), `frontend/src/components/SettingsPanel.jsx` (new `onOpenWizard` prop + button), `frontend/src/App.jsx` (owns `showWizard` state, passes the same `onTriggerIngestion`/`onResetAll` handlers it already gives `SettingsPanel`), `frontend/src/api/client.js` (new thin wrappers: `postGoogleOAuthStart`, `getGoogleOAuthStatus`, `postSetupValidate`, `postSetupCredentials`, `getSetupHostDataFiles` — all calling endpoints `api/routes/setup.py` already exposed), `frontend/src/index.css` (`.wizard-*` rules, reusing `.confirm-dialog-*`/`.radio-option`/`.watch-dir-picker` styling rather than duplicating it).
+
+---
+
 ## 2026-09-02 — `config/.env` had to become a real bind mount — every runtime settings write was silently no-op under Docker
 
 **Context**: Found while manually verifying the local-files picker (see the entry directly below) against a real `docker compose up` stack — not by reasoning about the code, by actually testing it. `docker-compose.yml` used `env_file: - config/.env` to get the host's credentials into the `backend`/`scheduler` containers. Docker's `env_file:` injects **every key** in that file as a real OS environment variable, frozen at container-start. `EnvSettings` (`pydantic-settings`) always prefers a real environment variable over the same key's value in its own `env_file=` dotenv file. Put together: **any** value that existed in `config/.env` when the container started could never be changed at runtime by this app's own code again — not just `LOCAL_FILES_WATCH_DIRS`, but every single field this session's guided-setup-wizard work (issues #52/#92, all three phases) added a write path for: Notion/GitHub/OpenRouter credentials (`update_credentials_config()`), the Google OAuth Client ID/Secret (`update_google_oauth_config()`), and `browser_history_path`/`local_files_watch_dirs` (`update_source_config()`). Every one of those writes would succeed (write to `/app/config/.env` inside the container, an ephemeral, container-local file distinct from the host's real one, since `env_file:` never creates a live link back to the host file) and then be completely invisible to the running process, forever, for the container's lifetime — confirmed directly: a `PUT`, followed immediately by a `GET` in the same request cycle, returned the pre-write value.

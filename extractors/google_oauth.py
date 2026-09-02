@@ -52,11 +52,27 @@ same as not needing to survive one).
 
 from __future__ import annotations
 
+import os
+
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 
 from config.settings import PROJECT_ROOT, update_google_oauth_config
+
+# oauthlib refuses to exchange a code against a non-https redirect/callback
+# URL (`insecure_transport`) unless this is set — and this app's callback
+# (`GET /api/setup/google/oauth/callback`, api/routes/setup.py) is always
+# plain http, on 127.0.0.1/localhost for a manual dev setup or on whatever
+# host:port docker-compose.yml publishes for Docker, neither of which get
+# TLS. Safe here specifically because this whole system is a single-user,
+# local-only tool with no authentication layer by design (see CLAUDE.md) —
+# the redirect never crosses a network boundary this app itself doesn't
+# already trust. Set at import time (not just before this module's own
+# Flow calls) so it also covers anything else in-process that touches
+# oauthlib, though nothing else in this codebase currently does. See
+# DECISIONS.md.
+os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
 
 _SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",

@@ -1651,6 +1651,105 @@ a {
   background: #f2f2f2;
 }
 
+/* ---- Setup wizard (issue #92, phase 4) ----
+ * Reuses .confirm-dialog-cancel/.confirm-dialog-confirm for its footer
+ * buttons and .radio-option/.watch-dir-picker/.settings-field-hint from
+ * elsewhere in Settings, rather than duplicating that styling here. */
+
+.wizard-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.wizard-dialog {
+  width: 100%;
+  max-width: 560px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+  padding: 24px;
+}
+
+.wizard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.wizard-header h2 {
+  margin: 4px 0 0;
+  color: var(--text-h);
+}
+
+.wizard-step-count {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.wizard-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+  min-height: 80px;
+}
+
+.wizard-field-label {
+  font-size: 13px;
+  color: var(--text-h);
+  margin-top: 4px;
+}
+
+.wizard-inline-button {
+  align-self: flex-start;
+}
+
+.wizard-picked-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wizard-picked-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: monospace;
+  font-size: 13px;
+}
+
+.wizard-footer {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 24px;
+}
+
+.wizard-footer-right {
+  display: flex;
+  gap: 8px;
+}
+
 /* ---- Ingestion progress ---- */
 
 .ingestion-progress {

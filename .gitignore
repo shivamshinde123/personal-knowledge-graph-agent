@@ -17,6 +17,13 @@ data/
 *.sqlite3
 chroma/
 .chroma/
+# docker/storage/ (HOST_STORAGE_DIR's default -- see docker-compose.yml)
+# holds the same real data plus whatever else the running container drops
+# there (e.g. backend_port.txt) -- *.db/chroma/ above already cover the
+# two data files specifically, but ignore everything in the directory
+# generically too rather than relying on that staying an exhaustive list.
+docker/storage/*
+!docker/storage/.gitkeep
 
 # --- Python --------------------------------------------------------------
 .venv/

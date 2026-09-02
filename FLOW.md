@@ -966,11 +966,17 @@ entry points above/below it. See DECISIONS.md, 2026-09-02.
 2. `backend` and `scheduler` are the **same built image**
    (`docker/backend.Dockerfile`) with different `command`s —
    `python -m api.main` vs. `python -m scheduler.loop` — sharing one
-   `app_data` named volume (`/app/data`, holding both the SQLite db and
-   Chroma's persist dir) so either process's writes are visible to the
-   other, the same "share the filesystem" relationship a manual dev
-   setup's foreground backend process and spawned `daily_batch`
-   subprocess already have
+   real host folder bind-mounted to `/app/data` (holding both the SQLite
+   db and Chroma's persist dir), set via `HOST_STORAGE_DIR` in the
+   root-level `.env` (defaults to `./docker/storage`) — a real, inspectable
+   host directory rather than a Docker-managed named volume, so either
+   process's writes are visible to the other (the same "share the
+   filesystem" relationship a manual dev setup's foreground backend
+   process and spawned `daily_batch` subprocess already have) and the
+   user can point it at a different drive/folder without any in-app
+   support, since there's nothing to narrow at runtime the way local
+   files' own scope is — see DECISIONS.md, 2026-09-02 ("SQLite/Chroma
+   storage location under Docker")
 3. Both bind-mount the real `./config` directory (`- ./config:/app/config`),
    not `env_file:` — verified directly that `env_file:` breaks every
    runtime settings write silently (it injects each key as a frozen OS
@@ -980,12 +986,20 @@ entry points above/below it. See DECISIONS.md, 2026-09-02.
    itself (`python-dotenv`'s atomic rename needs its temp file and the
    target on the same mount point). See DECISIONS.md, 2026-09-02 ("`config/.env`
    had to become a real bind mount"). A compose-level `environment:`
-   block overrides only `SQLITE_DB_PATH`/`CHROMA_PERSIST_DIR`/`NEO4J_URI`/
-   `OLLAMA_HOST`/`RUNNING_IN_DOCKER`/`FASTAPI_PORT`, since those must
-   point in-container/in-network rather than at the host; everything
-   else in `config/.env` (credentials, `LOCAL_FILES_WATCH_DIRS`,
-   `BROWSER_HISTORY_PATH`, ...) stays live-writable through the normal
-   `PUT`/`POST` endpoints, with writes landing on the real host file
+   block overrides `SQLITE_DB_PATH`/`CHROMA_PERSIST_DIR`/`NEO4J_URI`/
+   `NEO4J_USER`/`NEO4J_PASSWORD`/`OLLAMA_HOST`/`RUNNING_IN_DOCKER`/
+   `FASTAPI_PORT`, since those must point in-container/in-network rather
+   than at the host — `NEO4J_USER`/`NEO4J_PASSWORD` specifically read from
+   the exact same `${NEO4J_PASSWORD:-pkg-agent-local}` expression the
+   `neo4j` service's own `NEO4J_AUTH` does, found necessary live: a stale
+   `config/.env`-only `NEO4J_PASSWORD` (left over from manual-dev testing)
+   silently stopped matching whatever the Neo4j container was actually
+   initialized with, since Neo4j only applies `NEO4J_AUTH` on a volume's
+   first-ever start (see DECISIONS.md, 2026-09-02, "Two bugs found running
+   the real Docker stack end-to-end"). Everything else in `config/.env`
+   (credentials, `LOCAL_FILES_WATCH_DIRS`, `BROWSER_HISTORY_PATH`, ...)
+   stays live-writable through the normal `PUT`/`POST` endpoints, with
+   writes landing on the real host file
 4. `ollama` only starts when the `local-llm` Compose profile is active
    (`--profile local-llm`, or `COMPOSE_PROFILES=local-llm` in the
    root-level `.env`) — irrelevant, and skipped, under
@@ -999,9 +1013,14 @@ entry points above/below it. See DECISIONS.md, 2026-09-02.
 6. Two separate `.env` files are in play, deliberately: the root-level one
    (`.env.docker.example` → `.env`) is read only by `docker compose`
    itself to fill in `${VARS}` in `docker-compose.yml` (`NEO4J_PASSWORD`,
-   `HOST_WATCH_DIR`, `HOST_DATA_DIR`, published ports); `config/.env` is
-   the application's own configuration, identical in shape to a manual
-   dev setup's
+   `HOST_STORAGE_DIR`, `HOST_WATCH_DIR`, `HOST_DATA_DIR`, published
+   ports) — every one of these now has a working default (`NEO4J_PASSWORD`
+   included, see DECISIONS.md, 2026-09-02 ("Neo4j gets a default
+   password")), so `docker compose up -d --build` needs no `.env` editing
+   at all to start; `config/.env` is the application's own configuration,
+   identical in shape to a manual dev setup's, and — per the guided setup
+   wizard (`SetupWizard.jsx`, see the `frontend/` entry point below) —
+   no longer needs hand-editing either
 
 ---
 
@@ -1250,10 +1269,12 @@ reverse full-database wipe. See DECISIONS.md, 2026-08-30.
 ## Entry point: `/api/setup/*` (`api/routes/setup.py`)
 
 Extension beyond `docs/API_Specification.docx` — the guided first-run
-setup wizard, issue #92. Google OAuth (phase 1) and credential
-validate/save (phase 2) are both backend-complete; the frontend wizard
-shell itself, and local files/browser history, are not built yet. See
-DECISIONS.md, 2026-09-02 (both entries).
+setup wizard, issue #92. All four phases are complete: Google OAuth
+(phase 1), credential validate/save (phase 2), local files/browser
+history (phase 3), and the frontend wizard shell itself
+(`frontend/src/components/SetupWizard.jsx`, phase 4, see the
+`frontend/` entry point below). See DECISIONS.md, 2026-09-02 (all three
+entries).
 
 1. `POST /setup/google/oauth/start` — request body validated against
    `api/schemas.py::GoogleOAuthStartRequest` (`client_id`, `client_secret`).
@@ -1672,7 +1693,67 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    "Saving…" / "Saved." / an error) sits in `.settings-header`, top-right
    next to the page title, in place of the "Save Changes" button removed
    2026-09-01 — the same spot the button used to occupy.
-5. `Toasts.jsx` — a pure display component: renders whichever
+5. `SetupWizard.jsx` (issue #92, phase 4) — a modal, launched by
+   `SettingsPanel.jsx`'s "Guided setup" button setting `App.jsx`'s
+   `showWizard` state, not shown automatically (see DECISIONS.md,
+   2026-09-02, "Guided setup wizard"). On mount, loads
+   `getSettings()`/`getSourceConfig()`/`getGoogleOAuthStatus()` in
+   parallel to pre-fill every step from whatever's already configured.
+   Steps: Welcome → Provider Mode → OpenRouter (only when Cloud mode is
+   picked) → Google (Gmail + Calendar) → Notion → GitHub → Local Files →
+   Browser History → Done. `visibleSteps(providerMode)` computes the
+   actual step list each render (filtering out the OpenRouter step
+   outside Cloud mode); navigation tracks the current step by id, not
+   index, so switching provider mode mid-wizard can't leave the "current
+   step" pointing at the wrong position.
+   - The provider-mode step calls `putSettings({provider_mode})` and,
+     only if the value actually changed, confirms once (reusing the same
+     "wipes all data" warning `SettingsPanel.jsx` shows, but a single
+     confirm rather than Settings' own double-confirm — see DECISIONS.md)
+     before calling the same `onResetAll()` prop `App.jsx` passes
+     `SettingsPanel.jsx`.
+   - The OpenRouter/Notion/GitHub steps share one `renderCredentialStep()`
+     path: `postSetupValidate(source, value)` first, `postSetupCredentials()`
+     only on a confirmed `"ok"`, mirroring `api/routes/setup.py`'s own
+     "validate before save" contract exactly. The Notion/GitHub steps also
+     render their source's scope field(s) below the credential
+     (`notion_page_ids`; `github_repos` plus its date range) via
+     `putSourceConfig()`, same endpoint/fields `SettingsPanel.jsx` uses —
+     added after the fact, since the first version of this wizard only
+     covered credentials and left scope/date filters out entirely.
+   - The Google step calls `postGoogleOAuthStart()`, opens the returned
+     `authorization_url` in a real popup (`window.open`), then polls
+     `getGoogleOAuthStatus()` every 2s (60 attempts max) until it reports
+     connected or the popup is closed — the actual token exchange lands
+     in the popup's own navigation to `GET /setup/google/oauth/callback`,
+     never a response this tab receives directly. Below the connect
+     button, it also renders the Gmail and Calendar date-range fields
+     (`putSourceConfig()`, same fields/defaults as `SettingsPanel.jsx`)
+     regardless of connection state, since they're meaningful to set
+     ahead of actually connecting.
+   - The local-files and browser-history steps reuse
+     `SettingsPanel.jsx`'s own Docker-vs-not branching
+     (`sourceConfig.running_in_docker`, `available_watch_directories`,
+     `GET /setup/host-data-files`) rather than a separate implementation.
+     The browser-history radio picker reconstructs `/host-data/${file}`
+     itself before using it — `list_host_data_files()` returns paths
+     *relative* to `/host-data` (unlike `list_watched_directories()`'s
+     full, ready-to-use paths), a real bug found by clicking it live in
+     Docker: without the reconstruction, the radio never visibly selected
+     (comparing a full saved path against a bare filename) and a click
+     silently saved the bare, unusable filename underneath. See
+     DECISIONS.md, 2026-09-02 ("Two bugs found running the real Docker
+     stack end-to-end").
+   - The final step's "Run ingestion now" calls the same
+     `onTriggerIngestion` prop `App.jsx` gives `SettingsPanel.jsx`, so the
+     resulting toast/progress display behaves identically to triggering
+     it from Settings directly. Under Docker, it also shows a one-line
+     note pointing at `HOST_STORAGE_DIR` for SQLite/Chroma's storage
+     location — the one piece of setup this wizard can't cover, since
+     it's a deploy-time `docker-compose.yml` decision, not a runtime one
+     (see DECISIONS.md, 2026-09-02, "SQLite/Chroma storage location under
+     Docker").
+6. `Toasts.jsx` — a pure display component: renders whichever
    `{id, kind, text}` entries are in `App.jsx`'s `toasts` state as a
    fixed top-right stack, each auto-removed after 7 seconds
    (`setTimeout` in `App.jsx::addToast()`) or dismissed early by its own
@@ -1681,7 +1762,7 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    `SettingsPanel.jsx`'s own error paths via the `onError` prop) toasts
    immediately, since those results are already known synchronously. See
    DECISIONS.md, 2026-08-30
-6. `GraphView.jsx` — on mount, calls `api/client.js::getGraph()`; an empty
+7. `GraphView.jsx` — on mount, calls `api/client.js::getGraph()`; an empty
    result (no confirmed relationships yet) renders an explanatory message
    rather than a blank canvas. A non-empty result drives a **live**
    `d3-force` simulation (`forceSimulation`/`forceLink`/`forceManyBody`/
@@ -1741,7 +1822,7 @@ A Vite + React app — see `frontend/README.md` for setup/dev commands.
    automatically when the simulation's `"end"` event fires (layout
    settled), again whenever the filter set changes, and on demand via a
    "Fit view" button. See DECISIONS.md, 2026-08-31.
-7. `api/client.js` is the only module making network calls (per
+8. `api/client.js` is the only module making network calls (per
    `docs/Coding_Conventions.docx` section 3) — every function maps
    directly to one `docs/API_Specification.docx` endpoint, talking to
    `http://127.0.0.1:8080/api` (not `localhost` — see DECISIONS.md,
