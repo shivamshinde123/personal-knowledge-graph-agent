@@ -1,13 +1,13 @@
 # Personal Knowledge Graph Agent
 
 A fully local, privacy-first system that ingests one person's data from six
-sources — **Local Files, Notion, Gmail, GitHub, Google Calendar, and Browser
-History** — links it across sources, and answers natural language questions
+sources - **Local Files, Notion, Gmail, GitHub, Google Calendar, and Browser
+History** - links it across sources, and answers natural language questions
 about it through a LangGraph agent, with a chat UI and a live relationship
 graph.
 
 Everything runs on one machine, for one user. There is no multi-tenant
-layer, no hosted database, and no authentication — by design.
+layer, no hosted database, and no authentication - by design.
 
 <p align="center">
   <img src="docs/screenshots/chat.png" width="100%" alt="Chat screen" />
@@ -17,14 +17,14 @@ layer, no hosted database, and no authentication — by design.
 
 ## Features
 
-- Six independent extractors — one source failing never blocks the others.
+- Six independent extractors - one source failing never blocks the others.
 - Hybrid retrieval (semantic + keyword search + relationship-graph lookup),
   routed automatically per question, merged via Reciprocal Rank Fusion.
 - Relationships between items are detected automatically and confirmed by
   an LLM before being stored.
 - Local (Ollama) or Cloud (OpenRouter) model provider, switchable from
   Settings.
-- A guided setup wizard connects every source from the browser — no manual
+- A guided setup wizard connects every source from the browser - no manual
   config-file editing for credentials, OAuth, or source scope.
 
 See [`docs/Technical_Report.docx`](docs/Technical_Report.docx) for a full
@@ -46,18 +46,18 @@ cp config/.env.example config/.env
 docker compose up -d --build
 ```
 
-Every value has a working default — nothing needs editing before this
+Every value has a working default - nothing needs editing before this
 first run, *except* two things you can only set before the containers
 start, if you want these two sources:
 
-- **Local files** — set `HOST_WATCH_DIR` in `.env` to a real folder
+- **Local files** - set `HOST_WATCH_DIR` in `.env` to a real folder
   before running `docker compose up`.
-- **Browser history** — set `HOST_DATA_DIR` in `.env` to a folder holding
+- **Browser history** - set `HOST_DATA_DIR` in `.env` to a folder holding
   a copy of your browser's history file.
 
 Both are covered in detail, including real mistakes to avoid, under
 [Configuration](#configuration) below. Skip them for now if you don't need
-those two sources yet — everything else works without either.
+those two sources yet - everything else works without either.
 
 Give it a little over 30 seconds after `up`: Neo4j's own health check
 gates when the backend and scheduler are allowed to start.
@@ -67,8 +67,8 @@ gates when the backend and scheduler are allowed to start.
 - Add `--profile local-llm` (or set `COMPOSE_PROFILES=local-llm` in `.env`)
   to also start an Ollama container, if you plan to run in Local mode.
 
-Open the frontend and go to **Settings → Guided setup**. Everything else —
-credentials, Google OAuth, source scope — is connected from there.
+Open the frontend and go to **Settings → Guided setup**. Everything else -
+credentials, Google OAuth, source scope - is connected from there.
 
 ## Configuration
 
@@ -77,7 +77,7 @@ Two separate `.env` files are involved, and they are not interchangeable:
 | File | Read by | Holds |
 |---|---|---|
 | `.env` (repo root) | `docker compose` itself | Ports, `NEO4J_PASSWORD`, `HOST_STORAGE_DIR`, `HOST_WATCH_DIR`, `HOST_DATA_DIR` |
-| `config/.env` | The application | Every credential and source setting — fillable entirely from the guided setup wizard instead |
+| `config/.env` | The application | Every credential and source setting - fillable entirely from the guided setup wizard instead |
 
 Full variable-by-variable reference: [`docs/Environment_Config_Reference.docx`](docs/Environment_Config_Reference.docx).
 Both example files (`.env.docker.example`, `config/.env.example`) document
@@ -90,19 +90,19 @@ the wizard then lets you pick which of its subfolders to actually watch.
 
 > [!IMPORTANT]
 > Point `HOST_WATCH_DIR` at a folder containing **only** what you want
-> ingested — not a folder that also contains this repository's own clone.
+> ingested - not a folder that also contains this repository's own clone.
 > If the repo is checked out somewhere inside the mounted folder, its own
 > tracked files (`README.md`, `docs/*.docx`, etc.) get ingested as if they
 > were your personal notes.
 
 To watch a *different* host folder later, edit `HOST_WATCH_DIR` and run
-`docker compose up -d` again — the running app itself cannot mount a new
+`docker compose up -d` again - the running app itself cannot mount a new
 host folder into a container that's already started.
 
 ### Browser history
 
 `HOST_DATA_DIR` (root `.env`) must point at a **folder**, not the history
-file itself — pointing it at a file bind-mounts that single file where the
+file itself - pointing it at a file bind-mounts that single file where the
 app expects a directory to list, and the picker will show nothing.
 
 Your browser locks its history file while running, so point `HOST_DATA_DIR`
@@ -120,13 +120,13 @@ HOST_DATA_DIR=./pkg-agent-hostdata
 
 Pointing it at your whole live profile folder instead of a dedicated copy
 also breaks the picker in a different way: a real profile folder contains
-tens of thousands of cache files, and the picker's file list is capped —
+tens of thousands of cache files, and the picker's file list is capped -
 your actual `History` file can get pushed out of that cap entirely.
 
 ### GitHub token scope
 
 A **private** repository returns `404 Not Found` to a token that can't see
-it — indistinguishable from "the repo doesn't exist" unless you know to
+it - indistinguishable from "the repo doesn't exist" unless you know to
 check this. If you're scoping ingestion to a private repo, make sure
 `GITHUB_TOKEN` has the classic `repo` scope, or (for a fine-grained token)
 has that specific repository added to its access list.
@@ -135,9 +135,9 @@ has that specific repository added to its access list.
 
 `docker compose up` fails with `port is already allocated` if something
 else on your machine already holds one of the ports this stack uses.
-Check what it actually is before touching it —
+Check what it actually is before touching it -
 `netstat -ano | findstr :<port>` (Windows) or `lsof -i :<port>` (Mac/Linux)
-— and if you still need it, just pick a different port instead
+- and if you still need it, just pick a different port instead
 (`HOST_FRONTEND_PORT`, `HOST_BACKEND_PORT`, `HOST_NEO4J_HTTP_PORT`,
 `HOST_NEO4J_BOLT_PORT`, all in the root `.env`). If a container ends up
 crash-looping from a conflict that was already in progress when it
@@ -146,10 +146,10 @@ started, `docker compose down`, fix the port, then `docker compose up -d`.
 ### Persistence
 
 SQLite and Chroma's data live under `HOST_STORAGE_DIR` (default
-`./docker/storage`) — a real host folder, inspectable directly. Neo4j and
+`./docker/storage`) - a real host folder, inspectable directly. Neo4j and
 Ollama use named Docker volumes. `docker compose down` (no `-v`) keeps
 everything; `-v` also wipes Neo4j/Ollama's volumes, but never touches
-`HOST_STORAGE_DIR` — delete its contents yourself if you want a clean
+`HOST_STORAGE_DIR` - delete its contents yourself if you want a clean
 slate there too.
 
 ## Manual setup (development)
@@ -170,7 +170,7 @@ npm install
 npm run dev
 ```
 
-All Python commands go through `uv` — never `pip` directly.
+All Python commands go through `uv` - never `pip` directly.
 
 ## Testing
 
@@ -237,4 +237,4 @@ Full rationale for each choice: [`docs/Tech_Stack.docx`](docs/Tech_Stack.docx).
 ## Status
 
 Core system built and working end-to-end, live-verified against a real
-Docker stack — a genuine "clone and run it" install.
+Docker stack - a genuine "clone and run it" install.
