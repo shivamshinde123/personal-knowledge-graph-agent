@@ -67,12 +67,26 @@ def extract_new_items(
     """Extract GitHub activity — commits, PRs, issues, READMEs, stars.
 
     Args:
-        since: Only include items created/updated after this time. ``None``
-            (the first-ever run) includes each repository's full history —
-            same "first run backfills everything" behavior as the other
-            extractors. Combined with ``config/.env``'s
-            ``GITHUB_DATE_RANGE_START``/``GITHUB_DATE_RANGE_END``, if set —
-            see :func:`_effective_window`.
+        since: Only include items created/updated after this time (the
+            incremental watermark from the last successful run — always
+            applied, regardless of scope, so a later run never re-pulls
+            what an earlier one already ingested). ``None`` (the
+            first-ever run) includes each repository's full history — same
+            "first run backfills everything" behavior as the other
+            extractors. ``config/.env``'s ``GITHUB_DATE_RANGE_START``/
+            ``GITHUB_DATE_RANGE_END`` are combined with this via
+            :func:`_effective_window` — but only when
+            ``settings.github_repos_list`` is unset. Repo scope and date
+            range serve different purposes and are deliberately mutually
+            exclusive, repo scope winning: scoping to specific repos means
+            "the full history of just these," since a deliberately
+            narrowed repo list is usually already a small, known dataset;
+            date range exists specifically to bound the unscoped
+            "every accessible repo" case, which has no other size limit.
+            Found live: a github_repos_list scoped to one small repo was
+            still being narrowed further by a stray configured date range,
+            when the point of scoping to a specific repo is normally to
+            get all of it. See DECISIONS.md.
         on_progress: Called once per repo (``current``, ``total=len(repos)``,
             ``label=full_name``) — repo count is known upfront regardless
             of scope, unlike the items within each repo. Returning
@@ -97,9 +111,15 @@ def extract_new_items(
     if not token:
         raise ExtractorError("GITHUB_TOKEN is not configured")
 
-    since, until = _effective_window(
-        since, settings.github_date_range_start, settings.github_date_range_end
-    )
+    if settings.github_repos_list:
+        # Repo scope wins over date range -- see extract_new_items()'s own
+        # docstring. `since` (the incremental watermark) still applies;
+        # only the configured GITHUB_DATE_RANGE_START/_END is skipped.
+        until = None
+    else:
+        since, until = _effective_window(
+            since, settings.github_date_range_start, settings.github_date_range_end
+        )
 
     with httpx.Client(
         base_url=_API_BASE,
@@ -123,10 +143,19 @@ def extract_new_items(
         )
 
         items: list[ExtractedItem] = []
-        try:
-            items.extend(_extract_starred_repos(client, since, until))
-        except Exception as exc:
-            logger.warning("Could not extract starred repos: %s", exc)
+        # Starred repos are account-wide, not per-repo -- there's no
+        # "owner/repo"-shaped scope to apply to them the way commits/PRs/
+        # issues get scoped to settings.github_repos_list above. Only pull
+        # them when genuinely unscoped ("every accessible repo"); otherwise
+        # this call ignored github_repos_list entirely and always ingested
+        # the whole account's star list regardless -- found live: a
+        # github_repos_list scoped to one small repo still pulled 50+
+        # unrelated starred repos every run. See DECISIONS.md.
+        if not settings.github_repos_list:
+            try:
+                items.extend(_extract_starred_repos(client, since, until))
+            except Exception as exc:
+                logger.warning("Could not extract starred repos: %s", exc)
 
         for index, full_name in enumerate(repos, start=1):
             try:
