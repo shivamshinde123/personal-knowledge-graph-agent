@@ -8,6 +8,18 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-09-03 — Gmail/Calendar extraction silently never ran for guided-OAuth-only setups
+
+**Context**: Found live, running a real ingestion test — Gmail and Calendar both reported `status: "ok"` with `0` items in `GET /api/sources/status`, even though `GET /api/sources/connections` correctly showed both as connected, and a real calendar event existed well inside the configured date range. Checking the actual backend logs during a fresh trigger showed the real symptom: `ERROR: gmail extraction failed: GMAIL_CREDENTIALS_PATH is not configured` — an outright failure, not an empty result, that the source-status endpoint's summary view didn't surface clearly enough to distinguish from "ran fine, found nothing."
+
+**Root cause**: `extractors/gmail.py`'s and `extractors/calendar.py`'s own `extract_new_items()` both had an early, unconditional gate — `if settings.env.gmail_credentials_path is None: raise ExtractorError(...)` (and the Calendar equivalent) — that ran *before* `_get_credentials()` was ever called. `_get_credentials()` itself already correctly tries the guided setup wizard's shared Google OAuth token first, falling back to the older per-service credentials file only if that's unavailable (per its own docstring and `agent/connection_check.py`'s matching logic) — but this early gate short-circuited extraction entirely whenever the older `GMAIL_CREDENTIALS_PATH`/`GOOGLE_CALENDAR_CREDENTIALS_PATH` env var wasn't set, regardless of whether the guided OAuth flow was connected. Since the guided wizard (issue #92) never sets either of these older env vars — it only sets `GOOGLE_OAUTH_CLIENT_ID`/`_SECRET` and the shared token file — **every guided-OAuth-only setup had Gmail/Calendar extraction fail outright**, silently, while its own connection check reported everything fine. This bug predates this session (introduced whenever `_get_credentials()`'s shared-token-first logic was added without removing the now-redundant, now-wrong gate ahead of it) and was only caught by actually running a real ingestion against a real guided-OAuth connection — the connection-check-based tests already in place couldn't catch it, since they test `agent/connection_check.py`'s logic directly, not `extract_new_items()`'s own separate gate.
+
+**Fix**: removed the early gate from both `extract_new_items()` functions entirely — `_get_credentials()` already raises a clear, correct `ExtractorError` when truly nothing is configured (neither the shared token nor the older per-service file), so the gate added nothing except a wrong extra failure mode. Verified directly against a real guided-OAuth connection: Calendar now correctly extracts real events (including one previously silently missed on a real date inside the configured range), and Gmail now correctly extracts real messages instead of failing immediately.
+
+**Affects**: `extractors/gmail.py`, `extractors/calendar.py`, `tests/test_extractors/test_gmail.py`, `tests/test_extractors/test_calendar.py`.
+
+---
+
 ## 2026-09-02 — Two bugs found running the real Docker stack end-to-end (not just the manual dev backend)
 
 **Context**: The wizard/picker work up to this point had only been verified against a manually-run `uv run python -m api.main` backend, never a real `docker compose up` stack. Running the actual stack surfaced two real bugs neither unit tests nor the manual-backend testing could have caught.
