@@ -48,6 +48,8 @@ npm-debug.log*
 .idea/
 .DS_Store
 Thumbs.db
+# Word/Office's own lock file, created while a docs/*.docx is open.
+~$*.doc*
 
 # --- Model caches --------------------------------------------------------
 .cache/
