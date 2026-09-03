@@ -47,7 +47,19 @@ docker compose up -d --build
 ```
 
 Every value has a working default — nothing needs editing before this
-first run. Give it a little over 30 seconds: Neo4j's own health check
+first run, *except* two things you can only set before the containers
+start, if you want these two sources:
+
+- **Local files** — set `HOST_WATCH_DIR` in `.env` to a real folder
+  before running `docker compose up`.
+- **Browser history** — set `HOST_DATA_DIR` in `.env` to a folder holding
+  a copy of your browser's history file.
+
+Both are covered in detail, including real mistakes to avoid, under
+[Configuration](#configuration) below. Skip them for now if you don't need
+those two sources yet — everything else works without either.
+
+Give it a little over 30 seconds after `up`: Neo4j's own health check
 gates when the backend and scheduler are allowed to start.
 
 - Frontend: `http://localhost:3000` (or `HOST_FRONTEND_PORT`)
@@ -56,8 +68,7 @@ gates when the backend and scheduler are allowed to start.
   to also start an Ollama container, if you plan to run in Local mode.
 
 Open the frontend and go to **Settings → Guided setup**. Everything else —
-credentials, Google OAuth, source scope, local files, browser history — is
-connected from there.
+credentials, Google OAuth, source scope — is connected from there.
 
 ## Configuration
 
