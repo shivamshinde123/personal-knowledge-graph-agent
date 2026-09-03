@@ -233,6 +233,10 @@ Full rationale for each choice: [`docs/Tech_Stack.docx`](docs/Tech_Stack.docx).
 - Sustained real-data testing of the Gmail and Calendar extractors against
   large accounts
   ([issue #68](https://github.com/shivamshinde123/personal-knowledge-graph-agent/issues/68)).
+- Manual end-to-end test of `fully_local` mode (Ollama) against real data
+  on adequate hardware - not yet possible on the current development
+  machine
+  ([issue #108](https://github.com/shivamshinde123/personal-knowledge-graph-agent/issues/108)).
 
 ## Status
 
