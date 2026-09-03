@@ -259,7 +259,50 @@ class TestFullRun:
             "SELECT * FROM ingestion_runs ORDER BY run_started_at DESC LIMIT 1"
         ).fetchone()
         assert run["current_item"] is not None
-        assert run["current_item"].startswith("local_file: ")
+        # The relationship-detection phase runs after extraction and
+        # overwrites current_item with its own progress label -- see
+        # test_current_item_reflects_relationship_detection_phase_too below
+        # and DECISIONS.md. "a.txt" is this run's only item, so it's also
+        # the one relationship detection checks last.
+        assert run["current_item"].startswith("Checking relationships: ")
+        assert "a.txt" in run["current_item"]
+
+    def test_current_item_reflects_relationship_detection_phase_too(
+        self, conn, driver, collection, watch_dir, monkeypatch
+    ):
+        """Progress must not freeze once extraction finishes.
+
+        Found live: current_item stayed on whatever the last *extracted*
+        item was for the entire relationship-detection phase afterward,
+        even though real work (one LLM call per item) was actively
+        continuing -- indistinguishable from a hang without checking
+        backend logs directly. See DECISIONS.md.
+        """
+        (watch_dir / "a.txt").write_text(
+            "Some content here that is long enough", encoding="utf-8"
+        )
+
+        seen_relationship_labels = []
+        real_update = daily_batch.update_ingestion_run_current_item
+
+        def spy_update(conn, run_id, current_item):
+            if current_item.startswith("Checking relationships:"):
+                seen_relationship_labels.append(current_item)
+            real_update(conn, run_id, current_item)
+
+        monkeypatch.setattr(
+            daily_batch, "update_ingestion_run_current_item", spy_update
+        )
+
+        daily_batch._run(conn, collection, driver)
+
+        assert seen_relationship_labels, (
+            "expected at least one 'Checking relationships: ...' progress "
+            "update during relationship detection"
+        )
+        assert seen_relationship_labels[0].startswith(
+            "Checking relationships: a.txt (1/1)"
+        )
 
 
 class TestRelationshipStalenessOnEdit:

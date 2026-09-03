@@ -46,6 +46,7 @@ from storage.sqlite_store import (
     complete_ingestion_run,
     connect,
     delete_item,
+    get_item,
     get_last_run_timestamp,
     insert_item,
     is_cancellation_requested,
@@ -202,7 +203,21 @@ def _run(
             logger.error("Could not clear stale relationships for %r: %s", item_id, exc)
             errors.append(f"relationships-cleanup/{item_id}: {exc}")
 
-    for item_id in processed_item_ids:
+    relationship_total = len(processed_item_ids)
+    for relationship_index, item_id in enumerate(processed_item_ids, start=1):
+        # The extraction phase's own progress display (update_ingestion_run_
+        # current_item(), on_progress callbacks) leaves current_item frozen
+        # on whatever the last extracted item was for this entire phase --
+        # found live, indistinguishable from a hang without checking backend
+        # logs. get_item() is a cheap local SQLite read; the total is known
+        # upfront here (unlike extraction's own streaming discovery), so a
+        # real current/total counter costs nothing extra. See DECISIONS.md.
+        item = get_item(conn, item_id)
+        label = (item.title or item_id) if item is not None else item_id
+        progress = f"({relationship_index}/{relationship_total})"
+        update_ingestion_run_current_item(
+            conn, run_id, f"Checking relationships: {label} {progress}"
+        )
         try:
             detect_relationships(conn, driver, collection, item_id)
         except Exception as exc:

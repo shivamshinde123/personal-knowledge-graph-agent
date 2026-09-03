@@ -291,6 +291,19 @@ yourself if you want those gone too).
 stop everything without deleting data; `docker compose up -d --build` again
 after pulling code changes.
 
+**Port already allocated?** Something else on your machine is already
+using that port — `docker compose up` will fail with an error like
+`Bind for 0.0.0.0:7474 failed: port is already allocated`. Check what it
+actually is before doing anything about it (`netstat -ano | findstr :<port>`
+on Windows, `lsof -i :<port>` on Mac/Linux) — if it's something you still
+need, there's no reason to touch it: every port here (`HOST_FRONTEND_PORT`,
+`HOST_BACKEND_PORT`, `HOST_NEO4J_HTTP_PORT`, `HOST_NEO4J_BOLT_PORT`) is a
+plain `.env` variable, so just pick a different one and
+`docker compose up -d` again. If a container ends up crash-looping after a
+port conflict like this (`restart: unless-stopped` keeps retrying against
+the same conflict), a `docker compose down` first, then fixing the port and
+`docker compose up -d`, clears it.
+
 **Why GitHub only, no Docker Hub**: this is primarily a portfolio project —
 the audience is someone reading the repo, not blind-pulling a prebuilt
 image — and `docker compose up -d --build` from a clone already delivers a
@@ -335,12 +348,14 @@ cd frontend && npm run lint && npm run build   # frontend
 
 ## Documentation
 
-**Important**: the documents in `docs/` were written **at the start of the
-project**, before implementation began — they capture the original design
-intent, not a live record of the system as it exists today. Real work has
-happened since that `docs/` doesn't reflect. For what actually exists and
-why, `DECISIONS.md` and `FLOW.md` are the sources kept up to date as the code
-changes — read those first, and treat `docs/` as historical context.
+The documents in `docs/` were originally written **at the start of the
+project**, before implementation began, and for a long stretch were left as
+that original design intent rather than kept current. As of 2026-09-03 they
+were refreshed to match the actual implementation and are treated as a live
+document set going forward, alongside `DECISIONS.md` (implementation
+decisions made during coding, and why) and `FLOW.md` (how the code actually
+executes, per entry point) — all three should stay current as the code
+changes.
 
 | File | Contents |
 |---|---|
