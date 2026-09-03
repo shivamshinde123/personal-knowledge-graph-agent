@@ -8,6 +8,19 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-09-03 — GitHub repo scope and date range are mutually exclusive, scope winning
+
+**Context**: Found live, running a real end-to-end ingestion test — starred repos (account-wide, not per-repo) were being pulled unconditionally, regardless of `github_repos_list`. A `github_repos_list` scoped down to one small test-fixture repo still ingested 50+ unrelated starred repos on every run. Separately, asked directly: should `GITHUB_DATE_RANGE_START`/`_END` still apply on top of a configured repo scope, or should the two be mutually exclusive?
+
+**Decision**: two related fixes to `extractors/github.py`:
+1. `_extract_starred_repos()` is now only called when `github_repos_list` is empty (the "every accessible repo" case) — there's no `owner/repo`-shaped scope to meaningfully apply to an account-wide star list, so pulling it unconditionally silently defeated the whole point of scoping down to specific repos.
+2. Repo scope and the configured date range are now mutually exclusive, repo scope winning: when `github_repos_list` is set, `GITHUB_DATE_RANGE_START`/`_END` are ignored entirely (full history of just those repos); the date range only applies when unscoped. Reasoning: these two filters serve different purposes, not overlapping ones — deliberately narrowing to specific repos is normally already a small, known dataset, so a stray date filter on top usually isn't wanted and can silently exclude relevant history (exactly what happened live: a repo-scoped run to a 7-commit test fixture was further narrowed by a leftover configured date range). Date range exists specifically to bound the *unscoped* "every accessible repo" case, which otherwise has no other size limit at all.
+3. The incremental watermark (`since`, from the last successful run) still applies regardless of scope in both cases — only the user-configured `GITHUB_DATE_RANGE_START`/`_END` is affected, never the "don't re-ingest what's already ingested" behavior.
+
+**Affects**: `extractors/github.py`, `tests/test_extractors/test_github.py`, `frontend/src/components/SettingsPanel.jsx`, `frontend/src/components/SetupWizard.jsx` (repo scope and date range are now kept visually adjacent in one combined section/step, with the date range fields disabled and an inline note whenever any repo is scoped, rather than two separate, far-apart sections that gave no hint of the interaction between them).
+
+---
+
 ## 2026-09-03 — Gmail/Calendar extraction silently never ran for guided-OAuth-only setups
 
 **Context**: Found live, running a real ingestion test — Gmail and Calendar both reported `status: "ok"` with `0` items in `GET /api/sources/status`, even though `GET /api/sources/connections` correctly showed both as connected, and a real calendar event existed well inside the configured date range. Checking the actual backend logs during a fresh trigger showed the real symptom: `ERROR: gmail extraction failed: GMAIL_CREDENTIALS_PATH is not configured` — an outright failure, not an empty result, that the source-status endpoint's summary view didn't surface clearly enough to distinguish from "ran fine, found nothing."

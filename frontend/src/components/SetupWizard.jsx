@@ -571,7 +571,11 @@ function SetupWizard({ onClose, onTriggerIngestion, onResetAll, onError }) {
               </label>
               <p className="settings-field-hint">
                 One <code>owner/repo</code> per line. Leave empty to ingest
-                every repository the token can access.
+                every repository the token can access. Kept next to the date
+                range below deliberately: the two are mutually exclusive,
+                repo scope winning — listing any repo here ignores the date
+                range entirely (you get that repo's full history); the date
+                range only applies when this is left empty.
               </p>
               <textarea
                 id="wizard-github-repos"
@@ -588,13 +592,22 @@ function SetupWizard({ onClose, onTriggerIngestion, onResetAll, onError }) {
                 }
                 placeholder="e.g. octocat/hello-world"
               />
-              <label className="wizard-field-label">Date range (optional)</label>
+              <label className="wizard-field-label">
+                Date range (optional)
+                {linesToList(githubReposText).length > 0 && (
+                  <span className="settings-field-hint">
+                    {" "}
+                    (ignored while repos are scoped above)
+                  </span>
+                )}
+              </label>
               <div className="date-range-fields">
                 <label>
                   From
                   <input
                     type="date"
                     value={githubDateStart}
+                    disabled={linesToList(githubReposText).length > 0}
                     onChange={(event) => setGithubDateStart(event.target.value)}
                     onBlur={(event) =>
                       saveDateField(
@@ -610,6 +623,7 @@ function SetupWizard({ onClose, onTriggerIngestion, onResetAll, onError }) {
                   <input
                     type="date"
                     value={githubDateEnd}
+                    disabled={linesToList(githubReposText).length > 0}
                     onChange={(event) => setGithubDateEnd(event.target.value)}
                     onBlur={(event) =>
                       saveDateField(

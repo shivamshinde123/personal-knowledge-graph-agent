@@ -433,6 +433,48 @@ class TestDateRangeScoping:
         assert not any(i.source_ref_id.endswith(":starred") for i in items)
 
 
+class TestRepoScopeOverridesDateRange:
+    def test_configured_date_range_is_ignored_when_repos_are_scoped(self, monkeypatch):
+        """Repo scope and date range are mutually exclusive, scope winning.
+
+        Scoping to specific repos means "the full history of just these" --
+        date range exists specifically to bound the unscoped "every
+        accessible repo" case, which has no other size limit. Found live:
+        a github_repos_list scoped to one small repo was still being
+        narrowed further by a stray configured date range. See
+        DECISIONS.md.
+        """
+        from datetime import date
+
+        captured = []
+        handler = make_handler(captured_commit_params=captured)
+        install_fake_client(
+            monkeypatch,
+            handler,
+            github_repos_list=["scoped/repo"],
+            github_date_range_start=date(2026, 6, 1),
+            github_date_range_end=date(2026, 6, 30),
+        )
+
+        extract_new_items()
+
+        assert "until" not in captured[0]
+
+    def test_unscoped_still_applies_the_configured_date_range(self, monkeypatch):
+        """Confirms the above isn't just "date range broke entirely"."""
+        from datetime import date
+
+        captured = []
+        handler = make_handler(captured_commit_params=captured)
+        install_fake_client(
+            monkeypatch, handler, github_date_range_end=date(2026, 6, 30)
+        )
+
+        extract_new_items()
+
+        assert captured[0]["until"] == "2026-07-01T00:00:00Z"
+
+
 class TestScopedToConfiguredRepos:
     def test_only_configured_repos_are_processed_not_every_accessible_one(
         self, monkeypatch
@@ -450,6 +492,33 @@ class TestScopedToConfiguredRepos:
         items = extract_new_items()
 
         assert any(i.source_ref_id.startswith("scoped/repo:") for i in items)
+
+    def test_starred_repos_are_not_pulled_when_scoped_to_specific_repos(
+        self, monkeypatch
+    ):
+        """Starred repos are account-wide, not per-repo -- no scope applies.
+
+        Found live: a github_repos_list scoped to one small repo still
+        pulled every starred repo on the whole account, unconditionally,
+        every run -- contradicting the module's own documented "scoped to
+        just those repos" behavior. See DECISIONS.md.
+        """
+        calls = []
+
+        def handler(request):
+            calls.append(request.url.path)
+            if request.url.path == "/user/starred":
+                raise AssertionError(
+                    "should not fetch starred repos when scoped to specific repos"
+                )
+            return make_handler(readme=_readme_response())(request)
+
+        install_fake_client(monkeypatch, handler, github_repos_list=["scoped/repo"])
+
+        items = extract_new_items()
+
+        assert not any(i.source_ref_id.endswith(":starred") for i in items)
+        assert "/user/starred" not in calls
 
 
 class TestOnProgress:

@@ -843,12 +843,22 @@ function SettingsPanel({
           </section>
 
           <section className="settings-section">
-            <h2>GitHub repository scope</h2>
+            <h2>GitHub repository scope &amp; date range</h2>
             <p className="settings-field-hint">
-              One <code>owner/repo</code> per line. Leave empty to ingest every
-              repository the token can access.
+              Kept together deliberately: these two filters are mutually
+              exclusive, repo scope winning. Scoping to specific repos
+              means "the full history of just these" — the date range
+              below is ignored entirely once any repo is listed here,
+              since narrowing to a specific repo is normally already a
+              small, known dataset. The date range only applies when this
+              is left empty (every accessible repo), where it's the thing
+              keeping that "everything" case bounded.
             </p>
+            <label htmlFor="github-repos-textarea" className="wizard-field-label">
+              Repository scope
+            </label>
             <textarea
+              id="github-repos-textarea"
               className="source-scope-textarea"
               rows={3}
               value={githubReposText}
@@ -861,8 +871,54 @@ function SettingsPanel({
                   event.target.value,
                 )
               }
-              placeholder="e.g. octocat/hello-world"
+              placeholder="e.g. octocat/hello-world (one per line)"
             />
+            <label className="wizard-field-label">
+              Date range{" "}
+              {linesToList(githubReposText).length > 0 && (
+                <span className="settings-field-hint">
+                  (ignored while repos are scoped above)
+                </span>
+              )}
+            </label>
+            <div className="date-range-fields">
+              <label>
+                From
+                <input
+                  type="date"
+                  value={githubDateRangeStart}
+                  disabled={linesToList(githubReposText).length > 0}
+                  onChange={(event) =>
+                    setGithubDateRangeStart(event.target.value)
+                  }
+                  onBlur={(event) =>
+                    saveDateField(
+                      "github_date_range_start",
+                      "githubDateRangeStart",
+                      setGithubDateRangeStart,
+                      event.target.value,
+                    )
+                  }
+                />
+              </label>
+              <label>
+                To
+                <input
+                  type="date"
+                  value={githubDateRangeEnd}
+                  disabled={linesToList(githubReposText).length > 0}
+                  onChange={(event) => setGithubDateRangeEnd(event.target.value)}
+                  onBlur={(event) =>
+                    saveDateField(
+                      "github_date_range_end",
+                      "githubDateRangeEnd",
+                      setGithubDateRangeEnd,
+                      event.target.value,
+                    )
+                  }
+                />
+              </label>
+            </div>
           </section>
 
           <section className="settings-section danger-zone">
@@ -923,52 +979,6 @@ function SettingsPanel({
                       "gmail_date_range_end",
                       "gmailDateRangeEnd",
                       setGmailDateRangeEnd,
-                      event.target.value,
-                    )
-                  }
-                />
-              </label>
-            </div>
-          </section>
-
-          <section className="settings-section">
-            <h2>GitHub date range</h2>
-            <p className="settings-field-hint">
-              Only ingest commits, PRs, issues, and stars within this range.
-              Leave either side empty for no floor/ceiling.
-            </p>
-            <div className="date-range-fields">
-              <label>
-                From
-                <input
-                  type="date"
-                  value={githubDateRangeStart}
-                  onChange={(event) =>
-                    setGithubDateRangeStart(event.target.value)
-                  }
-                  onBlur={(event) =>
-                    saveDateField(
-                      "github_date_range_start",
-                      "githubDateRangeStart",
-                      setGithubDateRangeStart,
-                      event.target.value,
-                    )
-                  }
-                />
-              </label>
-              <label>
-                To
-                <input
-                  type="date"
-                  value={githubDateRangeEnd}
-                  onChange={(event) =>
-                    setGithubDateRangeEnd(event.target.value)
-                  }
-                  onBlur={(event) =>
-                    saveDateField(
-                      "github_date_range_end",
-                      "githubDateRangeEnd",
-                      setGithubDateRangeEnd,
                       event.target.value,
                     )
                   }
