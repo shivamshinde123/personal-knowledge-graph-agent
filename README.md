@@ -335,12 +335,14 @@ cd frontend && npm run lint && npm run build   # frontend
 
 ## Documentation
 
-**Important**: the documents in `docs/` were written **at the start of the
-project**, before implementation began — they capture the original design
-intent, not a live record of the system as it exists today. Real work has
-happened since that `docs/` doesn't reflect. For what actually exists and
-why, `DECISIONS.md` and `FLOW.md` are the sources kept up to date as the code
-changes — read those first, and treat `docs/` as historical context.
+The documents in `docs/` were originally written **at the start of the
+project**, before implementation began, and for a long stretch were left as
+that original design intent rather than kept current. As of 2026-09-03 they
+were refreshed to match the actual implementation and are treated as a live
+document set going forward, alongside `DECISIONS.md` (implementation
+decisions made during coding, and why) and `FLOW.md` (how the code actually
+executes, per entry point) — all three should stay current as the code
+changes.
 
 | File | Contents |
 |---|---|
