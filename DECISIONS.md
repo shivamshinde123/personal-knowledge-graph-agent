@@ -8,6 +8,16 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-09-03 — Ingestion progress bar now covers relationship detection (issue #100)
+
+**Context**: found live while testing a full ingestion run — the Settings screen's progress display froze on whatever the last *extracted* item was for the entire relationship-detection phase afterward, indistinguishable from a hang without checking backend logs directly.
+
+**Decision**: `scheduler/daily_batch.py::_run()`'s relationship-detection loop (`for item_id in processed_item_ids: detect_relationships(...)`) now calls `update_ingestion_run_current_item()` per item too, same as the extraction phase already does — `f"Checking relationships: {label} ({index}/{total})"`, using `get_item()` (a cheap local SQLite read) for the title. Unlike extraction (github/local_files/notion only, since gmail/calendar/browser_history don't call `on_progress` — issue #68), this phase gets a real `current/total` counter for every item unconditionally, since the total is already known upfront here (`len(processed_item_ids)`) rather than discovered by streaming, so there's no reason to omit it the way extraction's on-progress callback sometimes does for unscoped sources.
+
+**Affects**: `scheduler/daily_batch.py`, `tests/test_scheduler/test_daily_batch.py`.
+
+---
+
 ## 2026-09-02 — Two bugs found running the real Docker stack end-to-end (not just the manual dev backend)
 
 **Context**: The wizard/picker work up to this point had only been verified against a manually-run `uv run python -m api.main` backend, never a real `docker compose up` stack. Running the actual stack surfaced two real bugs neither unit tests nor the manual-backend testing could have caught.
