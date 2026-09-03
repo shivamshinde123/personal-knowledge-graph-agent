@@ -10,7 +10,7 @@ This is a single-user, local-only system. There is no multi-tenant, cloud-hosted
 
 ## Reference Documents
 
-The full design decision history lives in `/docs`. Consult the relevant document before making an architectural change rather than re-deciding something already settled:
+The full design decision history lives in `/docs`. As of 2026-09-03 these were refreshed to match the actual implementation (extractors, agent, API, frontend, Docker packaging, the guided setup wizard) rather than only the original pre-implementation design intent — treat them as current, alongside `DECISIONS.md`/`FLOW.md`, not as historical-only. Consult the relevant document before making an architectural change rather than re-deciding something already settled:
 
 | Document | Covers |
 |---|---|
