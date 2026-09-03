@@ -116,14 +116,19 @@ def extract_new_items(
         the rest of the run.
 
     Raises:
-        ExtractorError: If ``GMAIL_CREDENTIALS_PATH`` isn't configured, or
-            no cached, authorized token exists yet (:func:`setup_auth`
-            hasn't been run) — both source-level failures the daily batch
-            records and moves past.
+        ExtractorError: If neither the guided setup wizard's shared Google
+            token nor ``GMAIL_CREDENTIALS_PATH``'s own cached token is
+            available yet — a source-level failure the daily batch
+            records and moves past. Deliberately does *not* gate on
+            ``GMAIL_CREDENTIALS_PATH`` being set before calling
+            :func:`_get_credentials` — that function already tries the
+            guided OAuth flow's shared token first, so gating here on the
+            older env var alone made every guided-OAuth-only setup fail
+            extraction outright, even though the connection check itself
+            (``agent/connection_check.py``) correctly saw it as connected.
+            See DECISIONS.md.
     """
     settings = get_settings()
-    if settings.env.gmail_credentials_path is None:
-        raise ExtractorError("GMAIL_CREDENTIALS_PATH is not configured")
 
     service = _build_service(_get_credentials())
     excluded_labels = set(settings.config.filters.gmail.excluded_labels)

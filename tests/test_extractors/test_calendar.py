@@ -116,16 +116,25 @@ def install_fake_calendar(
 
 
 class TestNotConfigured:
-    def test_raises_extractor_error_when_credentials_path_is_unset(self, monkeypatch):
-        monkeypatch.setattr(
-            "extractors.calendar.get_settings",
-            lambda: SimpleNamespace(
-                env=SimpleNamespace(google_calendar_credentials_path=None)
-            ),
-        )
+    def test_does_not_gate_on_credentials_path_before_trying_shared_oauth(
+        self, monkeypatch
+    ):
+        """``GOOGLE_CALENDAR_CREDENTIALS_PATH`` unset must not short-circuit extraction.
 
-        with pytest.raises(ExtractorError, match="GOOGLE_CALENDAR_CREDENTIALS_PATH"):
-            extract_new_items()
+        Found live: an early check here, before ``_get_credentials()`` ever
+        ran, unconditionally required the older
+        ``GOOGLE_CALENDAR_CREDENTIALS_PATH`` env var to be set --
+        completely bypassing the guided setup wizard's shared-token path
+        ``_get_credentials()`` itself already tries first. A real calendar
+        event inside the configured date range was silently never
+        extracted because of this, despite the connection check reporting
+        connected. See DECISIONS.md.
+        """
+        install_fake_calendar(monkeypatch, [], google_calendar_credentials_path=None)
+
+        # No GOOGLE_CALENDAR_CREDENTIALS_PATH-related error -- _get_credentials()
+        # (the shared-token-first path) is what extraction actually depends on.
+        extract_new_items()
 
     def test_raises_extractor_error_when_not_yet_authorized(self, monkeypatch):
         monkeypatch.setattr(
