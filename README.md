@@ -291,6 +291,19 @@ yourself if you want those gone too).
 stop everything without deleting data; `docker compose up -d --build` again
 after pulling code changes.
 
+**Port already allocated?** Something else on your machine is already
+using that port — `docker compose up` will fail with an error like
+`Bind for 0.0.0.0:7474 failed: port is already allocated`. Check what it
+actually is before doing anything about it (`netstat -ano | findstr :<port>`
+on Windows, `lsof -i :<port>` on Mac/Linux) — if it's something you still
+need, there's no reason to touch it: every port here (`HOST_FRONTEND_PORT`,
+`HOST_BACKEND_PORT`, `HOST_NEO4J_HTTP_PORT`, `HOST_NEO4J_BOLT_PORT`) is a
+plain `.env` variable, so just pick a different one and
+`docker compose up -d` again. If a container ends up crash-looping after a
+port conflict like this (`restart: unless-stopped` keeps retrying against
+the same conflict), a `docker compose down` first, then fixing the port and
+`docker compose up -d`, clears it.
+
 **Why GitHub only, no Docker Hub**: this is primarily a portfolio project —
 the audience is someone reading the repo, not blind-pulling a prebuilt
 image — and `docker compose up -d --build` from a clone already delivers a
