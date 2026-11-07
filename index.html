@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Knowledge Graph Agent — your scattered life, linked locally</title>
+<meta name="description" content="A fully local, privacy-first agent that links your files, Notion, Gmail, GitHub, calendar and browser history into one knowledge graph you can question.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@200;400;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<style>
+/* Design reference: "Your workplace has the answer." (Dala) via Refero Styles —
+   a constellation floating on black velvet. Pure black, no cards, weight-400 headlines at sculptural scale,
+   weight-200 body, one violet button, saffron links. Source colors are the app's own (sourceColors.js). */
+:root{--void:#000;--white:#fff;--ash:#9a9a9a;--silver:#bdbdbd;--iris:#8052ff;--saffron:#ffb829;--verdant:#15846e;
+  --local:#6b4fd6;--notion:#c0392b;--gmail:#1f9d55;--github:#3b82f6;--calendar:#e0a800;--browser:#8b8896}
+*{box-sizing:border-box;margin:0}
+html{color-scheme:dark}
+body{background:var(--void);color:var(--white);font:200 18px/1.5 Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--saffron);text-decoration:none}
+a:hover{text-decoration:underline;text-underline-offset:4px}
+:focus-visible{outline:2px solid var(--saffron);outline-offset:3px;border-radius:4px}
+img{display:block;max-width:100%}
+.wrap{max-width:1280px;margin:0 auto;padding:0 32px}
+.mono{font:400 12px/1.5 "JetBrains Mono",ui-monospace,monospace;letter-spacing:.04em;color:var(--ash);text-transform:uppercase}
+
+header.top{position:absolute;inset:0 0 auto;z-index:5}
+header.top .wrap{height:76px;display:flex;align-items:center;justify-content:space-between}
+.logo{display:flex;align-items:center;gap:10px;color:var(--white);font-weight:400;font-size:17px;letter-spacing:-.01em}
+.logo svg{width:22px;height:22px}
+header nav{display:flex;gap:32px;font-size:15px;font-weight:400}
+header nav a{color:var(--ash)}header nav a:hover{color:var(--white);text-decoration:none}
+
+.btn{display:inline-flex;align-items:center;gap:10px;height:52px;padding:0 26px;border-radius:24px;background:var(--iris);color:var(--white);font:400 16px Inter,sans-serif;transition:filter .15s}
+.btn:hover{filter:brightness(1.12);text-decoration:none}
+.ghost{color:var(--white);font-weight:400;font-size:16px}
+.ghost:hover{color:var(--saffron)}
+
+/* hero */
+.hero{position:relative;min-height:100vh;display:flex;align-items:flex-end;overflow:hidden}
+#sky{position:absolute;inset:0;width:100%;height:100%}
+.hero .wrap{position:relative;width:100%;padding-bottom:9vh;pointer-events:none}
+.hero .wrap > *{pointer-events:auto}
+h1{font-weight:400;font-size:clamp(52px,8.8vw,113px);line-height:1.02;letter-spacing:-.04em;max-width:12ch}
+.hero p.lede{max-width:540px;margin:28px 0 36px;color:var(--silver)}
+.hero .row{display:flex;gap:28px;align-items:center;flex-wrap:wrap}
+.legend{display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:44px}
+.legend span{display:inline-flex;align-items:center;gap:8px;font:400 12px "JetBrains Mono",monospace;color:var(--ash)}
+.legend i{width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:9px solid currentColor}
+
+section{padding:120px 0}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:80px;align-items:start}
+h2{font-weight:400;font-size:clamp(40px,6vw,78px);line-height:1.1;letter-spacing:-.04em}
+h3{font-weight:400;font-size:27px;line-height:1.2;letter-spacing:-.02em;margin-bottom:10px}
+.body{color:var(--silver);max-width:560px}
+.body + .body{margin-top:18px}
+
+.sources{list-style:none;padding:0;margin-top:8px}
+.sources li{display:grid;grid-template-columns:28px 1fr auto;gap:14px;align-items:baseline;padding:20px 0;font-size:24px;font-weight:400;letter-spacing:-.02em}
+.sources li i{width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:12px solid currentColor;align-self:center}
+.sources li .mono{text-transform:none;font-size:13px}
+
+.shot{margin-top:72px}
+.shot img{width:100%;border-radius:24px}
+.shot figcaption{margin-top:14px}
+
+.pipe{list-style:none;padding:0;display:grid;grid-template-columns:repeat(4,1fr);gap:48px;margin-top:64px;counter-reset:p}
+.pipe li{counter-increment:p}
+.pipe li::before{content:counter(p,decimal-leading-zero);display:block;font:400 12px "JetBrains Mono",monospace;color:var(--saffron);margin-bottom:18px}
+.pipe p{color:var(--silver);font-size:17px}
+
+.duo{display:grid;grid-template-columns:1fr 1fr;gap:48px;margin-top:64px}
+.duo img{border-radius:24px}
+
+pre{font:400 14px/1.9 "JetBrains Mono",ui-monospace,monospace;color:var(--silver);overflow-x:auto;padding:0;margin-top:8px}
+pre b{color:var(--white);font-weight:400}pre em{color:var(--ash);font-style:normal}
+
+.privacy{text-align:left}
+.privacy h2{max-width:14ch}
+.privacy h2 span{color:var(--saffron)}
+footer{padding:48px 0 64px;color:var(--ash);font-size:15px;font-weight:400}
+footer .wrap{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+
+@media(max-width:900px){.split,.duo{grid-template-columns:1fr;gap:48px}.pipe{grid-template-columns:1fr 1fr}header nav a:not(:last-child){display:none}section{padding:88px 0}}
+@media(max-width:560px){.wrap{padding:0 16px}.pipe{grid-template-columns:1fr}.sources li{font-size:20px}}
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <a class="logo" href="#"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 22 20H2z" fill="#8052ff"/><path d="M12 9l4.5 8h-9z" fill="#000"/></svg>Knowledge Graph Agent</a>
+  <nav aria-label="Primary"><a href="#sources">Sources</a><a href="#agent">Agent</a><a href="#run">Run it</a><a href="https://github.com/shivamshinde123/personal-knowledge-graph-agent">GitHub</a></nav>
+</div></header>
+
+<main>
+<section class="hero" style="padding:0">
+  <canvas id="sky" aria-hidden="true"></canvas>
+  <div class="wrap">
+    <p class="mono">Ambient intelligence · fully local</p>
+    <h1 style="margin-top:18px">Your scattered life, linked.</h1>
+    <p class="lede">One agent reads your files, notes, mail, code, calendar and browsing, links them across sources, and answers questions about all of it. On one machine, for one person.</p>
+    <div class="row"><a class="btn" href="#run">Run it locally <span aria-hidden="true">→</span></a><a class="ghost" href="https://github.com/shivamshinde123/personal-knowledge-graph-agent">View the source</a></div>
+    <div class="legend" aria-label="Source colors">
+      <span style="color:var(--local)"><i></i>local files</span><span style="color:var(--notion)"><i></i>notion</span><span style="color:var(--gmail)"><i></i>gmail</span><span style="color:var(--github)"><i></i>github</span><span style="color:var(--calendar)"><i></i>calendar</span><span style="color:var(--browser)"><i></i>browser history</span>
+    </div>
+  </div>
+</section>
+
+<section id="sources"><div class="wrap">
+  <div class="split">
+    <div><p class="mono">01 · Sources</p><h2 style="margin-top:20px">Six extractors. One graph.</h2></div>
+    <div>
+      <p class="body">Each source has its own extractor and its own schedule, so one failing never blocks the rest. Items are embedded, indexed for keywords, and linked to each other. A relationship is only stored after an LLM confirms it.</p>
+      <ul class="sources">
+        <li style="color:var(--local)"><i></i><span style="color:var(--white)">Local files</span><span class="mono">a folder you choose</span></li>
+        <li style="color:var(--notion)"><i></i><span style="color:var(--white)">Notion</span><span class="mono">pages + databases</span></li>
+        <li style="color:var(--gmail)"><i></i><span style="color:var(--white)">Gmail</span><span class="mono">promotions skipped</span></li>
+        <li style="color:var(--github)"><i></i><span style="color:var(--white)">GitHub</span><span class="mono">repos, commits, PRs</span></li>
+        <li style="color:var(--calendar)"><i></i><span style="color:var(--white)">Google Calendar</span><span class="mono">events</span></li>
+        <li style="color:var(--browser)"><i></i><span style="color:var(--white)">Browser history</span><span class="mono">a copied history file</span></li>
+      </ul>
+    </div>
+  </div>
+  <figure class="shot"><img src="https://raw.githubusercontent.com/shivamshinde123/personal-knowledge-graph-agent/main/docs/screenshots/graph.png" alt="The relationship graph view: nodes colored by source, linked by edges such as implements and discussed_in" loading="lazy" width="1917" height="977"><figcaption class="mono">The live relationship graph · drag, filter, focus a node</figcaption></figure>
+</div></section>
+
+<section id="agent"><div class="wrap">
+  <p class="mono">02 · The agent</p>
+  <h2 style="margin-top:20px;max-width:16ch">Routed per question. Merged by rank.</h2>
+  <ol class="pipe">
+    <li><h3>Condense</h3><p>Follow-ups are rewritten into a standalone question using the chat so far.</p></li>
+    <li><h3>Route</h3><p>A rule-based router picks the search paths: quoted phrases skip semantic search, "related to" adds graph traversal.</p></li>
+    <li><h3>Retrieve</h3><p>Vector search, keyword search and graph traversal over Neo4j each return their best matches.</p></li>
+    <li><h3>Fuse &amp; answer</h3><p>Reciprocal Rank Fusion merges the lists. The answer cites each item, shown as source chips.</p></li>
+  </ol>
+  <div class="duo">
+    <figure><img src="https://raw.githubusercontent.com/shivamshinde123/personal-knowledge-graph-agent/main/docs/screenshots/chat.png" alt="Chat view: an answer with numbered citations and source chips for Gmail, GitHub, local files, Notion and browser history" loading="lazy" width="1917" height="905"><figcaption class="mono" style="margin-top:14px">Chat · every claim cites its source</figcaption></figure>
+    <figure><img src="https://raw.githubusercontent.com/shivamshinde123/personal-knowledge-graph-agent/main/docs/screenshots/settings.png" alt="Settings view with the guided setup and model provider options" loading="lazy" width="1907" height="982"><figcaption class="mono" style="margin-top:14px">Settings · guided setup, Ollama or OpenRouter</figcaption></figure>
+  </div>
+</div></section>
+
+<section id="run"><div class="wrap split">
+  <div><p class="mono">03 · Run it</p><h2 style="margin-top:20px">Four commands to your own graph.</h2>
+    <p class="body" style="margin-top:28px">Docker Compose starts Neo4j, the API, the scheduler and the web app. Every value has a working default. Then open <b style="font-weight:400;color:var(--white)">Settings → Guided setup</b> to connect sources and Google OAuth from the browser.</p>
+    <p class="body">Add <span class="mono" style="text-transform:none">--profile local-llm</span> to also start Ollama and keep every model call on your machine.</p>
+  </div>
+  <pre aria-label="Quick start commands"><em># clone</em>
+<b>git clone</b> https://github.com/shivamshinde123/personal-knowledge-graph-agent.git
+<b>cd</b> personal-knowledge-graph-agent
+
+<em># defaults work as-is</em>
+<b>cp</b> .env.docker.example .env
+<b>cp</b> config/.env.example config/.env
+
+<em># start everything</em>
+<b>docker compose up -d --build</b>
+
+<em># app → http://localhost:3000
+# api → http://localhost:8080/api</em></pre>
+</div></section>
+
+<section class="privacy"><div class="wrap">
+  <p class="mono">04 · By design</p>
+  <h2 style="margin-top:20px">No tenants. No hosted database. <span>Just you.</span></h2>
+  <p class="body" style="margin-top:28px">Built for one person on one machine, with no multi-user layer and no cloud store. Choose Local mode and your data never leaves the computer it lives on.</p>
+</div></section>
+</main>
+
+<footer><div class="wrap"><span>Built by <a href="https://github.com/shivamshinde123">Shivam Shinde</a></span><span>LangGraph · Neo4j · FastAPI · React</span></div></footer>
+
+<script>
+(() => {
+  const c = document.getElementById('sky'), x = c.getContext('2d');
+  const colors = ['#6b4fd6','#c0392b','#1f9d55','#3b82f6','#e0a800','#8b8896','#8052ff','#8052ff'];
+  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let W, H, pts = [], t = 0;
+  function seed() {
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    W = c.clientWidth; H = c.clientHeight; c.width = W * dpr; c.height = H * dpr; x.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const n = Math.round(Math.min(220, W * H / 6500));
+    const cx = W * (W > 900 ? .68 : .5), cy = H * .4, rx = Math.min(W * .3, 460), ry = Math.min(H * .3, 280);
+    pts = Array.from({ length: n }, () => {
+      // two lobes, like a brain seen from above
+      const lobe = Math.random() < .5 ? -1 : 1, a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random());
+      return { x: cx + lobe * rx * .28 + Math.cos(a) * r * rx * .62, y: cy + Math.sin(a) * r * ry, p: Math.random() * 6.28,
+               s: 2 + Math.random() * 3.5, rot: Math.random() * 6.28, c: colors[(Math.random() * colors.length) | 0] };
+    });
+  }
+  function draw() {
+    x.clearRect(0, 0, W, H);
+    const P = pts.map(p => ({ ...p, X: p.x + Math.cos(t * .4 + p.p) * 4, Y: p.y + Math.sin(t * .5 + p.p) * 4 }));
+    x.lineWidth = .6;
+    for (let i = 0; i < P.length; i++) for (let j = i + 1; j < P.length; j++) {
+      const dx = P[i].X - P[j].X, dy = P[i].Y - P[j].Y, d = dx * dx + dy * dy;
+      if (d < 4200) { x.strokeStyle = `rgba(160,140,255,${.22 * (1 - d / 4200)})`; x.beginPath(); x.moveTo(P[i].X, P[i].Y); x.lineTo(P[j].X, P[j].Y); x.stroke(); }
+    }
+    for (const p of P) {
+      x.save(); x.translate(p.X, p.Y); x.rotate(p.rot + t * .2); x.fillStyle = p.c;
+      x.beginPath(); x.moveTo(0, -p.s); x.lineTo(p.s * .87, p.s * .5); x.lineTo(-p.s * .87, p.s * .5); x.fill(); x.restore();
+    }
+    t += .016; if (!still) requestAnimationFrame(draw);
+  }
+  addEventListener('resize', () => { seed(); if (still) draw(); });
+  seed(); draw();
+})();
+</script>
+</body>
+</html>
