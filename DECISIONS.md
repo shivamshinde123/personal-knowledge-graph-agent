@@ -16,7 +16,9 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 **Alternatives considered**: Building it inside `frontend/` (rejected: it would couple a marketing page to the app's build and bundle). A static-site generator (rejected: one page doesn't need one).
 
-**Affects**: website/index.html, website/graph.png. If `agent/router.py`'s phrase list changes, the copy in `website/index.html` must be updated by hand.
+**Hosting**: GitHub Pages keeps its existing setup, publishing the `gh-pages` branch, which replaced an earlier version of the site on 2026-11-22. `website/` on `main` is the source copy; to publish a change, copy `website/index.html` and `website/graph.png` onto `gh-pages`. A deploy workflow from `main` was considered but not added, since it would change the Pages configuration for a one-file site.
+
+**Affects**: website/index.html, website/graph.png, the `gh-pages` branch. If `agent/router.py`'s phrase list changes, the copy in `website/index.html` must be updated by hand.
 
 ---
 
