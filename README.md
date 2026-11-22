@@ -239,3 +239,7 @@ Full rationale for each choice: [`docs/Tech_Stack.docx`](docs/Tech_Stack.docx).
 
 Core system built and working end-to-end, live-verified against a real
 Docker stack - a genuine "clone and run it" install.
+
+## License
+
+MIT - see [`LICENSE`](LICENSE).
