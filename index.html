@@ -72,6 +72,8 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 .win-bar .dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--linen); }
 .win-bar b { color: var(--ink); font-weight: 500; }
 .win-bar .r { margin-left: auto; }
+.video-win { border-radius: 12px; max-width: 1040px; margin-inline: auto; }
+.video-win video { display: block; width: 100%; aspect-ratio: 16 / 9; background: #0b1430; }
 .view img { display: block; width: 100%; height: auto; aspect-ratio: 1917 / 900; object-fit: cover; object-position: 50% 60%; }
 /* Ask view: a replica of the app's own chat screen (values from frontend/src/index.css) */
 .app { --a-text: #cbc3d7; --a-text-h: #dae2fd; --a-muted: rgba(203, 195, 215, 0.5); --a-bg: #020617; --a-elev: rgba(15, 23, 42, 0.7); --a-side: rgba(19, 27, 46, 0.8); --a-border: rgba(255, 255, 255, 0.1); --a-subtle: rgba(73, 68, 84, 0.1); --a-accent: #8b5cf6; --a-active: #d0bcff; --a-active-bg: rgba(160, 120, 255, 0.1);
@@ -242,7 +244,8 @@ img { max-width: 100%; }
       Knowledge Graph Agent
     </a>
     <nav class="links" aria-label="Sections">
-      <a href="#sources">Sources</a><a href="#how">How it works</a><a href="#ask">Try the router</a><a href="#models">Models</a><a href="#run">Run it</a>
+      <a href="#video">Video</a>
+        <a href="#sources">Sources</a><a href="#how">How it works</a><a href="#ask">Try the router</a><a href="#models">Models</a><a href="#run">Run it</a>
     </nav>
     <a class="btn btn-dark" href="https://github.com/shivamshinde123/personal-knowledge-graph-agent" target="_blank" rel="noopener">View on GitHub</a>
   </div>
@@ -294,6 +297,18 @@ img { max-width: 100%; }
           </div>
         </div>
       </div>
+    </div>
+  </section>
+
+  <section class="wrap section" id="video">
+    <div class="sec-head">
+      <p class="eyebrow">Video</p>
+      <h2>The two-and-a-half-minute tour</h2>
+      <p class="intro">What it reads, how it links things across sources, and how it answers a question.</p>
+    </div>
+    <div class="window video-win">
+      <div class="win-bar"><span class="dots"><i></i><i></i><i></i></span><b>Project video</b><span class="r">2:32</span></div>
+      <video controls preload="none" playsinline poster="video-poster.jpg" src="video.mp4">Your browser can't play this video. <a href="video.mp4">Download it</a> instead.</video>
     </div>
   </section>
 
