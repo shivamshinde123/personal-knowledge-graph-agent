@@ -8,6 +8,20 @@ see `CLAUDE.md` and the documents in `docs/` for those.
 
 ---
 
+## 2026-11-22 — Project website as one static file in `website/`
+
+**Context**: The project needed a public-facing page explaining what it does, separate from the app's own React frontend.
+
+**Decision**: A single self-contained `website/index.html` (all CSS, JS and logo SVGs inlined) plus `website/graph.png`. No build step, no framework, no dependency on `frontend/`. The hero's "Ask" view is an HTML copy of the app's chat screen, built from `frontend/src/index.css` values, with an example conversation, rather than a real screenshot, because real chat screenshots show personal email subjects. The router demo reimplements `agent/router.py`'s rules in JavaScript.
+
+**Alternatives considered**: Building it inside `frontend/` (rejected: it would couple a marketing page to the app's build and bundle). A static-site generator (rejected: one page doesn't need one).
+
+**Hosting**: GitHub Pages keeps its existing setup, publishing the `gh-pages` branch, which replaced an earlier version of the site on 2026-11-22. `website/` on `main` is the source copy; to publish a change, copy `website/index.html` and `website/graph.png` onto `gh-pages`. A deploy workflow from `main` was considered but not added, since it would change the Pages configuration for a one-file site.
+
+**Affects**: website/index.html, website/graph.png, the `gh-pages` branch. If `agent/router.py`'s phrase list changes, the copy in `website/index.html` must be updated by hand.
+
+---
+
 ## 2026-09-03 — GitHub repo scope and date range are mutually exclusive, scope winning
 
 **Context**: Found live, running a real end-to-end ingestion test — starred repos (account-wide, not per-repo) were being pulled unconditionally, regardless of `github_repos_list`. A `github_repos_list` scoped down to one small test-fixture repo still ingested 50+ unrelated starred repos on every run. Separately, asked directly: should `GITHUB_DATE_RANGE_START`/`_END` still apply on top of a configured repo scope, or should the two be mutually exclusive?

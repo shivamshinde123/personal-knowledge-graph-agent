@@ -206,6 +206,7 @@ config/        typed settings, config.yaml, .env.example
 docker/        Dockerfiles and mount targets
 tests/         mirrors the source tree
 docs/          design document set + the full technical report
+website/       one-page static project website
 ```
 
 ## Tech stack
@@ -224,6 +225,7 @@ Full rationale for each choice: [`docs/Tech_Stack.docx`](docs/Tech_Stack.docx).
 | `DECISIONS.md` | Implementation decisions made during coding, and why |
 | `FLOW.md` | How the code actually executes, per entry point |
 | `docs/` | The full design document set, kept current as the code changes |
+| [`website/`](website/) | A one-page project website: open `website/index.html` in a browser, no build step |
 | [`docs/diagrams/`](docs/diagrams/) | An 11-part visual walkthrough of how the system works, plus a close-up of the graph hop (7b): editable `.excalidraw` files, PNGs in `png/`, and `00-full-story.excalidraw` with every part on one canvas |
 
 ## Roadmap
